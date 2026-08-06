@@ -1,0 +1,28 @@
+# Entorno virtual
+.venv/
+
+# Archivos compilados de Python y caché
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Empaquetado (Packaging)
+*.egg-info/
+dist/
+build/
+
+
+# Archivos temporales
+*.tmp
+
+# Configuración de VS Code
+.vscode/
+
+# Datos de prueba
+data/
+
+# Logs y archivos generados
+
+logs/
+
+output/
