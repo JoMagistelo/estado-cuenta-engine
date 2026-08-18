@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Optional
 
 
 from models.movimiento import Movimiento
-from parsers.banamex.utils.words_header_filter import remove_banamex_header
-from parsers.banamex.utils.words_grafico_filter import remove_after_grafico_transaccional
+from parsers.banorte.utils.words_header_filter import remove_banamex_header
+from parsers.banorte.utils.words_grafico_filter import remove_after_grafico_transaccional
 
 # ============================================================
 # CONFIGURACIÓN GENERAL
