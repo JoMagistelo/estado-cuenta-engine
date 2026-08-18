@@ -1,29 +1,18 @@
 from __future__ import annotations
 
-
 from typing import List
-
 
 from models.movimiento import Movimiento
 from models.resumen_financiero import ResumenFinanciero
-
-
 from .resultado_validacion import ResultadoValidacion
 
-
-
 TOLERANCIA = 0.01
-
-
-
 def validar_movimientos(
     movimientos: List[Movimiento],
     resumen: ResumenFinanciero
 ):
 
-
     resultados = []
-
 
     # =====================================================
     # TOTAL ABONOS
@@ -48,22 +37,15 @@ def validar_movimientos(
         ResultadoValidacion(
 
             nombre="Total depósitos / abonos",
-
             esperado=resumen.depositos_abonos,
-
             obtenido=total_abonos,
-
             diferencia=diferencia,
-
             correcto=abs(diferencia)<=TOLERANCIA,
-
             mensaje="Suma de movimientos vs resumen financiero"
 
         )
 
     )
-
-
 
     # =====================================================
     # TOTAL CARGOS
@@ -76,7 +58,6 @@ def validar_movimientos(
             for m in movimientos
         )
 
-
         diferencia = (
             total_cargos
             -
@@ -88,21 +69,15 @@ def validar_movimientos(
         ResultadoValidacion(
 
             nombre="Total retiros / cargos",
-
             esperado=resumen.retiros_cargos,
-
             obtenido=total_cargos,
-
             diferencia=diferencia,
-
             correcto=abs(diferencia)<=TOLERANCIA,
-
             mensaje="Suma de movimientos vs resumen financiero"
 
         )
 
     )
-
 
 
     # =====================================================
@@ -113,7 +88,6 @@ def validar_movimientos(
     # Solo validar si hay movimientos y el resumen tiene saldo final
     if movimientos and resumen.saldo_final is not None:
         ultimo = movimientos[-1]
-
 
         saldo_movimiento = (
             ultimo.saldo_liquidacion
@@ -133,23 +107,15 @@ def validar_movimientos(
         resultados.append(
 
             ResultadoValidacion(
-
                 nombre="Saldo final",
-
                 esperado=resumen.saldo_final,
-
                 obtenido=saldo_movimiento,
-
                 diferencia=diferencia,
-
                 correcto=abs(diferencia)<=TOLERANCIA,
-
                 mensaje="Último movimiento vs saldo final"
-
             )
 
         )
-
 
 
     # =====================================================
@@ -184,15 +150,10 @@ def validar_movimientos(
         ResultadoValidacion(
 
             nombre="Ecuación financiera",
-
             esperado=resumen.saldo_final,
-
             obtenido=saldo_calculado,
-
             diferencia=diferencia,
-
             correcto=abs(diferencia)<=TOLERANCIA,
-
             mensaje="Saldo anterior + abonos - cargos"
 
         )

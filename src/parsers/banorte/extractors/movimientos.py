@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from models.movimiento import Movimiento
+from parsers.banorte.utils.words_after_last_movement import remove_after_last_movement
 
 
 # ============================================================
@@ -2184,6 +2185,16 @@ def extract_movimientos_words(
     if not words:
 
         return []
+
+
+    # --------------------------------------------------------
+    # ELIMINAR TODO DESPUÉS DEL ULTIMO MOVIMIENTO
+    # --------------------------------------------------------
+
+    words = remove_after_last_movement(
+        words
+    )
+
 
     # --------------------------------------------------------
     # 1. LIMITAR SECCIONES POSTERIORES

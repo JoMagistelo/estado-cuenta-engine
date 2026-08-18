@@ -21,8 +21,9 @@ from models.datos_cuenta import DatosCuenta
 #
 #   - Todo el bloque general está en página 1.
 #   - Las columnas se modelan mediante cajas espaciales.
-#   - Se utiliza solapamiento espacial, no coincidencia
-#     estricta del centro de la palabra.
+#   - Se utiliza solapamiento espacial horizontal.
+#   - La pertenencia vertical se determina mediante la
+#     coordenada TOP de la palabra.
 #   - Los valores pueden estar fragmentados en varias palabras.
 #   - La lógica de negocio se mantiene separada de la lógica
 #     espacial.
@@ -42,13 +43,20 @@ PAGE_DATOS = 1
 # ============================================================
 
 # Una palabra puede tocar parcialmente una caja y seguir
-# perteneciendo a ella.
+# perteneciendo a ella horizontalmente.
 #
 # Esto permite tolerar:
 #
 #   - pequeñas variaciones de x
-#   - pequeñas variaciones de y
-#   - diferencias de renderizado del PDF
+#   - pequeñas variaciones de renderizado
+#
+# IMPORTANTE:
+#
+# La tolerancia vertical NO se utiliza para determinar la
+# pertenencia a un renglón.
+#
+# En este layout BANORTE los renglones se distinguen
+# correctamente mediante "top".
 #
 SPATIAL_TOLERANCE_X = 1.5
 SPATIAL_TOLERANCE_Y = 1.5
@@ -134,10 +142,10 @@ BOX_NUMERO_CUENTA = (
 # ============================================================
 
 BOX_NUMERO_CLIENTE = (
-    92.0,
-    126.0,
-    135.0,
-    150.5,
+    95.1,   # x0
+    122.9,  # x1
+    137.0,  # top
+    140.0,  # bottom
 )
 
 
@@ -162,10 +170,10 @@ BOX_NUMERO_CLIENTE = (
 # ============================================================
 
 BOX_RFC = (
-    60.0,
-    116.0,
-    143.5,
-    158.5,
+    63.7,  # x0
+    112.3,  # x1
+    146.0,  # top
+    156.0,  # bottom
 )
 
 
@@ -298,10 +306,10 @@ BOX_PERIODO_FIN = (
 # ============================================================
 
 BOX_FECHA_CORTE = (
-    390.0,
-    460.0,
-    114.0,
-    129.5,
+    393.0,   # x0
+    457.0,   # x1
+    117.0,   # top
+    127.0,   # bottom
 )
 
 
@@ -388,22 +396,38 @@ def word_inside_box(
     """
     Determina si una palabra pertenece a una región espacial.
 
-    A diferencia del enfoque original basado únicamente en el
-    centro de la palabra, aquí se utiliza SOLAPAMIENTO de ejes.
+    IMPORTANTE:
 
-    Esto hace el extractor más robusto cuando una palabra:
-        - toca un borde
-        - cambia ligeramente de ancho
-        - se desplaza unos puntos
-        - es más larga de lo esperado
+    Las palabras PDF son unidades discretas con coordenadas
+    propias.
 
-    box:
-        (
-            xmin,
-            xmax,
-            ymin,
-            ymax
-        )
+    Para BANORTE NO debemos decidir la pertenencia vertical
+    mediante intersección de rectángulos porque dos renglones
+    consecutivos pueden tener unos puntos de solapamiento
+    físico debido al renderizado.
+
+    Ejemplo real:
+
+        CLIENTE
+            top    = 138.354
+            bottom = 147.354
+
+        RFC
+            top    = 146.368
+            bottom = 155.368
+
+    Los rectángulos se intersectan ligeramente.
+
+    Sin embargo, son DOS RENGLEONES distintos.
+
+    Por ello:
+
+        - X  -> solapamiento espacial
+        - Y  -> posición TOP de la palabra
+
+    Esto respeta la naturaleza del documento:
+
+        cada palabra pertenece al renglón definido por su TOP.
     """
 
     page = word.get("page", 1)
@@ -414,30 +438,71 @@ def word_inside_box(
     x0 = _safe_float(word.get("x0"))
     x1 = _safe_float(word.get("x1"))
     top = _safe_float(word.get("top"))
-    bottom = _safe_float(word.get("bottom"))
 
     xmin, xmax, ymin, ymax = box
 
-    # Expandimos ligeramente la caja.
+    # ========================================================
+    # TOLERANCIA HORIZONTAL
+    # ========================================================
+
     xmin -= SPATIAL_TOLERANCE_X
     xmax += SPATIAL_TOLERANCE_X
-    ymin -= SPATIAL_TOLERANCE_Y
-    ymax += SPATIAL_TOLERANCE_Y
 
-    # Solapamiento horizontal.
+    # ========================================================
+    # SOLAPAMIENTO HORIZONTAL
+    # ========================================================
+    #
+    # Seguimos permitiendo pequeñas variaciones de X.
+    #
+    # Esto permite que una palabra que toque parcialmente
+    # la región siga perteneciendo a ella.
+    # ========================================================
+
     horizontal_overlap = (
-        min(x1, xmax) - max(x0, xmin)
-    )
-
-    # Solapamiento vertical.
-    vertical_overlap = (
-        min(bottom, ymax) - max(top, ymin)
+        min(x1, xmax)
+        - max(x0, xmin)
     )
 
     if horizontal_overlap <= 0:
         return False
 
-    if vertical_overlap <= 0:
+    # ========================================================
+    # POSICIÓN VERTICAL
+    # ========================================================
+    #
+    # NO usamos:
+    #
+    #     top/bottom del word
+    #
+    # contra:
+    #
+    #     ymin/ymax
+    #
+    # mediante intersección.
+    #
+    # Usamos directamente TOP.
+    #
+    # Así un word pertenece al renglón si su TOP cae dentro
+    # del rango vertical configurado.
+    #
+    # Esto evita mezclar:
+    #
+    #     13128904
+    #
+    # con:
+    #
+    #     ROOM770801B36
+    #
+    # aunque sus rectángulos físicos lleguen a tocarse.
+    # ========================================================
+
+    ymin -= SPATIAL_TOLERANCE_Y
+    ymax += SPATIAL_TOLERANCE_Y
+
+    if top < ymin:
+        return False
+
+    if top > ymax:
         return False
 
     return True
@@ -582,16 +647,26 @@ def normalize_rfc(
     value: Optional[str],
 ) -> Optional[str]:
     """
-    Normaliza un RFC eliminando espacios.
+    Normaliza un RFC eliminando espacios y el prefijo "RFC:".
     """
 
     if value is None:
         return None
 
+    # Elimina cualquier instancia de "RFC" y dos puntos,
+    # con o sin espacios.
+    # Ejemplo: "RFC: RFC: ROOM770801B36" -> "ROOM770801B36"
+    cleaned_value = re.sub(
+        r"(?:RFC\s*:?\s*)+",
+        "",
+        value,
+        flags=re.IGNORECASE
+    )
+
     value = re.sub(
         r"\s+",
         "",
-        value.upper(),
+        cleaned_value.upper(),
     )
 
     return value or None
@@ -624,16 +699,11 @@ def normalize_customer_number(
     """
     Normaliza el número de cliente.
     """
-
     if value is None:
         return None
 
-    digits = re.sub(
-        r"\D",
-        "",
-        value,
-    )
-
+    # Conservamos únicamente dígitos para el número de cliente.
+    digits = re.sub(r"\D", "", value)
     return digits or None
 
 
@@ -681,7 +751,7 @@ def extract_date_from_text(
         return None
 
     match = re.search(
-        r"\b\d{1,2}/[A-Za-zÁÉÍÓÚáéíóúÑñ]+/\d{4}\b",
+        r"\d{1,2}/[A-Za-zÁÉÍÓÚáéíóúÑñ]+/\d{4}\b",
         value,
     )
 

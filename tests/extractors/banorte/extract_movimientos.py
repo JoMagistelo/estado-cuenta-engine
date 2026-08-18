@@ -6,7 +6,7 @@ from parsers.banorte.extractors.movimientos import extract_movimientos_words
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "edo_banorte2.pdf"
+PDF_PATH = ROOT / "data" / "edo_banorte4.pdf"
 
 
 
@@ -14,7 +14,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER MOVIMIENTOS BBVA (WORDS)")
+    print("PRUEBA PARSER MOVIMIENTOS BANORTE (WORDS)")
     print("=" * 60)
 
 
@@ -60,12 +60,16 @@ def main():
     print(len(movimientos))
     print("=" * 60)
 
-
-
-    for index, mov in enumerate(
-        movimientos[:50],
-        start=1
-    ):
+    # ========================================================
+    # SELECCIONA QUÉ MOVIMIENTOS IMPRIMIR
+    # ========================================================
+    # Descomenta la opción que desees visualizar:
+ 
+    # Opción 1: Imprimir los primeros 50 movimientos
+    #for index, mov in enumerate(movimientos[:50], start=1):
+ 
+    # Opción 2: Imprimir los últimos 10 movimientos
+    for index, mov in enumerate(movimientos[-10:], start=len(movimientos) - 9):
 
 
         print()

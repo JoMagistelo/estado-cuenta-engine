@@ -1,6 +1,6 @@
 """
 Script de prueba para validar la consistencia financiera de los movimientos
-extraídos contra el resumen financiero de un estado de cuenta BANAMEX.
+extraídos contra el resumen financiero de un estado de cuenta BANORTE.
 
 Este test utiliza exclusivamente extracción basada en WORDS
 (coordenadas espaciales del PDF).
@@ -26,7 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-PDF_PATH = ROOT / "data" / "edo_banamex2.pdf"
+PDF_PATH = ROOT / "data" / "edo_banorte2.pdf"
 
 
 # ============================================================
@@ -35,11 +35,11 @@ PDF_PATH = ROOT / "data" / "edo_banamex2.pdf"
 
 from readers.reader_manager import ReaderManager
 
-from parsers.banamex.extractors.movimientos import (
+from parsers.banorte.extractors.movimientos import (
     extract_movimientos_words,
 )
 
-from parsers.banamex.extractors.resumen import (
+from parsers.banorte.extractors.resumen import (
     extract_resumen_financiero_words,
 )
 
@@ -57,7 +57,7 @@ def main():
     """
 
     print("=" * 60)
-    print("PRUEBA VALIDACIÓN FINANCIERA BANAMEX — WORDS")
+    print("PRUEBA VALIDACIÓN FINANCIERA BANORTE — WORDS")
     print("=" * 60)
     print()
     print(f"📄 PDF:")

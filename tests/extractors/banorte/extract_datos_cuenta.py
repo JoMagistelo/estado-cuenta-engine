@@ -6,14 +6,14 @@ from parsers.banorte.extractors.datos import extract_datos_cuenta_words
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "edo_banorte2.pdf"
+PDF_PATH = ROOT / "data" / "edo_banorte.pdf"
 
 
 def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER DATOS CUENTA BANAMEX (WORDS)")
+    print("PRUEBA PARSER DATOS CUENTA BANORTE (WORDS)")
     print("=" * 60)
 
     print()

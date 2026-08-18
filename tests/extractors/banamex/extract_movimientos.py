@@ -14,7 +14,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER MOVIMIENTOS BBVA (WORDS)")
+    print("PRUEBA PARSER MOVIMIENTOS BANAMEX (WORDS)")
     print("=" * 60)
 
 
