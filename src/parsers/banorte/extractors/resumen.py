@@ -1,1003 +1,1217 @@
 from __future__ import annotations
 
 import re
-from math import hypot
 from typing import Any, Dict, List, Optional
 
 from models.resumen_financiero import ResumenFinanciero
 
 
 # ============================================================
-# CONFIGURACIÓN GENERAL
+# CONFIGURACIÓN ESPACIAL — BANORTE RESUMEN FINANCIERO
 # ============================================================
 #
-# Este extractor trabaja EXCLUSIVAMENTE mediante coordenadas
-# espaciales.
+# Este extractor trabaja principalmente mediante coordenadas.
 #
-# NO depende de que las palabras vengan agrupadas.
+# El encabezado del producto NO tiene nombre fijo.
 #
-# Cada elemento obtenido por pdfplumber representa una palabra
-# independiente con sus propias coordenadas:
+# Ejemplos:
 #
-#     {
-#         "text": "...",
-#         "x0": ...,
-#         "x1": ...,
-#         "top": ...,
-#         "bottom": ...,
-#         "page": ...
-#     }
+#   DETALLE NÓMINA BANORTE S/CH ▼
+#   DETALLE ENLACE NEGOCIOS BASICA ▼
+#   ...
 #
-# Por lo tanto, las cajas se definen alrededor de la CELDA
-# donde vive el valor y no alrededor de una frase completa.
-#
-# La estructura está diseñada para tolerar:
-#
-#   - pequeños desplazamientos verticales
-#   - pequeños desplazamientos horizontales
-#   - cambios ligeros de espaciado
-#   - cambios ligeros en el ancho de las palabras
-#   - diferencias pequeñas entre estados
-#
-# Los campos que no fueron observados en las coordenadas
-# suministradas se retornan como "N/A".
-#
-# ============================================================
-
-
-PAGE_GENERAL = 1
-
-NA_VALUE = "N/A"
-
-
-# ============================================================
-# TOLERANCIAS ESPACIALES
-# ============================================================
-#
-# Las coordenadas proporcionadas corresponden a un documento
-# concreto.
-#
-# No queremos depender de coincidencias exactas.
-#
-# Por eso las cajas se expanden mediante estas tolerancias.
-#
-# Una modificación pequeña del PDF no debería romper el
-# extractor.
-#
-# ============================================================
-
-TOLERANCE_X = 6.0
-TOLERANCE_Y = 4.0
-
-
-# ============================================================
-# CAJAS ESPACIALES
-# ============================================================
-#
-# Todas las coordenadas provienen del estado de cuenta
-# proporcionado.
-#
-# La caja NO intenta representar únicamente la palabra.
-#
-# Representa la región/celda donde vive el valor.
+# Lo estable es su posición espacial.
 #
 # ============================================================
 
 
 # ------------------------------------------------------------
-# SALDO ANTERIOR
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $65.68
-#
-# Coordenadas observadas:
-#
-#     x0 = 289.500
-#     x1 = 317.022
-#     top = 481.563
-#     bottom = 490.563
-#
+# ENCABEZADO DEL PRODUCTO
 # ------------------------------------------------------------
 
-BOX_SALDO_ANTERIOR = (
-    260.0,   # x0
-    335.0,   # x1
-    476.0,   # top
-    497.0,   # bottom
-)
+PRODUCT_HEADER_TOP_MIN = 240.0
+PRODUCT_HEADER_TOP_MAX = 252.0
 
 
 # ------------------------------------------------------------
-# DEPÓSITOS / ABONOS
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $61,105.00
-#
-# Coordenadas:
-#
-#     x0 = 270.000
-#     x1 = 315.036
-#     top = 492.963
-#     bottom = 501.963
-#
+# INICIO DEL RESUMEN
 # ------------------------------------------------------------
 
-BOX_DEPOSITOS_ABONOS = (
-    250.0,   # x0
-    335.0,   # x1
-    487.0,   # top
-    506.0,   # bottom
-)
+RESUMEN_TOP_MIN = 258.0
 
 
 # ------------------------------------------------------------
-# RETIROS / CARGOS
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $59,970.68
-#
-# Coordenadas:
-#
-#     x0 = 270.000
-#     x1 = 315.036
-#     top = 504.363
-#     bottom = 513.363
-#
+# COLUMNA DE IMPORTES
 # ------------------------------------------------------------
 
-BOX_RETIROS_CARGOS = (
-    250.0,   # x0
-    335.0,   # x1
-    498.0,   # top
-    519.0,   # bottom
-)
+AMOUNT_X1_MIN = 252.0
+AMOUNT_X1_MAX = 262.0
 
 
 # ------------------------------------------------------------
-# SALDO FINAL
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $1,200.00
-#
-# Coordenadas:
-#
-#     x0 = 275.700
-#     x1 = 324.628
-#     top = 515.677
-#     bottom = 526.677
-#
+# TOLERANCIAS
 # ------------------------------------------------------------
 
-BOX_SALDO_FINAL = (
-    255.0,   # x0
-    340.0,   # x1
-    509.0,   # top
-    534.0,   # bottom
-)
+LINE_Y_TOLERANCE = 3.5
 
-
-# ------------------------------------------------------------
-# SALDO PROMEDIO
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $1,676.00
-#
-# Coordenadas:
-#
-#     x0 = 191.400
-#     x1 = 231.432
-#     top = 541.263
-#     bottom = 550.263
-#
-# ------------------------------------------------------------
-
-BOX_SALDO_PROMEDIO = (
-    175.0,   # x0
-    250.0,   # x1
-    535.0,   # top
-    560.0,   # bottom
-)
-
-
-# ------------------------------------------------------------
-# DÍAS DEL PERIODO
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     31
-#
-# Coordenadas:
-#
-#     x0 = 224.700
-#     x1 = 234.708
-#     top = 552.663
-#     bottom = 561.663
-#
-# ------------------------------------------------------------
-
-BOX_DIAS_PERIODO = (
-    205.0,   # x0
-    250.0,   # x1
-    546.0,   # top
-    568.0,   # bottom
-)
+FIELD_Y_TOLERANCE = 4.0
 
 
 # ============================================================
-# UTILIDADES ESPACIALES
+# UTILIDADES BÁSICAS
 # ============================================================
 
 
-def _expand_box(
-    box: tuple[float, float, float, float],
-    tolerance_x: float = TOLERANCE_X,
-    tolerance_y: float = TOLERANCE_Y,
-) -> tuple[float, float, float, float]:
-    """
-    Expande ligeramente una caja espacial.
+def normalize_text(
+    value: Any,
+) -> str:
 
-    Esto permite tolerar pequeños cambios de coordenadas entre
-    estados de cuenta sin tener que modificar inmediatamente
-    cada caja.
-    """
+    if value is None:
+        return ""
 
-    xmin, xmax, ymin, ymax = box
+    value = str(value)
+
+    value = (
+        value
+        .replace("\xa0", " ")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+    )
+
+    value = re.sub(
+        r"\s+",
+        " ",
+        value,
+    )
+
+    return value.strip()
+
+
+def normalize_upper(
+    value: Any,
+) -> str:
+
+    return normalize_text(value).upper()
+
+
+def word_top(
+    word: Dict[str, Any],
+) -> float:
+
+    try:
+        return float(
+            word.get("top", 0) or 0
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0.0
+
+
+def word_bottom(
+    word: Dict[str, Any],
+) -> float:
+
+    try:
+        return float(
+            word.get(
+                "bottom",
+                word.get("top", 0),
+            )
+            or 0
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0.0
+
+
+def word_center_y(
+    word: Dict[str, Any],
+) -> float:
 
     return (
-        xmin - tolerance_x,
-        xmax + tolerance_x,
-        ymin - tolerance_y,
-        ymax + tolerance_y,
+        word_top(word)
+        + word_bottom(word)
+    ) / 2.0
+
+
+def word_x0(
+    word: Dict[str, Any],
+) -> float:
+
+    try:
+        return float(
+            word.get(
+                "x0",
+                0,
+            )
+            or 0
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0.0
+
+
+def word_x1(
+    word: Dict[str, Any],
+) -> float:
+
+    try:
+        return float(
+            word.get(
+                "x1",
+                word.get("x0", 0),
+            )
+            or 0
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0.0
+
+
+def word_page(
+    word: Dict[str, Any],
+) -> int:
+
+    try:
+        return int(
+            word.get(
+                "page",
+                1,
+            )
+            or 1
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 1
+
+
+# ============================================================
+# AGRUPACIÓN DE LÍNEAS
+# ============================================================
+
+
+def group_words_into_lines(
+    words: List[Dict[str, Any]],
+    tolerance: float = LINE_Y_TOLERANCE,
+) -> List[List[Dict[str, Any]]]:
+
+    if not words:
+        return []
+
+    ordered = sorted(
+        words,
+        key=lambda word: (
+            word_page(word),
+            word_center_y(word),
+            word_x0(word),
+        ),
+    )
+
+    lines: List[List[Dict[str, Any]]] = []
+
+    current: List[Dict[str, Any]] = []
+
+    current_page: Optional[int] = None
+    current_y: Optional[float] = None
+
+    for word in ordered:
+
+        page = word_page(word)
+        y = word_center_y(word)
+
+        if current_y is None:
+
+            current = [word]
+            current_page = page
+            current_y = y
+
+            continue
+
+        same_line = (
+            page == current_page
+            and abs(y - current_y) <= tolerance
+        )
+
+        if same_line:
+
+            current.append(word)
+
+            current_y = (
+                sum(
+                    word_center_y(item)
+                    for item in current
+                )
+                / len(current)
+            )
+
+        else:
+
+            current.sort(
+                key=word_x0
+            )
+
+            lines.append(current)
+
+            current = [word]
+            current_page = page
+            current_y = y
+
+    if current:
+
+        current.sort(
+            key=word_x0
+        )
+
+        lines.append(current)
+
+    return lines
+
+
+# ============================================================
+# TEXTO DE LÍNEA
+# ============================================================
+
+
+def line_text(
+    line: List[Dict[str, Any]],
+) -> str:
+
+    values: List[str] = []
+
+    for word in sorted(
+        line,
+        key=word_x0,
+    ):
+
+        text = normalize_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if text:
+            values.append(text)
+
+    return " ".join(values).strip()
+
+
+def line_top(
+    line: List[Dict[str, Any]],
+) -> float:
+
+    if not line:
+        return 0.0
+
+    return min(
+        word_top(word)
+        for word in line
     )
 
 
-def word_inside_box(
-    word: Dict[str, Any],
-    box: tuple[float, float, float, float],
-    page_number: int,
+def line_bottom(
+    line: List[Dict[str, Any]],
+) -> float:
+
+    if not line:
+        return 0.0
+
+    return max(
+        word_bottom(word)
+        for word in line
+    )
+
+
+def line_page(
+    line: List[Dict[str, Any]],
+) -> int:
+
+    if not line:
+        return 1
+
+    return word_page(line[0])
+
+
+# ============================================================
+# DETECCIÓN DEL ENCABEZADO DEL PRODUCTO
+# ============================================================
+#
+# NO dependemos del nombre:
+#
+#   DETALLE NÓMINA BANORTE S/CH
+#   DETALLE ENLACE NEGOCIOS BASICA
+#
+# El elemento realmente estable es la banda Y y la presencia
+# de la flecha "▼" que forma parte del selector del producto.
+#
+# ============================================================
+
+
+def is_product_header_line(
+    line: List[Dict[str, Any]],
 ) -> bool:
-    """
-    Determina si una palabra pertenece a una región espacial.
 
-    Se utiliza el CENTRO de la palabra, no solamente x0/x1.
-
-    Esto es importante porque las palabras son elementos
-    independientes y pueden desplazarse ligeramente dentro
-    de su celda.
-    """
-
-    page = word.get("page", 1)
-
-    if page != page_number:
+    if not line:
         return False
 
-    x0 = word.get("x0", 0)
-    x1 = word.get("x1", 0)
+    if line_page(line) != 1:
+        return False
 
-    top = word.get("top", 0)
-    bottom = word.get("bottom", 0)
+    top = line_top(line)
+    bottom = line_bottom(line)
 
-    xmin, xmax, ymin, ymax = _expand_box(box)
+    if not (
+        PRODUCT_HEADER_TOP_MIN
+        <= top
+        <= PRODUCT_HEADER_TOP_MAX
+    ):
+        return False
 
-    center_x = (x0 + x1) / 2
-    center_y = (top + bottom) / 2
+    if bottom > 258.0:
+        return False
 
-    return (
-        xmin <= center_x <= xmax
-        and ymin <= center_y <= ymax
+    text = normalize_upper(
+        line_text(line)
     )
 
-
-def words_in_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-    page_number: int = PAGE_GENERAL,
-) -> List[Dict[str, Any]]:
-    """
-    Devuelve todas las palabras pertenecientes a una región.
-
-    Las palabras se ordenan por:
-
-        1. posición vertical
-        2. posición horizontal
-    """
-
-    result = [
-        word
-        for word in words
-        if word_inside_box(
-            word=word,
-            box=box,
-            page_number=page_number,
-        )
-    ]
-
-    result.sort(
-        key=lambda word: (
-            word.get("top", 0),
-            word.get("x0", 0),
-        )
+    has_arrow = any(
+        normalize_text(
+            word.get("text", "")
+        ) == "▼"
+        for word in line
     )
 
-    return result
+    # La flecha es la señal espacial/textual más estable.
+    if has_arrow:
+        return True
+
+    # Fallback para PDFs donde la flecha no sea extraída.
+    if "DETALLE" in text:
+        return True
+
+    # Último fallback: la banda espacial.
+    return True
 
 
-def _parse_amount(value: Optional[str]) -> Optional[float]:
-    """
-    Convierte un texto numérico (posiblemente con comas y
-    símbolo de moneda) a float.
+def find_product_header(
+    lines: List[List[Dict[str, Any]]],
+) -> Optional[int]:
 
-    Devuelve None si el valor es None, vacío, o no puede
-    convertirse.
-    """
+    for index, line in enumerate(lines):
 
-    if value is None or value == NA_VALUE:
-        return None
+        if is_product_header_line(line):
+            return index
 
-    cleaned_value = (
-        value.replace("$", "")
-        .replace(",", "")
-        .strip()
-    )
-
-    try:
-        return float(cleaned_value)
-    except (ValueError, TypeError):
-        return None
-
-
-def _parse_int(value: Optional[str]) -> Optional[int]:
-    """
-    Convierte un texto numérico a int.
-
-    Devuelve None si el valor es None, vacío, o no puede
-    convertirse.
-    """
-
-    if value is None or value == NA_VALUE:
-        return None
-
-    cleaned_value = (
-        value.strip()
-    )
-
-    try:
-        # Se convierte a float primero para manejar "31.0"
-        return int(float(cleaned_value))
-    except (ValueError, TypeError):
-        return None
+    return None
 
 
 # ============================================================
-# UTILIDADES DE TEXTO / NÚMEROS
+# DETECCIÓN DEL RESUMEN DEL PERIODO
 # ============================================================
 
 
-_MONEY_PATTERN = re.compile(
+def find_resumen_start(
+    lines: List[List[Dict[str, Any]]],
+    header_index: Optional[int],
+) -> Optional[int]:
+
+    if header_index is None:
+        return None
+
+    for index in range(
+        header_index + 1,
+        len(lines),
+    ):
+
+        line = lines[index]
+
+        if not line:
+            continue
+
+        if line_page(line) != 1:
+            continue
+
+        top = line_top(line)
+
+        if top < RESUMEN_TOP_MIN:
+            continue
+
+        text = normalize_upper(
+            line_text(line)
+        )
+
+        if (
+            "RESUMEN" in text
+            and "PERIODO" in text
+        ):
+            return index
+
+    return None
+
+
+# ============================================================
+# DINÁMICA DE IMPORTES
+# ============================================================
+
+
+MONEY_PATTERN = re.compile(
     r"""
     ^
-
-    # signo opcional
-    [-+]?
-
-    # símbolo monetario opcional
-    \$?
-
-    # número
-    \d{1,3}
-
-    # grupos opcionales de miles
-    (?:,\d{3})*
-
-    # decimales opcionales
-    (?:\.\d{2})?
-
+    (?:
+        \$?
+        \d{1,3}
+        (?:,\d{3})*
+        (?:\.\d{2})?
+        -
+        |
+        -
+        \$?
+        \d{1,3}
+        (?:,\d{3})*
+        (?:\.\d{2})?
+        |
+        \$?
+        \d{1,3}
+        (?:,\d{3})*
+        (?:\.\d{2})?
+    )
     $
-
     """,
     re.VERBOSE,
 )
 
 
-def is_money_text(text: str) -> bool:
-    """
-    Determina si un fragmento de texto representa una cantidad
-    monetaria.
+def is_money(
+    text: str,
+) -> bool:
 
-    Ejemplos válidos:
-
-        $65.68
-        $61,105.00
-        $59,970.68
-        $1,200.00
-        $1,676.00
-    """
-
-    if not text:
-        return False
-
-    value = text.strip()
-
-    return bool(_MONEY_PATTERN.fullmatch(value))
+    return bool(
+        MONEY_PATTERN.fullmatch(
+            normalize_text(text)
+        )
+    )
 
 
-def is_integer_text(text: str) -> bool:
-    """
-    Determina si el texto es un entero simple.
-    """
-
-    if not text:
-        return False
-
-    return bool(re.fullmatch(r"\d{1,3}", text.strip()))
-
-
-def _candidate_distance(
-    word: Dict[str, Any],
-    target_x: float,
-    target_y: float,
+def parse_amount(
+    text: str,
 ) -> float:
-    """
-    Calcula la distancia entre el centro de una palabra y un
-    punto esperado.
 
-    Se utiliza para elegir el candidato más cercano cuando una
-    región contiene más de una palabra válida.
-    """
+    value = normalize_text(text)
 
-    x0 = word.get("x0", 0)
-    x1 = word.get("x1", 0)
+    if not value:
+        return 0.0
 
-    top = word.get("top", 0)
-    bottom = word.get("bottom", 0)
-
-    center_x = (x0 + x1) / 2
-    center_y = (top + bottom) / 2
-
-    return hypot(
-        center_x - target_x,
-        center_y - target_y,
+    value = (
+        value
+        .replace("$", "")
+        .replace(",", "")
+        .strip()
     )
 
+    negative = False
 
-def _box_center(
-    box: tuple[float, float, float, float],
-) -> tuple[float, float]:
-    """
-    Obtiene el centro geométrico de una caja.
-    """
+    if value.endswith("-"):
 
-    xmin, xmax, ymin, ymax = box
+        negative = True
 
-    return (
-        (xmin + xmax) / 2,
-        (ymin + ymax) / 2,
-    )
+        value = value[:-1].strip()
+
+    if (
+        value.startswith("(")
+        and value.endswith(")")
+    ):
+
+        negative = True
+
+        value = value[1:-1].strip()
+
+    try:
+
+        amount = float(value)
+
+    except (
+        ValueError,
+        TypeError,
+    ):
+
+        return 0.0
+
+    if negative:
+        amount = -amount
+
+    return amount
 
 
-def extract_value_from_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-    validator,
-    page_number: int = PAGE_GENERAL,
-) -> Optional[str]:
-    """
-    Extrae el candidato válido más cercano al centro esperado
-    de una caja.
+# ============================================================
+# EXTRACCIÓN DE IMPORTE DE UNA LÍNEA
+# ============================================================
 
-    Esto hace que el extractor no dependa de que exista
-    exactamente una palabra en una coordenada fija.
 
-    Si existen varias palabras válidas dentro de la región,
-    se selecciona la más cercana al centro de la celda.
-    """
-
-    selected = words_in_box(
-        words=words,
-        box=box,
-        page_number=page_number,
-    )
+def extract_amount_from_line(
+    line: List[Dict[str, Any]],
+) -> Optional[float]:
 
     candidates: List[Dict[str, Any]] = []
 
-    for word in selected:
+    for word in line:
 
-        text = str(
-            word.get("text", "")
-        ).strip()
+        text = normalize_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
 
-        if not text:
+        if not is_money(text):
             continue
 
-        if validator(text):
-            candidates.append(word)
+        x1 = word_x1(word)
+
+        if not (
+            AMOUNT_X1_MIN
+            <= x1
+            <= AMOUNT_X1_MAX
+        ):
+            continue
+
+        candidates.append(word)
 
     if not candidates:
         return None
 
-    target_x, target_y = _box_center(box)
-
     candidates.sort(
-        key=lambda word: _candidate_distance(
-            word=word,
-            target_x=target_x,
-            target_y=target_y,
+        key=word_x1
+    )
+
+    return parse_amount(
+        candidates[-1].get(
+            "text",
+            "",
         )
-    )
-
-    value = str(
-        candidates[0].get("text", "")
-    ).strip()
-
-    return value or None
-
-
-def extract_money_from_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-    page_number: int = PAGE_GENERAL,
-) -> Optional[str]:
-    """
-    Extrae una cantidad monetaria de una región.
-    """
-
-    return extract_value_from_box(
-        words=words,
-        box=box,
-        validator=is_money_text,
-        page_number=page_number,
-    )
-
-
-def extract_integer_from_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-    page_number: int = PAGE_GENERAL,
-) -> Optional[str]:
-    """
-    Extrae un entero de una región.
-    """
-
-    return extract_value_from_box(
-        words=words,
-        box=box,
-        validator=is_integer_text,
-        page_number=page_number,
     )
 
 
 # ============================================================
-# EXTRACTORES INDIVIDUALES
+# LOCALIZAR LÍNEA POR TEXTO EXACTO / PARCIAL
+# ============================================================
+
+
+def line_contains_all(
+    line: List[Dict[str, Any]],
+    patterns: tuple[str, ...],
+) -> bool:
+
+    text = normalize_upper(
+        line_text(line)
+    )
+
+    return all(
+        pattern in text
+        for pattern in patterns
+    )
+
+
+def find_line_by_patterns(
+    lines: List[List[Dict[str, Any]]],
+    patterns: tuple[tuple[str, ...], ...],
+    start_index: int,
+    end_index: int,
+) -> Optional[int]:
+
+    for index in range(
+        start_index,
+        end_index,
+    ):
+
+        line = lines[index]
+
+        for pattern_group in patterns:
+
+            if line_contains_all(
+                line,
+                pattern_group,
+            ):
+                return index
+
+    return None
+
+
+# ============================================================
+# BUSCAR IMPORTE EN LA MISMA LÍNEA
+# ============================================================
+
+
+def extract_same_line_amount(
+    lines: List[List[Dict[str, Any]]],
+    line_index: int,
+) -> Optional[float]:
+
+    if not (
+        0 <= line_index < len(lines)
+    ):
+        return None
+
+    return extract_amount_from_line(
+        lines[line_index]
+    )
+
+
+# ============================================================
+# BUSCAR IMPORTE EN LÍNEAS POSTERIORES
+# ============================================================
+#
+# Útil para:
+#
+#   SALDO PROMEDIO
+#
+# donde la etiqueta no comparte línea con el importe.
+#
+# ============================================================
+
+
+def find_next_amount(
+    lines: List[List[Dict[str, Any]]],
+    start_index: int,
+    end_index: int,
+    max_lines: int = 4,
+) -> Optional[float]:
+
+    last_index = min(
+        end_index,
+        start_index + max_lines + 1,
+    )
+
+    for index in range(
+        start_index + 1,
+        last_index,
+    ):
+
+        amount = extract_amount_from_line(
+            lines[index]
+        )
+
+        if amount is not None:
+            return amount
+
+    return None
+
+
+# ============================================================
+# CAMPO NORMAL
+# ============================================================
+
+
+def extract_field_same_line(
+    lines: List[List[Dict[str, Any]]],
+    patterns: tuple[tuple[str, ...], ...],
+    start_index: int,
+    end_index: int,
+) -> Optional[float]:
+
+    line_index = find_line_by_patterns(
+        lines,
+        patterns,
+        start_index,
+        end_index,
+    )
+
+    if line_index is None:
+        return None
+
+    return extract_same_line_amount(
+        lines,
+        line_index,
+    )
+
+
+# ============================================================
+# SALDO PROMEDIO
+# ============================================================
+#
+# IMPORTANTE:
+#
+# No buscamos solamente:
+#
+#     SALDO PROMEDIO
+#
+# porque eso también coincide con:
+#
+#     SALDO PROMEDIO MÍNIMO
+#
+# La estructura observada es:
+#
+#     Saldo
+#     Promedio
+#
+#     Saldo promedio mínimo       $ 0.00
+#
+#     En el Periodo 01 Jun al 30 Jun:     $ 590.36
+#
+# Por ello tomamos el primer bloque "SALDO PROMEDIO" que NO
+# contenga "MÍNIMO", y buscamos posteriormente el importe.
+#
 # ============================================================
 
 
 def extract_saldo_promedio(
-    words: List[Dict[str, Any]],
+    lines: List[List[Dict[str, Any]]],
+    start_index: int,
+    end_index: int,
 ) -> Optional[float]:
-    """
-    Extrae:
 
-        Saldo Promedio
+    for index in range(
+        start_index,
+        end_index,
+    ):
 
-    Valor observado:
+        text = normalize_upper(
+            line_text(lines[index])
+        )
 
-        $1,676.00
-    """
+        if "SALDO" not in text:
+            continue
 
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_SALDO_PROMEDIO,
-        page_number=PAGE_GENERAL,
+        if "PROMEDIO" not in text:
+            continue
+
+        if "MÍNIMO" in text:
+            continue
+
+        # Primero intentamos la misma línea.
+        amount = extract_same_line_amount(
+            lines,
+            index,
+        )
+
+        if amount is not None:
+            return amount
+
+        # En el layout actual el importe aparece después.
+        #
+        # Buscamos hasta encontrar:
+        #
+        #   En el Periodo ...
+        #
+        for next_index in range(
+            index + 1,
+            min(
+                end_index,
+                index + 6,
+            ),
+        ):
+
+            next_text = normalize_upper(
+                line_text(
+                    lines[next_index]
+                )
+            )
+
+            amount = extract_same_line_amount(
+                lines,
+                next_index,
+            )
+
+            if amount is not None:
+
+                # No tomar el importe del saldo promedio
+                # mínimo.
+                if (
+                    "SALDO PROMEDIO"
+                    in next_text
+                    and
+                    "MÍNIMO"
+                    in next_text
+                ):
+                    continue
+
+                return amount
+
+    return None
+
+
+# ============================================================
+# SALDO PROMEDIO MÍNIMO
+# ============================================================
+
+
+def extract_saldo_promedio_minimo(
+    lines: List[List[Dict[str, Any]]],
+    start_index: int,
+    end_index: int,
+) -> Optional[float]:
+
+    return extract_field_same_line(
+        lines,
+        (
+            (
+                "SALDO",
+                "PROMEDIO",
+                "MÍNIMO",
+            ),
+            (
+                "SALDO",
+                "PROMEDIO",
+                "MINIMO",
+            ),
+        ),
+        start_index,
+        end_index,
     )
 
-    return _parse_amount(value)
+
+# ============================================================
+# DÍAS DEL PERIODO
+# ============================================================
 
 
-def extract_dias_periodo(
-    words: List[Dict[str, Any]],
+def extract_days(
+    lines: List[List[Dict[str, Any]]],
+    start_index: int,
+    end_index: int,
 ) -> Optional[int]:
-    """
-    Extrae:
 
-        Días Transcurridos
+    for index in range(
+        start_index,
+        end_index,
+    ):
 
-    Valor observado:
+        text = normalize_upper(
+            line_text(lines[index])
+        )
 
-        31
-    """
+        if "DÍAS" not in text:
+            continue
 
-    value = extract_integer_from_box(
-        words=words,
-        box=BOX_DIAS_PERIODO,
-        page_number=PAGE_GENERAL,
-    )
+        for word in lines[index]:
 
-    return _parse_int(value)
+            value = normalize_text(
+                word.get(
+                    "text",
+                    "",
+                )
+            )
 
+            if value.isdigit():
 
-def extract_saldo_anterior(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    Extrae:
+                number = int(value)
 
-        Saldo Anterior
+                if 1 <= number <= 366:
+                    return number
 
-    Valor observado:
-
-        $65.68
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_SALDO_ANTERIOR,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
-
-
-def extract_depositos_abonos(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    Extrae:
-
-        Depósitos
-
-    Valor observado:
-
-        $61,105.00
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_DEPOSITOS_ABONOS,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
-
-
-def extract_retiros_cargos(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    Extrae:
-
-        Retiros
-
-    Valor observado:
-
-        $59,970.68
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_RETIROS_CARGOS,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
-
-
-def extract_saldo_final(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    Extrae:
-
-        Saldo al 06 de febrero de 2026
-
-    Valor observado:
-
-        $1,200.00
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_SALDO_FINAL,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
+    return None
 
 
 # ============================================================
-# CAMPOS NO DISPONIBLES EN LAS COORDENADAS PROPORCIONADAS
-# ============================================================
-#
-# Estos campos forman parte del modelo ResumenFinanciero, pero
-# no aparecen en las coordenadas suministradas.
-#
-# Por indicación expresa:
-#
-#     -> se retorna N/A
-#
-# NO se intenta inferirlos.
-#
+# TASA BRUTA ANUAL
 # ============================================================
 
 
 def extract_tasa_bruta_anual(
-    words: List[Dict[str, Any]],
+    lines: List[List[Dict[str, Any]]],
+    start_index: int,
+    end_index: int,
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Tasa Bruta Anual no fue
-    proporcionada.
-    """
 
-    return None
+    pattern = re.compile(
+        r"^\d+(?:\.\d+)?%$"
+    )
 
+    for index in range(
+        start_index,
+        end_index,
+    ):
 
-def extract_saldo_promedio_gravable(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a Saldo Promedio Gravable no
-    fue proporcionada.
-    """
+        text = normalize_upper(
+            line_text(lines[index])
+        )
 
-    return None
+        if not (
+            "TASA" in text
+            and "BRUTA" in text
+            and "ANUAL" in text
+        ):
+            continue
 
+        for word in lines[index]:
 
-def extract_intereses_a_favor(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a Intereses a Favor no fue
-    proporcionada.
-    """
+            value = normalize_text(
+                word.get(
+                    "text",
+                    "",
+                )
+            )
 
-    return None
+            if pattern.fullmatch(value):
 
-
-def extract_isr_retenido(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a ISR Retenido no fue
-    proporcionada.
-    """
-
-    return None
-
-
-def extract_cheques_pagados(
-    words: List[Dict[str, Any]],
-) -> Optional[int]:
-    """
-    La coordenada correspondiente a Cheques Pagados no fue
-    proporcionada.
-    """
-
-    return None
-
-
-def extract_manejo_cuenta(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a Manejo de Cuenta no fue
-    proporcionada.
-    """
-
-    return None
-
-
-def extract_cargos_objetados(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a Cargos Objetados no fue
-    proporcionada.
-    """
-
-    return None
-
-
-def extract_abonos_objetados(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a Abonos Objetados no fue
-    proporcionada.
-    """
-
-    return None
-
-
-def extract_saldo_promedio_minimo_mensual(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a Saldo Promedio Mínimo
-    Mensual no fue proporcionada.
-    """
-
-    return None
-
-
-def extract_saldo_global(
-    words: List[Dict[str, Any]],
-) -> Optional[float]:
-    """
-    La coordenada correspondiente a Saldo Global no fue
-    proporcionada.
-    """
+                try:
+                    return float(
+                        value.rstrip("%")
+                    )
+                except ValueError:
+                    return None
 
     return None
 
 
 # ============================================================
-# FUNCIÓN PRINCIPAL PÚBLICA
+# LÍMITE DEL BLOQUE RESUMEN
+# ============================================================
+
+
+def find_resumen_end(
+    lines: List[List[Dict[str, Any]]],
+    start_index: int,
+) -> int:
+
+    for index in range(
+        start_index + 1,
+        len(lines),
+    ):
+
+        text = normalize_upper(
+            line_text(lines[index])
+        )
+
+        if "TOTAL DE USOS" in text:
+            return index + 1
+
+    return len(lines)
+
+
+# ============================================================
+# EXTRACTOR PRINCIPAL
 # ============================================================
 
 
 def extract_resumen_financiero_words(
     words: List[Dict[str, Any]],
 ) -> ResumenFinanciero:
-    """
-    Extractor espacial del RESUMEN FINANCIERO BANAMEX.
 
-    El extractor utiliza exclusivamente coordenadas
-    espaciales.
-
-    No depende de que las palabras de una etiqueta estén
-    agrupadas.
-
-    Ejemplo:
-
-        "Saldo Anterior"
-
-    llega como:
-
-        "Saldo"
-        "Anterior"
-
-    en dos objetos independientes.
-
-    Lo mismo sucede con:
-
-        "Días Transcurridos"
-
-    y cualquier otro texto del PDF.
-
-    Campos actualmente disponibles mediante las coordenadas
-    proporcionadas:
-
-        - saldo_promedio
-        - dias_periodo
-        - saldo_anterior
-        - depositos_abonos
-        - retiros_cargos
-        - saldo_final
-
-    Campos sin coordenadas proporcionadas:
-
-        - tasa_bruta_anual
-        - saldo_promedio_gravable
-        - intereses_a_favor
-        - isr_retenido
-        - cheques_pagados
-        - manejo_cuenta
-        - cargos_objetados
-        - abonos_objetados
-        - saldo_promedio_minimo_mensual
-        - saldo_global
-    
-    Estos últimos retornan None.
-    """
+    if not words:
+        return ResumenFinanciero()
 
     # --------------------------------------------------------
-    # CAMPOS OBSERVADOS
+    # 1. SOLO PRIMERA PÁGINA
     # --------------------------------------------------------
+
+    page_one_words = [
+        word
+        for word in words
+        if word_page(word) == 1
+    ]
+
+    if not page_one_words:
+        return ResumenFinanciero()
+
+    # --------------------------------------------------------
+    # 2. AGRUPAR LÍNEAS
+    # --------------------------------------------------------
+
+    lines = group_words_into_lines(
+        page_one_words
+    )
+
+    if not lines:
+        return ResumenFinanciero()
+
+    # --------------------------------------------------------
+    # 3. ENCABEZADO DEL PRODUCTO
+    # --------------------------------------------------------
+
+    header_index = find_product_header(
+        lines
+    )
+
+    if header_index is None:
+        return ResumenFinanciero()
+
+    # --------------------------------------------------------
+    # 4. INICIO DEL RESUMEN
+    # --------------------------------------------------------
+
+    resumen_start = find_resumen_start(
+        lines,
+        header_index,
+    )
+
+    if resumen_start is None:
+        return ResumenFinanciero()
+
+    # --------------------------------------------------------
+    # 5. FIN DEL RESUMEN
+    # --------------------------------------------------------
+
+    resumen_end = find_resumen_end(
+        lines,
+        resumen_start,
+    )
+
+    # --------------------------------------------------------
+    # 6. EXTRACCIÓN
+    # --------------------------------------------------------
+
+    saldo_anterior = extract_field_same_line(
+        lines,
+        (
+            (
+                "SALDO",
+                "INICIAL",
+                "DEL",
+                "PERIODO",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    depositos_abonos = extract_field_same_line(
+        lines,
+        (
+            (
+                "TOTAL",
+                "DE",
+                "DEPÓSITOS",
+            ),
+            (
+                "TOTAL",
+                "DE",
+                "DEPOSITOS",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    retiros_cargos = extract_field_same_line(
+        lines,
+        (
+            (
+                "TOTAL",
+                "DE",
+                "RETIROS",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
 
     saldo_promedio = extract_saldo_promedio(
-        words
-    )
-
-    dias_periodo = extract_dias_periodo(
-        words
-    )
-
-    saldo_anterior = extract_saldo_anterior(
-        words
-    )
-
-    depositos_abonos = extract_depositos_abonos(
-        words
-    )
-
-    retiros_cargos = extract_retiros_cargos(
-        words
-    )
-
-    saldo_final = extract_saldo_final(
-        words
-    )
-
-    # --------------------------------------------------------
-    # CAMPOS NO OBSERVADOS
-    # --------------------------------------------------------
-
-    tasa_bruta_anual = extract_tasa_bruta_anual(
-        words
-    )
-
-    saldo_promedio_gravable = extract_saldo_promedio_gravable(
-        words
-    )
-
-    intereses_a_favor = extract_intereses_a_favor(
-        words
-    )
-
-    isr_retenido = extract_isr_retenido(
-        words
-    )
-
-    cheques_pagados = extract_cheques_pagados(
-        words
-    )
-
-    manejo_cuenta = extract_manejo_cuenta(
-        words
-    )
-
-    cargos_objetados = extract_cargos_objetados(
-        words
-    )
-
-    abonos_objetados = extract_abonos_objetados(
-        words
+        lines,
+        resumen_start,
+        resumen_end,
     )
 
     saldo_promedio_minimo_mensual = (
-        extract_saldo_promedio_minimo_mensual(
-            words
+        extract_saldo_promedio_minimo(
+            lines,
+            resumen_start,
+            resumen_end,
         )
     )
 
-    saldo_global = extract_saldo_global(
-        words
+    intereses_a_favor = extract_field_same_line(
+        lines,
+        (
+            (
+                "INTERESES",
+                "NETOS",
+                "GANADOS",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    manejo_cuenta = extract_field_same_line(
+        lines,
+        (
+            (
+                "TOTAL",
+                "DE",
+                "COMISIONES",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    isr_retenido = extract_field_same_line(
+        lines,
+        (
+            (
+                "RETENCIÓN",
+                "DE",
+                "ISR",
+            ),
+            (
+                "RETENCION",
+                "DE",
+                "ISR",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    saldo_final = extract_field_same_line(
+        lines,
+        (
+            (
+                "SALDO",
+                "ACTUAL",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    dias_periodo = extract_days(
+        lines,
+        resumen_start,
+        resumen_end,
+    )
+
+    tasa_bruta_anual = extract_tasa_bruta_anual(
+        lines,
+        resumen_start,
+        resumen_end,
     )
 
     # --------------------------------------------------------
-    # RESULTADO
+    # 7. CONSTRUIR MODELO
     # --------------------------------------------------------
 
     return ResumenFinanciero(
+
         saldo_promedio=saldo_promedio,
 
         dias_periodo=dias_periodo,
 
         tasa_bruta_anual=tasa_bruta_anual,
 
-        saldo_promedio_gravable=saldo_promedio_gravable,
+        saldo_promedio_gravable=None,
 
         intereses_a_favor=intereses_a_favor,
 
         isr_retenido=isr_retenido,
 
-        cheques_pagados=cheques_pagados,
+        cheques_pagados=None,
 
         manejo_cuenta=manejo_cuenta,
 
-        cargos_objetados=cargos_objetados,
+        cargos_objetados=None,
 
-        abonos_objetados=abonos_objetados,
+        abonos_objetados=None,
 
         saldo_anterior=saldo_anterior,
 
@@ -1007,7 +1221,9 @@ def extract_resumen_financiero_words(
 
         saldo_final=saldo_final,
 
-        saldo_promedio_minimo_mensual=saldo_promedio_minimo_mensual,
+        saldo_promedio_minimo_mensual=(
+            saldo_promedio_minimo_mensual
+        ),
 
-        saldo_global=saldo_global,
+        saldo_global=None,
     )

@@ -4,87 +4,119 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-
 from models.movimiento import Movimiento
-from parsers.banorte.utils.words_header_filter import remove_banamex_header
-from parsers.banorte.utils.words_grafico_filter import remove_after_grafico_transaccional
-
-# ============================================================
-# CONFIGURACIÓN GENERAL
-# ============================================================
-#
-# BANAMEX
-#
-# Tabla:
-#
-#     FECHA | CONCEPTO | RETIROS | DEPOSITOS | SALDO
-#
-# IMPORTANTE:
-#
-# Las palabras del concepto NO necesariamente están cerca del
-# centro horizontal de la palabra "CONCEPTO".
-#
-# Por ejemplo:
-#
-#     DEPOSITO
-#     POR
-#     RETIRO
-#     DE
-#     AHORRO
-#     A
-#     LA
-#     VISTA
-#
-# empiezan alrededor de x=57.
-#
-# Por ello utilizamos LÍMITES DE COLUMNA y no distancia al
-# centro de la cabecera.
-#
-# ============================================================
-
-
-PAGE_MOVIMIENTOS = 2
 
 
 # ============================================================
-# TOLERANCIAS
+# EXTRACTOR ESPACIAL — MOVIMIENTOS BANORTE
+# ============================================================
+#
+# Layout observado:
+#
+#   FECHA
+#   DESCRIPCIÓN / ESTABLECIMIENTO
+#   MONTO DEL DEPÓSITO
+#   MONTO DEL RETIRO
+#   SALDO
+#
+# El parser trabaja exclusivamente mediante coordenadas
+# espaciales para separar las columnas.
+#
+# Características particulares del PDF BANORTE:
+#
+#   1. La fecha y el primer fragmento del concepto pueden
+#      venir físicamente unidos:
+#
+#          02-JUN-25OXXOLAS
+#
+#   2. Una operación puede ocupar muchas líneas verticales.
+#
+#   3. Los importes aparecen en columnas independientes.
+#
+#   4. Los encabezados se repiten en páginas posteriores.
+#
+#   5. Una página posterior puede continuar el movimiento
+#      anterior.
+#
+#   6. La descripción puede extenderse muy hacia la derecha,
+#      por lo que NO se utiliza el centro de la palabra
+#      "DESCRIPCIÓN" como referencia.
+#
 # ============================================================
 
+
+# ============================================================
+# PÁGINAS
+# ============================================================
+
+FIRST_MOVEMENTS_PAGE = 2
+
+
+# ============================================================
+# TOLERANCIAS ESPACIALES
+# ============================================================
 
 LINE_Y_TOLERANCE = 3.5
 
-COLUMN_TOLERANCE = 6.0
+COLUMN_TOLERANCE = 2.0
+
+BOX_TOLERANCE_X = 1.5
+
+BOX_TOLERANCE_Y = 1.5
 
 
 # ============================================================
-# CONFIGURACIÓN BASE DE LA TABLA OBSERVADA
+# CONFIGURACIÓN ESPACIAL BANORTE
 # ============================================================
-
+#
+# Coordenadas observadas:
+#
+# FECHA
+#     aproximadamente x=53 → 84
+#
+# DESCRIPCIÓN / ESTABLECIMIENTO
+#     aproximadamente x=84 → 352
+#
+# MONTO DEL DEPÓSITO
+#     aproximadamente x=353 → 428
+#
+# MONTO DEL RETIRO
+#     aproximadamente x=429 → 520
+#
+# SALDO
+#     aproximadamente x=521 → 566
+#
+# IMPORTANTE:
+#
+# Los límites se construyen como regiones de columna y no
+# como distancia respecto al centro de la cabecera.
+#
+# ============================================================
 
 DEFAULT_COLUMN_BOUNDS = {
     "FECHA": (
-        8.0,
-        52.0,
+        50.0,
+        84.0,
     ),
 
-    "CONCEPTO": (
-        52.0,
-        255.0,
+    "DESCRIPCION": (
+        84.0,
+        352.0,
     ),
 
-    "RETIROS": (
-        255.0,
-        324.0,
+    "DEPOSITO": (
+        352.0,
+        428.0,
     ),
 
-    "DEPOSITOS": (
-        324.0,
-        408.0,
+    "RETIRO": (
+        428.0,
+        520.0,
     ),
 
     "SALDO": (
-        408.0,
-        490.0,
+        520.0,
+        568.0,
     ),
 }
 
@@ -93,40 +125,46 @@ DEFAULT_COLUMN_BOUNDS = {
 # HEADER
 # ============================================================
 
-
-HEADER_NAMES = {
+HEADER_REQUIRED = {
     "FECHA",
-    "CONCEPTO",
-    "RETIROS",
-    "DEPOSITOS",
+    "DESCRIPCIÓN",
+    "MONTO",
     "SALDO",
 }
 
 
 # ============================================================
-# REGEX
+# REGEX — FECHAS
+# ============================================================
+#
+# Banorte puede entregar:
+#
+#     02-JUN-25
+#
+# pegado al concepto:
+#
+#     02-JUN-25OXXOLAS
+#
+# Por ello usamos match sobre el INICIO del texto.
+#
 # ============================================================
 
-
-DATE_PATTERN = re.compile(
-    r"""
-    ^
-    (?:
-        \d{1,2}\s+[A-ZÁÉÍÓÚÑ]{3,9}
-        |
-        \d{1,2}/[A-ZÁÉÍÓÚÑ]{3,9}
-        |
-        \d{1,2}-[A-ZÁÉÍÓÚÑ]{3,9}
-        |
-        \d{1,2}\s+[A-ZÁÉÍÓÚÑ]{3,9}\s+\d{4}
-        |
-        \d{1,2}/[A-ZÁÉÍÓÚÑ]{3,9}/\d{4}
-    )
-    $
-    """,
-    re.IGNORECASE | re.VERBOSE,
+DATE_PREFIX_PATTERN = re.compile(
+    r"^"
+    r"(?P<date>"
+    r"\d{1,2}"
+    r"-"
+    r"[A-ZÁÉÍÓÚÑ]{3}"
+    r"-"
+    r"\d{2,4}"
+    r")",
+    re.IGNORECASE,
 )
 
+
+# ============================================================
+# REGEX — IMPORTES
+# ============================================================
 
 MONEY_PATTERN = re.compile(
     r"""
@@ -136,13 +174,17 @@ MONEY_PATTERN = re.compile(
     \$?
     \d{1,3}
     (?:,\d{3})*
-    (?:\.\d{2})?
+    (?:\.\d{1,2})?
     \)?
     $
     """,
     re.VERBOSE,
 )
 
+
+# ============================================================
+# REGEX PREPARADOS PARA FUTURO
+# ============================================================
 
 RFC_PATTERN = re.compile(
     r"""
@@ -161,7 +203,7 @@ RFC_PATTERN = re.compile(
 
 
 TIME_PATTERN = re.compile(
-    r"\b([01]?\d|2[0-3]):[0-5]\d\b"
+    r"\b([01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b"
 )
 
 
@@ -169,7 +211,8 @@ AUTH_PATTERN = re.compile(
     r"""
     \b
     AUT
-    \s*[:#-]?
+    \s*
+    [:#-]?
     \s*
     ([A-Z0-9]+)
     \b
@@ -182,7 +225,8 @@ SUC_PATTERN = re.compile(
     r"""
     \b
     SUC
-    \s*[:#-]?
+    \s*
+    [:#-]?
     \s*
     ([A-Z0-9]+)
     \b
@@ -195,7 +239,8 @@ CAJA_PATTERN = re.compile(
     r"""
     \b
     CAJA
-    \s*[:#-]?
+    \s*
+    [:#-]?
     \s*
     ([A-Z0-9]+)
     \b
@@ -209,31 +254,73 @@ CLABE_PATTERN = re.compile(
 )
 
 
+REFERENCE_PATTERN = re.compile(
+    r"""
+    \b
+    REFERENCIA
+    \s*
+    [:#=-]?
+    \s*
+    ([A-Z0-9*_-]+)
+    \b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
 # ============================================================
 # ESTRUCTURA DE CONFIGURACIÓN
 # ============================================================
 
 
-@dataclass
+@dataclass(frozen=True)
 class ColumnConfig:
     """
-    Define los límites espaciales de cada columna.
-
-    A diferencia de la implementación anterior, no usamos un
-    centro y una tolerancia pequeña.
-
-    Usamos una región real.
+    Define los límites horizontales de las columnas BANORTE.
     """
 
     fecha: tuple[float, float]
 
-    concepto: tuple[float, float]
+    descripcion: tuple[float, float]
 
-    retiros: tuple[float, float]
+    deposito: tuple[float, float]
 
-    depositos: tuple[float, float]
+    retiro: tuple[float, float]
 
     saldo: tuple[float, float]
+
+
+# ============================================================
+# CONFIGURACIÓN BASE
+# ============================================================
+
+
+def build_default_config() -> ColumnConfig:
+    """
+    Construye la configuración espacial BANORTE.
+    """
+
+    return ColumnConfig(
+        fecha=DEFAULT_COLUMN_BOUNDS[
+            "FECHA"
+        ],
+
+        descripcion=DEFAULT_COLUMN_BOUNDS[
+            "DESCRIPCION"
+        ],
+
+        deposito=DEFAULT_COLUMN_BOUNDS[
+            "DEPOSITO"
+        ],
+
+        retiro=DEFAULT_COLUMN_BOUNDS[
+            "RETIRO"
+        ],
+
+        saldo=DEFAULT_COLUMN_BOUNDS[
+            "SALDO"
+        ],
+    )
 
 
 # ============================================================
@@ -242,11 +329,13 @@ class ColumnConfig:
 
 
 def normalize_text(
-    value: str,
+    value: Any,
 ) -> str:
+    """
+    Normaliza espacios y caracteres básicos.
+    """
 
     if value is None:
-
         return ""
 
     value = str(value)
@@ -268,8 +357,11 @@ def normalize_text(
 
 
 def normalize_upper(
-    value: str,
+    value: Any,
 ) -> str:
+    """
+    Normaliza y convierte a mayúsculas.
+    """
 
     return normalize_text(
         value
@@ -281,63 +373,226 @@ def normalize_upper(
 # ============================================================
 
 
+def safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+    """
+    Conversión segura a float.
+    """
+
+    try:
+        return float(value)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
+
+
+def word_x0(
+    word: Dict[str, Any],
+) -> float:
+
+    return safe_float(
+        word.get(
+            "x0",
+            0,
+        )
+    )
+
+
+def word_x1(
+    word: Dict[str, Any],
+) -> float:
+
+    return safe_float(
+        word.get(
+            "x1",
+            word_x0(word),
+        )
+    )
+
+
 def word_center_x(
     word: Dict[str, Any],
 ) -> float:
 
-    x0 = float(
-        word.get("x0", 0)
-        or 0
+    return (
+        word_x0(word)
+        + word_x1(word)
+    ) / 2.0
+
+
+def word_top(
+    word: Dict[str, Any],
+) -> float:
+
+    return safe_float(
+        word.get(
+            "top",
+            0,
+        )
     )
 
-    x1 = float(
-        word.get("x1", x0)
-        or x0
-    )
 
-    return (x0 + x1) / 2
+def word_bottom(
+    word: Dict[str, Any],
+) -> float:
+
+    return safe_float(
+        word.get(
+            "bottom",
+            word_top(word),
+        )
+    )
 
 
 def word_center_y(
     word: Dict[str, Any],
 ) -> float:
 
-    top = float(
-        word.get("top", 0)
-        or 0
-    )
-
-    bottom = float(
-        word.get(
-            "bottom",
-            top,
-        )
-        or top
-    )
-
-    return (top + bottom) / 2
+    return (
+        word_top(word)
+        + word_bottom(word)
+    ) / 2.0
 
 
 def word_height(
     word: Dict[str, Any],
 ) -> float:
 
-    top = float(
-        word.get("top", 0)
-        or 0
-    )
-
-    bottom = float(
-        word.get(
-            "bottom",
-            top,
-        )
-        or top
-    )
-
     return abs(
-        bottom - top
+        word_bottom(word)
+        - word_top(word)
     )
+
+
+# ============================================================
+# SOLAPAMIENTO ESPACIAL
+# ============================================================
+
+
+def word_inside_box(
+    word: Dict[str, Any],
+    box: tuple[
+        float,
+        float,
+        float,
+        float,
+    ],
+    page_number: Optional[int] = None,
+) -> bool:
+    """
+    Determina si una palabra se encuentra espacialmente
+    dentro de una caja.
+
+    Se utiliza SOLAPAMIENTO de rectángulos y no solamente
+    el centro de la palabra.
+
+    Esto hace el extractor más tolerante a:
+        - palabras anchas
+        - pequeños desplazamientos
+        - diferencias de renderizado
+        - límites de columna
+    """
+
+    if (
+        page_number is not None
+        and int(
+            word.get(
+                "page",
+                1,
+            )
+            or 1
+        )
+        != page_number
+    ):
+        return False
+
+    xmin, xmax, ymin, ymax = box
+
+    xmin -= BOX_TOLERANCE_X
+    xmax += BOX_TOLERANCE_X
+
+    ymin -= BOX_TOLERANCE_Y
+    ymax += BOX_TOLERANCE_Y
+
+    x0 = word_x0(word)
+    x1 = word_x1(word)
+
+    top = word_top(word)
+    bottom = word_bottom(word)
+
+    horizontal_overlap = (
+        min(
+            x1,
+            xmax,
+        )
+        - max(
+            x0,
+            xmin,
+        )
+    )
+
+    vertical_overlap = (
+        min(
+            bottom,
+            ymax,
+        )
+        - max(
+            top,
+            ymin,
+        )
+    )
+
+    return (
+        horizontal_overlap > 0
+        and vertical_overlap > 0
+    )
+
+
+def words_in_box(
+    words: List[
+        Dict[str, Any]
+    ],
+    box: tuple[
+        float,
+        float,
+        float,
+        float,
+    ],
+    page_number: Optional[int] = None,
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Devuelve las palabras contenidas en una caja espacial.
+    """
+
+    result = [
+        word
+        for word in words
+        if word_inside_box(
+            word,
+            box,
+            page_number,
+        )
+    ]
+
+    result.sort(
+        key=lambda word: (
+            safe_float(
+                word.get(
+                    "top",
+                    0,
+                )
+            ),
+            word_x0(word),
+        )
+    )
+
+    return result
 
 
 # ============================================================
@@ -346,19 +601,38 @@ def word_height(
 
 
 def group_words_into_lines(
-    words: List[Dict[str, Any]],
-) -> List[List[Dict[str, Any]]]:
+    words: List[
+        Dict[str, Any]
+    ],
+) -> List[
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Agrupa palabras por posición vertical.
+
+    Conserva la separación por página.
+
+    Es suficientemente tolerante para el espaciado observado
+    en BANORTE.
+    """
 
     if not words:
-
         return []
 
     words = sorted(
         words,
         key=lambda word: (
-            word.get("page", 1),
+            int(
+                word.get(
+                    "page",
+                    1,
+                )
+                or 1
+            ),
             word_center_y(word),
-            word.get("x0", 0),
+            word_x0(word),
         ),
     )
 
@@ -386,7 +660,9 @@ def group_words_into_lines(
         tolerance = LINE_Y_TOLERANCE
 
     lines: List[
-        List[Dict[str, Any]]
+        List[
+            Dict[str, Any]
+        ]
     ] = []
 
     current: List[
@@ -413,7 +689,9 @@ def group_words_into_lines(
 
         if current_y is None:
 
-            current = [word]
+            current = [
+                word
+            ]
 
             current_page = page
 
@@ -434,25 +712,29 @@ def group_words_into_lines(
                 word
             )
 
-            current_y = sum(
-                word_center_y(item)
-                for item in current
-            ) / len(current)
+            current_y = (
+                sum(
+                    word_center_y(
+                        item
+                    )
+                    for item in current
+                )
+                / len(current)
+            )
 
         else:
 
             current.sort(
-                key=lambda item: item.get(
-                    "x0",
-                    0,
-                )
+                key=word_x0
             )
 
             lines.append(
                 current
             )
 
-            current = [word]
+            current = [
+                word
+            ]
 
             current_page = page
 
@@ -461,10 +743,7 @@ def group_words_into_lines(
     if current:
 
         current.sort(
-            key=lambda item: item.get(
-                "x0",
-                0,
-            )
+            key=word_x0
         )
 
         lines.append(
@@ -480,17 +759,19 @@ def group_words_into_lines(
 
 
 def line_text(
-    line: List[Dict[str, Any]],
+    line: List[
+        Dict[str, Any]
+    ],
 ) -> str:
+    """
+    Construye el texto completo de una línea.
+    """
 
-    values = []
+    values: List[str] = []
 
     for word in sorted(
         line,
-        key=lambda item: item.get(
-            "x0",
-            0,
-        ),
+        key=word_x0,
     ):
 
         text = normalize_text(
@@ -516,13 +797,18 @@ def line_text(
 # ============================================================
 
 
-def find_word(
-    line: List[Dict[str, Any]],
-    expected: str,
-) -> Optional[Dict[str, Any]]:
+def find_normalized_token(
+    line: List[
+        Dict[str, Any]
+    ],
+    token: str,
+) -> bool:
+    """
+    Busca un token normalizado dentro de una línea.
+    """
 
-    expected = normalize_upper(
-        expected
+    token = normalize_upper(
+        token
     )
 
     for word in line:
@@ -534,297 +820,131 @@ def find_word(
             )
         )
 
-        if text == expected:
+        if text == token:
 
-            return word
+            return True
 
-    return None
+    return False
 
 
 def is_movements_header(
-    line: List[Dict[str, Any]],
+    line: List[
+        Dict[str, Any]
+    ],
 ) -> bool:
+    """
+    Detecta los encabezados repetidos de movimientos BANORTE.
 
-    found = 0
+    Ejemplo:
 
-    for name in HEADER_NAMES:
+        FECHA
+        DESCRIPCIÓN / ESTABLECIMIENTO
+        MONTO DEL DEPOSITO
+        MONTO DEL RETIRO
+        SALDO
+    """
 
-        if find_word(
-            line,
-            name,
-        ):
+    if not line:
+        return False
 
-            found += 1
-
-    return found >= 4
-
-
-def detect_header(
-    line: List[Dict[str, Any]],
-) -> Optional[Dict[str, Dict[str, float]]]:
-
-    if not is_movements_header(
-        line
-    ):
-
-        return None
-
-    result = {}
-
-    for name in HEADER_NAMES:
-
-        word = find_word(
-            line,
-            name,
-        )
-
-        if word is None:
-
-            continue
-
-        result[name] = {
-            "x0": float(
-                word.get(
-                    "x0",
-                    0,
-                )
-                or 0
-            ),
-            "x1": float(
-                word.get(
-                    "x1",
-                    0,
-                )
-                or 0
-            ),
-        }
-
-    return result
-
-
-# ============================================================
-# CONSTRUCCIÓN DE COLUMNAS
-# ============================================================
-
-
-def build_default_config() -> ColumnConfig:
-
-    return ColumnConfig(
-        fecha=DEFAULT_COLUMN_BOUNDS[
-            "FECHA"
-        ],
-
-        concepto=DEFAULT_COLUMN_BOUNDS[
-            "CONCEPTO"
-        ],
-
-        retiros=DEFAULT_COLUMN_BOUNDS[
-            "RETIROS"
-        ],
-
-        depositos=DEFAULT_COLUMN_BOUNDS[
-            "DEPOSITOS"
-        ],
-
-        saldo=DEFAULT_COLUMN_BOUNDS[
-            "SALDO"
-        ],
+    text = normalize_upper(
+        line_text(line)
     )
 
+    has_fecha = (
+        "FECHA" in text
+    )
 
-def build_config_from_header(
-    header: Dict[str, Dict[str, float]],
-) -> ColumnConfig:
-    """
-    Construye regiones espaciales a partir del encabezado.
+    has_descripcion = (
+        "DESCRIPCIÓN" in text
+        or "DESCRIPCION" in text
+    )
 
-    Para FECHA y CONCEPTO se utilizan regiones normales.
+    has_monto = (
+        "MONTO" in text
+    )
 
-    Para RETIROS, DEPOSITOS y SALDO se construyen fronteras
-    NO SOLAPADAS usando los centros de los encabezados.
+    has_saldo = (
+        "SALDO" in text
+    )
 
-    Los importes posteriormente se asignan utilizando x1,
-    porque los números están alineados hacia la derecha.
-    """
-
-    fallback = build_default_config()
-
-    # --------------------------------------------------------
-    # FECHA
-    # --------------------------------------------------------
-
-    fecha = fallback.fecha
-
-    # --------------------------------------------------------
-    # RETIROS / DEPOSITOS / SALDO
-    # --------------------------------------------------------
-
-    retiros = fallback.retiros
-
-    depositos = fallback.depositos
-
-    saldo = fallback.saldo
-
-    if (
-        "RETIROS" in header
-        and "DEPOSITOS" in header
-        and "SALDO" in header
-    ):
-
-        retiros_center = (
-            header["RETIROS"]["x0"]
-            + header["RETIROS"]["x1"]
-        ) / 2.0
-
-        depositos_center = (
-            header["DEPOSITOS"]["x0"]
-            + header["DEPOSITOS"]["x1"]
-        ) / 2.0
-
-        saldo_center = (
-            header["SALDO"]["x0"]
-            + header["SALDO"]["x1"]
-        ) / 2.0
-
-        retiros_depositos_boundary = (
-            retiros_center
-            + depositos_center
-        ) / 2.0
-
-        depositos_saldo_boundary = (
-            depositos_center
-            + saldo_center
-        ) / 2.0
-
-        retiros = (
-            fallback.retiros[0],
-            retiros_depositos_boundary,
-        )
-
-        depositos = (
-            retiros_depositos_boundary,
-            depositos_saldo_boundary,
-        )
-
-        saldo = (
-            depositos_saldo_boundary,
-            fallback.saldo[1],
-        )
-
-    # --------------------------------------------------------
-    # CONCEPTO
-    # --------------------------------------------------------
-
-    concepto = fallback.concepto
-
-    if (
-        "FECHA" in header
-        and "RETIROS" in header
-    ):
-
-        fecha_right = (
-            header["FECHA"]["x1"]
-        )
-
-        retiros_left = (
-            header["RETIROS"]["x0"]
-        )
-
-        concepto = (
-            fecha_right + 5.0,
-            retiros_left - 5.0,
-        )
-
-    return ColumnConfig(
-        fecha=fecha,
-
-        concepto=concepto,
-
-        retiros=retiros,
-
-        depositos=depositos,
-
-        saldo=saldo,
+    return (
+        has_fecha
+        and has_descripcion
+        and has_monto
+        and has_saldo
     )
 
 
 # ============================================================
-# CONFIGURACIÓN POR PÁGINA
+# ENCABEZADOS SECUNDARIOS
 # ============================================================
 
 
-def build_page_configs(
-    lines: List[List[Dict[str, Any]]],
-) -> Dict[int, ColumnConfig]:
+def is_detail_title(
+    line: List[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Detecta:
 
-    configs: Dict[
-        int,
-        ColumnConfig
-    ] = {}
+        DETALLE DE MOVIMIENTOS
+    """
 
-    default = build_default_config()
+    text = normalize_upper(
+        line_text(line)
+    )
 
-    for line in lines:
-
-        if not line:
-
-            continue
-
-        header = detect_header(
-            line
-        )
-
-        if header is None:
-
-            continue
-
-        page = int(
-            line[0].get(
-                "page",
-                1,
-            )
-        )
-
-        config = build_config_from_header(
-            header
-        )
-
-        if config is None:
-
-            config = default
-
-        configs[
-            page
-        ] = config
-
-    return configs
+    return (
+        "DETALLE" in text
+        and "MOVIMIENTOS" in text
+    )
 
 
-def get_config(
-    page: int,
-    configs: Dict[int, ColumnConfig],
-) -> ColumnConfig:
+def is_product_header(
+    line: List[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Detecta el encabezado auxiliar:
 
-    if page in configs:
+        Nomina Banorte Sin Chequera
+    """
 
-        return configs[
-            page
-        ]
+    text = normalize_upper(
+        line_text(line)
+    )
 
-    return build_default_config()
+    return (
+        "NOMINA" in text
+        and "BANORTE" in text
+    )
 
 
 # ============================================================
-# PERTENENCIA A COLUMNA
+# COLUMNA
 # ============================================================
 
 
 def word_inside_column(
     word: Dict[str, Any],
-    column: tuple[float, float],
+    column: tuple[
+        float,
+        float,
+    ],
 ) -> bool:
+    """
+    Determina pertenencia a una columna mediante el centro X.
 
-    center = word_center_x(
+    Para texto general esto funciona adecuadamente.
+
+    Para importes se utiliza una función específica basada en
+    x1.
+    """
+
+    center_x = word_center_x(
         word
     )
 
@@ -832,50 +952,61 @@ def word_inside_column(
 
     return (
         xmin - COLUMN_TOLERANCE
-        <= center
+        <= center_x
         <= xmax + COLUMN_TOLERANCE
     )
 
 
 def words_in_column(
-    line: List[Dict[str, Any]],
-    column: tuple[float, float],
-) -> List[Dict[str, Any]]:
+    line: List[
+        Dict[str, Any]
+    ],
+    column: tuple[
+        float,
+        float,
+    ],
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Devuelve palabras pertenecientes a una columna.
+    """
 
-    result = []
-
-    for word in line:
-
+    result = [
+        word
+        for word in line
         if word_inside_column(
             word,
             column,
-        ):
-
-            result.append(
-                word
-            )
+        )
+    ]
 
     result.sort(
-        key=lambda item: item.get(
-            "x0",
-            0,
-        )
+        key=word_x0
     )
 
     return result
 
 
 def column_text(
-    line: List[Dict[str, Any]],
-    column: tuple[float, float],
+    line: List[
+        Dict[str, Any]
+    ],
+    column: tuple[
+        float,
+        float,
+    ],
 ) -> str:
+    """
+    Extrae texto de una columna dentro de una línea.
+    """
 
     selected = words_in_column(
-        line=line,
-        column=column,
+        line,
+        column,
     )
 
-    values = []
+    values: List[str] = []
 
     for word in selected:
 
@@ -898,109 +1029,16 @@ def column_text(
 
 
 # ============================================================
-# PERTENENCIA DE IMPORTES
+# IMPORTES
 # ============================================================
-
-
-def money_word_inside_column(
-    word: Dict[str, Any],
-    column: tuple[float, float],
-) -> bool:
-    """
-    Determina si un importe pertenece a una columna utilizando
-    su borde derecho x1.
-
-    Esto es importante porque los importes monetarios están
-    alineados hacia la derecha.
-
-    Ejemplo:
-
-        350.00
-        1,234,567.89
-
-    pueden tener x1 prácticamente igual aunque x0 cambie mucho.
-    """
-
-    x1 = float(
-        word.get(
-            "x1",
-            word.get(
-                "x0",
-                0,
-            ),
-        )
-        or 0
-    )
-
-    xmin, xmax = column
-
-    return (
-        xmin <= x1 <= xmax
-    )
-
-
-# ============================================================
-# EXTRACCIÓN DE COLUMNAS
-# ============================================================
-
-
-def extract_fecha_operacion(
-    line: List[Dict[str, Any]],
-    config: ColumnConfig,
-) -> str:
-
-    return column_text(
-        line,
-        config.fecha,
-    )
-
-
-def extract_concepto(
-    block: List[
-        List[Dict[str, Any]]
-    ],
-    configs: Dict[int, ColumnConfig],
-) -> str:
-
-    result = []
-
-    for line in block:
-
-        if not line:
-
-            continue
-
-        page = int(
-            line[0].get(
-                "page",
-                1,
-            )
-        )
-
-        config = get_config(
-            page,
-            configs,
-        )
-
-        text = column_text(
-            line,
-            config.concepto,
-        )
-
-        if text:
-
-            result.append(
-                text
-            )
-
-    return "\n".join(
-        result
-    ).strip()
 
 
 def is_money(
     text: str,
 ) -> bool:
+    """
+    Determina si una cadena representa un importe.
+    """
 
     return bool(
         MONEY_PATTERN.fullmatch(
@@ -1012,15 +1050,27 @@ def is_money(
 def parse_amount(
     text: str,
 ) -> float:
+    """
+    Convierte un importe textual a float.
+    """
 
-    if not text:
+    value = normalize_text(
+        text
+    )
 
+    if not value:
         return 0.0
 
     value = (
-        normalize_text(text)
-        .replace("$", "")
-        .replace(",", "")
+        value
+        .replace(
+            "$",
+            "",
+        )
+        .replace(
+            ",",
+            "",
+        )
         .strip()
     )
 
@@ -1055,48 +1105,75 @@ def parse_amount(
     return amount
 
 
+def money_word_inside_column(
+    word: Dict[str, Any],
+    column: tuple[
+        float,
+        float,
+    ],
+) -> bool:
+    """
+    Determina si un importe pertenece a una columna usando
+    su borde derecho X1.
+
+    Esto es deliberado.
+
+    Los importes BANORTE están alineados hacia la derecha:
+
+        255.00
+        350.00
+        40.00
+
+    por lo que X1 es una señal mucho más estable que el centro.
+    """
+
+    x1 = word_x1(
+        word
+    )
+
+    xmin, xmax = column
+
+    return (
+        xmin
+        <= x1
+        <= xmax
+    )
+
+
 def extract_amount_from_block(
     block: List[
-        List[Dict[str, Any]]
+        List[
+            Dict[str, Any]
+        ]
     ],
-    column_name: str,
-    configs: Dict[int, ColumnConfig],
+    column: tuple[
+        float,
+        float,
+    ],
 ) -> float:
     """
-    Busca importes en TODAS las líneas del movimiento.
+    Busca importes en todas las líneas del movimiento.
 
-    El importe puede aparecer varias líneas debajo de la fecha.
+    El importe puede encontrarse en:
+        - la línea principal
+        - una línea posterior
 
-    La pertenencia a columna se determina por x1 del importe,
-    no por el centro de la palabra.
+    Se conserva el último importe que pertenezca a la columna.
+
+    En el patrón observado, esto permite obtener correctamente
+    el valor asociado a la operación completa.
     """
 
-    candidates = []
+    candidates: List[
+        tuple[
+            int,
+            Dict[str, Any]
+        ]
+    ] = []
 
     for line_index, line in enumerate(
         block
     ):
-
-        if not line:
-
-            continue
-
-        page = int(
-            line[0].get(
-                "page",
-                1,
-            )
-        )
-
-        config = get_config(
-            page,
-            configs,
-        )
-
-        current_column = getattr(
-            config,
-            column_name,
-        )
 
         for word in line:
 
@@ -1115,7 +1192,7 @@ def extract_amount_from_block(
 
             if not money_word_inside_column(
                 word,
-                current_column,
+                column,
             ):
 
                 continue
@@ -1131,126 +1208,278 @@ def extract_amount_from_block(
 
         return 0.0
 
-    # El último importe válido de esa columna es el más
-    # probable, porque las líneas superiores pueden contener
-    # textos/valores auxiliares.
-    _, word = candidates[-1]
+    _, selected = candidates[
+        -1
+    ]
 
     return parse_amount(
-        word.get(
+        selected.get(
             "text",
             "",
         )
     )
 
 
-def extract_cargo(
-    block,
-    configs: Dict[int, ColumnConfig],
-) -> float:
-
-    return extract_amount_from_block(
-        block,
-        "retiros",
-        configs,
-    )
-
-
-def extract_abono(
-    block,
-    configs: Dict[int, ColumnConfig],
-) -> float:
-
-    return extract_amount_from_block(
-        block,
-        "depositos",
-        configs,
-    )
-
-
-def extract_saldo(
-    block,
-    configs: Dict[int, ColumnConfig],
-) -> float:
-
-    return extract_amount_from_block(
-        block,
-        "saldo",
-        configs,
-    )
-
-
 # ============================================================
-# FECHA
+# FECHA — BANORTE
 # ============================================================
 
 
-def is_date_text(
+def extract_date_prefix(
     text: str,
-) -> bool:
+) -> Optional[str]:
+    """
+    Extrae una fecha al principio del texto.
 
-    text = normalize_upper(
+    Soporta casos como:
+
+        02-JUN-25
+        02-JUN-2025
+        02-JUN-25OXXOLAS
+        31-MAY-25SALDO
+        06-JUN-25036CLAR...
+    """
+
+    text = normalize_text(
         text
     )
 
     if not text:
+        return None
 
-        return False
-
-    if DATE_PATTERN.fullmatch(
+    match = DATE_PREFIX_PATTERN.match(
         text
+    )
+
+    if not match:
+        return None
+
+    return match.group(
+        "date"
+    ).upper()
+
+
+def is_movement_date(
+    text: str,
+) -> bool:
+    """
+    Determina si el texto empieza con una fecha Banorte.
+    """
+
+    return (
+        extract_date_prefix(
+            text
+        )
+        is not None
+    )
+
+
+def extract_date_from_line(
+    line: List[
+        Dict[str, Any]
+    ],
+) -> Optional[str]:
+    """
+    Busca la fecha al inicio de cualquiera de las palabras
+    de la línea.
+
+    En BANORTE normalmente está en la primera palabra:
+        02-JUN-25OXXOLAS
+    """
+
+    for word in sorted(
+        line,
+        key=word_x0,
     ):
 
-        return True
+        text = normalize_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
 
-    parts = text.split()
+        date = extract_date_prefix(
+            text
+        )
 
-    if len(parts) == 2:
+        if date is not None:
 
-        day = parts[0]
+            return date
 
-        month = parts[1][:3]
-
-        if (
-            day.isdigit()
-            and month
-            in {
-                "ENE",
-                "FEB",
-                "MAR",
-                "ABR",
-                "MAY",
-                "JUN",
-                "JUL",
-                "AGO",
-                "SEP",
-                "OCT",
-                "NOV",
-                "DIC",
-            }
-            and 1
-            <= int(day)
-            <= 31
-        ):
-
-            return True
-
-    return False
+    return None
 
 
-def is_start_movement(
-    line: List[Dict[str, Any]],
-    config: ColumnConfig,
+def is_movement_start(
+    line: List[
+        Dict[str, Any]
+    ],
 ) -> bool:
+    """
+    Detecta el comienzo de una operación.
 
-    fecha = extract_fecha_operacion(
+    No requiere que toda la palabra sea una fecha.
+    """
+
+    return (
+        extract_date_from_line(
+            line
+        )
+        is not None
+    )
+
+
+# ============================================================
+# LIMPIEZA DE FECHA DEL CONCEPTO
+# ============================================================
+
+
+def remove_date_prefix(
+    text: str,
+) -> str:
+    """
+    Elimina únicamente el prefijo de fecha de una cadena.
+
+    Ejemplo:
+
+        02-JUN-25OXXOLAS
+        ↓
+        OXXOLAS
+    """
+
+    text = normalize_text(
+        text
+    )
+
+    if not text:
+        return ""
+
+    return DATE_PREFIX_PATTERN.sub(
+        "",
+        text,
+        count=1,
+    ).strip()
+
+
+# ============================================================
+# EXTRACCIÓN DEL CONCEPTO
+# ============================================================
+
+
+def extract_concepto_from_line(
+    line: List[
+        Dict[str, Any]
+    ],
+    config: ColumnConfig,
+    first_line: bool = False,
+) -> str:
+    """
+    Extrae la descripción de una línea.
+
+    La descripción BANORTE puede contener datos adicionales:
+
+        OXXOLAS
+        VEGAS
+        TRC
+        RFC:CCO
+        ...
+    
+    De momento TODOS esos elementos permanecen dentro de
+    concepto_original/concepto.
+
+    Únicamente eliminamos el prefijo de fecha de la primera
+    línea del movimiento.
+    """
+
+    selected = words_in_column(
         line,
-        config,
+        config.descripcion,
     )
 
-    return is_date_text(
-        fecha
-    )
+    values: List[str] = []
+
+    for word in selected:
+
+        text = normalize_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if not text:
+            continue
+
+        if first_line:
+
+            text = remove_date_prefix(
+                text
+            )
+
+            first_line = False
+
+            if not text:
+                continue
+
+        values.append(
+            text
+        )
+
+    return " ".join(
+        values
+    ).strip()
+
+
+def extract_concepto(
+    block: List[
+        List[
+            Dict[str, Any]
+        ]
+    ],
+    config: ColumnConfig,
+) -> str:
+    """
+    Construye el concepto completo de una operación.
+
+    Cada línea se conserva.
+
+    NO intenta extraer todavía:
+        - referencia
+        - beneficiario
+        - RFC
+        - autorización
+        - CLABE
+        - cuenta
+        - sucursal
+        - caja
+        - hora
+
+    Esas funciones quedan preparadas para una siguiente etapa.
+    """
+
+    values: List[str] = []
+
+    for index, line in enumerate(
+        block
+    ):
+
+        text = extract_concepto_from_line(
+            line=line,
+            config=config,
+            first_line=(
+                index == 0
+            ),
+        )
+
+        if text:
+
+            values.append(
+                text
+            )
+
+    return "\n".join(
+        values
+    ).strip()
 
 
 # ============================================================
@@ -1259,31 +1488,54 @@ def is_start_movement(
 
 
 def is_saldo_anterior(
-    line: List[Dict[str, Any]],
+    line: List[
+        Dict[str, Any]
+    ],
     config: ColumnConfig,
 ) -> bool:
+    """
+    Detecta la fila:
 
-    concepto = normalize_upper(
+        31-MAY-25SALDO
+        ANTERIOR
+    """
+
+    date = extract_date_from_line(
+        line
+    )
+
+    if date is None:
+
+        return False
+
+    text = normalize_upper(
         column_text(
             line,
-            config.concepto,
+            config.descripcion,
         )
     )
 
     return (
-        "SALDO ANTERIOR"
-        in concepto
+        "SALDO" in text
+        and "ANTERIOR" in text
     )
 
 
 # ============================================================
-# HEADER / TÍTULOS
+# FILTROS DE LÍNEAS
 # ============================================================
 
 
 def should_skip_line(
-    line: List[Dict[str, Any]],
+    line: List[
+        Dict[str, Any]
+    ],
 ) -> bool:
+    """
+    Determina si una línea debe ignorarse.
+
+    NO elimina líneas internas de movimientos.
+    """
 
     if not line:
 
@@ -1297,14 +1549,19 @@ def should_skip_line(
 
         return True
 
-    if (
-        "DETALLE DE OPERACIONES"
-        in text
+    if is_movements_header(
+        line
     ):
 
         return True
 
-    if is_movements_header(
+    if is_detail_title(
+        line
+    ):
+
+        return True
+
+    if is_product_header(
         line
     ):
 
@@ -1314,24 +1571,173 @@ def should_skip_line(
 
 
 # ============================================================
-# BLOQUES
+# TRUNCAMIENTO OPCIONAL
 # ============================================================
 
 
-def build_blocks(
-    lines: List[
-        List[Dict[str, Any]]
+def truncate_after_marker(
+    words: List[
+        Dict[str, Any]
     ],
-    configs: Dict[int, ColumnConfig],
+    markers: tuple[
+        str,
+        ...,
+    ] = (
+        "GRÁFICO TRANSACCIONAL",
+        "GRAFICO TRANSACCIONAL",
+    ),
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Detiene el análisis si aparece una sección posterior
+    irrelevante.
+
+    No depende de una utilidad externa para evitar acoplar
+    este parser a filtros de BANAMEX.
+    """
+
+    if not words:
+
+        return []
+
+    lines = group_words_into_lines(
+        words
+    )
+
+    cutoff_page: Optional[int] = None
+
+    cutoff_y: Optional[float] = None
+
+    for line in lines:
+
+        text = normalize_upper(
+            line_text(line)
+        )
+
+        for marker in markers:
+
+            marker = normalize_upper(
+                marker
+            )
+
+            if marker in text:
+
+                cutoff_page = int(
+                    line[0].get(
+                        "page",
+                        1,
+                    )
+                )
+
+                cutoff_y = word_top(
+                    line[0]
+                )
+
+                break
+
+        if cutoff_page is not None:
+
+            break
+
+    if cutoff_page is None:
+
+        return words
+
+    result: List[
+        Dict[str, Any]
+    ] = []
+
+    for word in words:
+
+        page = int(
+            word.get(
+                "page",
+                1,
+            )
+            or 1
+        )
+
+        if page < cutoff_page:
+
+            result.append(
+                word
+            )
+
+            continue
+
+        if page > cutoff_page:
+
+            continue
+
+        if (
+            word_top(word)
+            < cutoff_y
+        ):
+
+            result.append(
+                word
+            )
+
+    return result
+
+
+# ============================================================
+# BLOQUES DE MOVIMIENTOS
+# ============================================================
+
+
+def build_movement_blocks(
+    lines: List[
+        List[
+            Dict[str, Any]
+        ]
+    ],
+    config: ColumnConfig,
 ) -> List[
     List[
-        List[Dict[str, Any]]
+        List[
+            Dict[str, Any]
+        ]
     ]
 ]:
+    """
+    Divide el documento en bloques de movimientos.
 
-    blocks = []
+    Regla principal:
 
-    current = []
+        una nueva fecha = nuevo movimiento
+
+    Todo lo posterior hasta encontrar la siguiente fecha
+    pertenece al movimiento actual.
+
+    Esto permite manejar:
+
+        línea principal
+        detalle SPEI
+        cliente
+        CLABE
+        referencia
+        beneficiario
+        RFC
+        etc.
+
+    aunque todo eso aparezca en varias líneas.
+    """
+
+    blocks: List[
+        List[
+            List[
+                Dict[str, Any]
+            ]
+        ]
+    ] = []
+
+    current: List[
+        List[
+            Dict[str, Any]
+        ]
+    ] = []
 
     for line in lines:
 
@@ -1348,14 +1754,13 @@ def build_blocks(
             )
         )
 
-        config = get_config(
-            page,
-            configs,
-        )
+        # No procesamos páginas previas al bloque de movimientos.
+        if page < FIRST_MOVEMENTS_PAGE:
 
-        if is_start_movement(
-            line,
-            config,
+            continue
+
+        if is_movement_start(
+            line
         ):
 
             if current:
@@ -1386,225 +1791,43 @@ def build_blocks(
 
 
 # ============================================================
-# CONCEPTO → DATOS ESTRUCTURADOS
+# FUNCIONES PREPARADAS — CONCEPTO
+# ============================================================
+#
+# De momento NO extraemos estas variables.
+#
+# Se deja la API preparada para una siguiente iteración.
+#
 # ============================================================
 
 
 def extract_referencia_from_concepto(
     concepto: str,
 ) -> Optional[str]:
+    """
+    PREPARADO.
 
-    if not concepto:
-
-        return None
-
-    patterns = (
-        r"\bREFERENCIA\s*[:#-]?\s*([A-Z0-9*_-]+)",
-        r"\bREF\s*[:#-]?\s*([A-Z0-9*_-]+)",
-    )
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            concepto,
-            re.IGNORECASE,
-        )
-
-        if match:
-
-            value = (
-                match.group(
-                    1
-                )
-                .strip()
-            )
-
-            if value:
-
-                return value
-
-    match = re.search(
-        r"(?<!\S)(\*{2,}[A-Z0-9_-]+)",
-        concepto,
-        re.IGNORECASE,
-    )
-
-    if match:
-
-        return match.group(
-            1
-        )
+    Futuramente puede extraer:
+        REFERENCIA:
+        REFERENCIA
+        etc.
+    """
 
     return None
 
 
-def extract_auth_from_concepto(
+def extract_autorizacion_from_concepto(
     concepto: str,
 ) -> Optional[str]:
+    """
+    PREPARADO.
 
-    if not concepto:
-
-        return None
-
-    match = AUTH_PATTERN.search(
-        concepto
-    )
-
-    if match:
-
-        return match.group(
-            1
-        ).strip()
-
-    return None
-
-
-def extract_hora_from_concepto(
-    concepto: str,
-) -> Optional[str]:
-
-    if not concepto:
-
-        return None
-
-    explicit = re.search(
-        r"\bHORA\s*[:#-]?\s*([01]?\d|2[0-3]):[0-5]\d\b",
-        concepto,
-        re.IGNORECASE,
-    )
-
-    if explicit:
-
-        return TIME_PATTERN.search(
-            explicit.group(0)
-        ).group(0)
-
-    match = TIME_PATTERN.search(
-        concepto
-    )
-
-    if match:
-
-        return match.group(0)
-
-    return None
-
-
-def extract_rfc_from_concepto(
-    concepto: str,
-) -> Optional[str]:
-
-    if not concepto:
-
-        return None
-
-    match = RFC_PATTERN.search(
-        concepto
-    )
-
-    if not match:
-
-        return None
-
-    return (
-        match.group(
-            1
-        )
-        .replace(" ", "")
-        .upper()
-    )
-
-
-def extract_sucursal_from_concepto(
-    concepto: str,
-) -> Optional[str]:
-
-    if not concepto:
-
-        return None
-
-    match = SUC_PATTERN.search(
-        concepto
-    )
-
-    if match:
-
-        return match.group(
-            1
-        ).strip()
-
-    return None
-
-
-def extract_caja_from_concepto(
-    concepto: str,
-) -> Optional[str]:
-
-    if not concepto:
-
-        return None
-
-    match = CAJA_PATTERN.search(
-        concepto
-    )
-
-    if match:
-
-        return match.group(
-            1
-        ).strip()
-
-    return None
-
-
-def extract_clabe_beneficiario_from_concepto(
-    concepto: str,
-) -> Optional[str]:
-
-    if not concepto:
-
-        return None
-
-    match = CLABE_PATTERN.search(
-        concepto
-    )
-
-    if match:
-
-        return match.group(
-            1
-        )
-
-    return None
-
-
-def extract_cuenta_beneficiario_from_concepto(
-    concepto: str,
-) -> Optional[str]:
-
-    if not concepto:
-
-        return None
-
-    patterns = (
-        r"\bCUENTA\s*[:#-]?\s*(\d{4,20})\b",
-        r"\bCTA\s*[:#-]?\s*(\d{4,20})\b",
-    )
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            concepto,
-            re.IGNORECASE,
-        )
-
-        if match:
-
-            return match.group(
-                1
-            )
+    Futuramente puede extraer:
+        AUT
+        AUT:
+        AUT-
+        etc.
+    """
 
     return None
 
@@ -1612,117 +1835,124 @@ def extract_cuenta_beneficiario_from_concepto(
 def extract_beneficiario_from_concepto(
     concepto: str,
 ) -> Optional[str]:
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
 
-    if not concepto:
+    return None
 
-        return None
 
-    match = re.search(
-        r"\bBENEFICIARIO\s*[:#-]?\s*(.+)",
-        concepto,
-        re.IGNORECASE,
-    )
+def extract_cuenta_beneficiario_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
 
-    if match:
+    Posibles fuentes:
+        CTA/CLABE:
+        CUENTA:
+        CTA:
+    """
 
-        value = normalize_text(
-            match.group(
-                1
-            )
-        )
+    return None
 
-        return (
-            value
-            if value
-            else None
-        )
 
-    match = re.search(
-        r"\bA\s+FAVOR\s+DE\s+(.+)",
-        concepto,
-        re.IGNORECASE,
-    )
+def extract_clabe_beneficiario_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
 
-    if match:
+    return None
 
-        value = normalize_text(
-            match.group(
-                1
-            )
-        )
 
-        return (
-            value
-            if value
-            else None
-        )
+def extract_rfc_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_sucursal_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_caja_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_hora_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
 
     return None
 
 
 # ============================================================
-# TIPO OPERACIÓN
+# TIPO DE OPERACIÓN
 # ============================================================
 
 
 def extract_tipo_operacion(
-    cargo: float,
-    abono: float,
-    concepto: str,
+    deposito: float,
+    retiro: float,
 ) -> Optional[str]:
+    """
+    Determina el tipo directamente desde la columna monetaria.
 
-    if cargo > 0:
+    BANORTE tiene una ventaja importante:
+    no necesitamos inferirlo inicialmente desde el concepto.
 
-        return "CARGO"
+        deposito > 0  -> ABONO
+        retiro > 0    -> CARGO
+    """
 
-    if abono > 0:
-
-        return "ABONO"
-
-    texto = normalize_upper(
-        concepto
-    )
-
-    if any(
-        word in texto
-        for word in (
-            "DEPOSITO",
-            "DEPÓSITO",
-            "ABONO",
-            "TRANSFERENCIA RECIBIDA",
-            "TRASPASO RECIBIDO",
-        )
-    ):
-
-        return "ABONO"
-
-    if any(
-        word in texto
-        for word in (
-            "RETIRO",
-            "CARGO",
-            "PAGO",
-            "TRANSFERENCIA ENVIADA",
-            "TRASPASO ENVIADO",
-        )
-    ):
+    if retiro > 0:
 
         return "CARGO"
+
+    if deposito > 0:
+
+        return "ABONO"
 
     return None
 
 
 # ============================================================
-# CONSTRUCTOR
+# CONSTRUCCIÓN DEL MOVIMIENTO
 # ============================================================
 
 
 def build_movimiento(
     block: List[
-        List[Dict[str, Any]]
+        List[
+            Dict[str, Any]
+        ]
     ],
-    configs: Dict[int, ColumnConfig],
+    config: ColumnConfig,
 ) -> Optional[Movimiento]:
+    """
+    Construye un Movimiento a partir de un bloque espacial.
+    """
 
     if not block:
 
@@ -1730,20 +1960,16 @@ def build_movimiento(
 
     first_line = block[0]
 
-    first_page = int(
-        first_line[0].get(
-            "page",
-            PAGE_MOVIMIENTOS,
-        )
+    fecha = extract_date_from_line(
+        first_line
     )
 
-    config = get_config(
-        first_page,
-        configs,
-    )
+    if fecha is None:
+
+        return None
 
     # --------------------------------------------------------
-    # SALDO ANTERIOR NO ES MOVIMIENTO
+    # SALDO ANTERIOR
     # --------------------------------------------------------
 
     if is_saldo_anterior(
@@ -1754,42 +1980,45 @@ def build_movimiento(
         return None
 
     # --------------------------------------------------------
-    # CONCEPTO COMPLETO
+    # CONCEPTO
     # --------------------------------------------------------
 
     concepto = extract_concepto(
         block,
-        configs,
+        config,
     )
 
     # --------------------------------------------------------
     # IMPORTES
     # --------------------------------------------------------
 
-    cargo = extract_cargo(
-        block,
-        configs,
+    deposito = extract_amount_from_block(
+        block=block,
+        column=config.deposito,
     )
 
-    abono = extract_abono(
-        block,
-        configs,
+    retiro = extract_amount_from_block(
+        block=block,
+        column=config.retiro,
     )
 
-    saldo = extract_saldo(
-        block,
-        configs,
+    saldo = extract_amount_from_block(
+        block=block,
+        column=config.saldo,
     )
 
     # --------------------------------------------------------
-    # CAMPOS DERIVADOS
+    # TIPO
     # --------------------------------------------------------
 
-    tipo = extract_tipo_operacion(
-        cargo,
-        abono,
-        concepto,
+    tipo_operacion = extract_tipo_operacion(
+        deposito=deposito,
+        retiro=retiro,
     )
+
+    # --------------------------------------------------------
+    # VARIABLES PREPARADAS
+    # --------------------------------------------------------
 
     referencia = (
         extract_referencia_from_concepto(
@@ -1798,7 +2027,7 @@ def build_movimiento(
     )
 
     autorizacion = (
-        extract_auth_from_concepto(
+        extract_autorizacion_from_concepto(
             concepto
         )
     )
@@ -1845,76 +2074,101 @@ def build_movimiento(
         )
     )
 
-    fecha_operacion = (
-        extract_fecha_operacion(
-            first_line,
-            config,
-        )
-    )
+    # --------------------------------------------------------
+    # VALIDACIÓN MÍNIMA
+    # --------------------------------------------------------
+
+    if (
+        deposito == 0.0
+        and retiro == 0.0
+        and saldo == 0.0
+        and not concepto
+    ):
+
+        return None
 
     # --------------------------------------------------------
-    # MOVIMIENTO
+    # OBJETO FINAL
     # --------------------------------------------------------
 
     return Movimiento(
 
-        fecha_operacion=
-            fecha_operacion,
+        fecha_operacion=(
+            fecha
+        ),
 
-        fecha_liquidacion=None,
+        fecha_liquidacion=(
+            None
+        ),
 
-        concepto=
-            concepto,
+        concepto=(
+            concepto
+        ),
 
-        tipo_operacion=
-            tipo,
+        tipo_operacion=(
+            tipo_operacion
+        ),
 
-        cargo=
-            cargo,
+        cargo=(
+            retiro
+        ),
 
-        abono=
-            abono,
+        abono=(
+            deposito
+        ),
 
-        referencia=
-            referencia,
+        referencia=(
+            referencia
+        ),
 
-        autorizacion=
-            autorizacion,
+        autorizacion=(
+            autorizacion
+        ),
 
-        beneficiario=
-            beneficiario,
+        beneficiario=(
+            beneficiario
+        ),
 
-        cuenta_beneficiario=
-            cuenta_beneficiario,
+        cuenta_beneficiario=(
+            cuenta_beneficiario
+        ),
 
-        clabe_beneficiario=
-            clabe_beneficiario,
+        clabe_beneficiario=(
+            clabe_beneficiario
+        ),
 
-        rfc=
-            rfc,
+        rfc=(
+            rfc
+        ),
 
-        sucursal=
-            sucursal,
+        sucursal=(
+            sucursal
+        ),
 
-        caja=
-            caja,
+        caja=(
+            caja
+        ),
 
-        hora_operacion=
-            hora,
+        hora_operacion=(
+            hora
+        ),
 
-        saldo_operacion=
-            saldo,
+        saldo_operacion=(
+            saldo
+        ),
 
-        saldo_liquidacion=
-            0.0,
+        saldo_liquidacion=(
+            0.0
+        ),
 
-        concepto_original=
-            concepto,
+        concepto_original=(
+            concepto
+        ),
     )
 
 
 # ============================================================
-# FUNCIÓN PRINCIPAL
+# FUNCIÓN PRINCIPAL PÚBLICA
 # ============================================================
 
 
@@ -1923,32 +2177,28 @@ def extract_movimientos_words(
         Dict[str, Any]
     ],
 ) -> List[Movimiento]:
+    """
+    Extractor espacial principal de movimientos BANORTE.
+    """
 
     if not words:
 
         return []
 
-
     # --------------------------------------------------------
-    # ELIMINAR TODO DESPUÉS DE GRAFICO TRANSACCIONAL (2DA TABLA DE MOVIMIENTOS)
+    # 1. LIMITAR SECCIONES POSTERIORES
     # --------------------------------------------------------
 
-    words = remove_after_grafico_transaccional(
+    words = truncate_after_marker(
         words
     )
 
+    if not words:
+
+        return []
 
     # --------------------------------------------------------
-    # 0. ELIMINAR ENCABEZADO INSTITUCIONAL BANAMEX
-    # --------------------------------------------------------
-
-    words = remove_banamex_header(
-        words
-    )
-
-
-    # --------------------------------------------------------
-    # 1. AGRUPAR PALABRAS EN LÍNEAS
+    # 2. AGRUPAR PALABRAS EN LÍNEAS
     # --------------------------------------------------------
 
     lines = group_words_into_lines(
@@ -1960,43 +2210,18 @@ def extract_movimientos_words(
         return []
 
     # --------------------------------------------------------
-    # 2. DETECTAR CONFIGURACIÓN POR PÁGINA
+    # 3. CONFIGURACIÓN ESPACIAL
     # --------------------------------------------------------
 
-    configs = build_page_configs(
-        lines
-    )
-
-    if not configs:
-
-        default = (
-            build_default_config()
-        )
-
-        pages = {
-            int(
-                line[0].get(
-                    "page",
-                    1,
-                )
-            )
-            for line in lines
-            if line
-        }
-
-        for page in pages:
-
-            configs[
-                page
-            ] = default
+    config = build_default_config()
 
     # --------------------------------------------------------
-    # 3. CONSTRUIR BLOQUES
+    # 4. CONSTRUIR BLOQUES
     # --------------------------------------------------------
 
-    blocks = build_blocks(
-        lines,
-        configs,
+    blocks = build_movement_blocks(
+        lines=lines,
+        config=config,
     )
 
     if not blocks:
@@ -2004,27 +2229,21 @@ def extract_movimientos_words(
         return []
 
     # --------------------------------------------------------
-    # 4. CONSTRUIR MOVIMIENTOS
+    # 5. CONSTRUIR MOVIMIENTOS
     # --------------------------------------------------------
 
-    movimientos = []
+    movimientos: List[
+        Movimiento
+    ] = []
 
     for block in blocks:
 
         movimiento = build_movimiento(
-            block,
-            configs,
+            block=block,
+            config=config,
         )
 
         if movimiento is None:
-
-            continue
-
-        if (
-            movimiento.cargo == 0.0
-            and movimiento.abono == 0.0
-            and movimiento.saldo_operacion == 0.0
-        ):
 
             continue
 

@@ -10,7 +10,7 @@ from models.otros_productos import OtrosProductos
 # CONFIGURACIÓN GENERAL
 # ============================================================
 #
-# BANAMEX
+# BANORTE
 #
 # Actualmente no se dispone de un layout espacial definido
 # para la sección de Otros Productos / Productos Financieros.
