@@ -53,13 +53,46 @@ from typing import Any, Dict, List, Optional
 #
 # La utilidad busca:
 #
-#     ÚLTIMA FECHA
+#     FECHA DE MOVIMIENTO
 #           ↓
-#     continuación textual del concepto
+#     continuación del movimiento
 #           ↓
-#     PRIMER BLOQUE TEXTUAL CENTRADO
+#     BLOQUE CENTRADO
 #           ↓
-#     CORTE ABSOLUTO
+#     ¿ES CONTINUACIÓN?
+#        ↓          ↓
+#       SÍ          NO
+#       ↓            ↓
+#   consumir       CORTE
+#   pareja
+#
+#
+# IMPORTANTE:
+#
+# En el layout Banorte, cuando los movimientos continúan en
+# otra página aparece:
+#
+#     DETALLE DE MOVIMIENTOS (PESOS) (CONTINUACIÓN)▼
+#     Enlace Negocios Pfae
+#     FECHA ...
+#     28-JUL-21 ...
+#
+# Por lo tanto, esos DOS renglones forman una unidad:
+#
+#     CONTINUACIÓN
+#     PRODUCTO
+#
+# Esa unidad NO es un corte.
+#
+# Después los movimientos siguen normalmente.
+#
+# Cuando aparece:
+#
+#     Inversión Enlace Negocios PFAE
+#
+# sin un renglón de CONTINUACIÓN inmediatamente asociado,
+# entonces sí es el inicio de la siguiente tabla y se hace
+# el corte.
 #
 #
 # CASO 2 — RESPALDO / FALLBACK
@@ -72,60 +105,11 @@ from typing import Any, Dict, List, Optional
 # un bloque centrado, sino que comienza directamente un bloque
 # de texto plano.
 #
-# Ejemplo:
-#
-#     31-ENE-18   LIQ.INT.S/TASA   LIQ   2018-01-31   591.28   106,399.19
-#
-#     Advertencia:
-#     Incumplir sus obligaciones le puede generar comisiones.
-#     El presente estado de cuenta no es un comprobante fiscal.
-#     La fecha de corte...
-#
-# La utilidad NO depende de que aparezca exactamente la palabra
-# "Advertencia".
-#
-# El CASO 2 reconoce el cambio estructural:
-#
-#     ÚLTIMO MOVIMIENTO
-#           ↓
-#     bloque de texto
-#           ↓
-#     varias líneas con inicio en el margen izquierdo
-#           ↓
-#     texto puro, sin fechas ni importes
-#           ↓
-#     CORTE ABSOLUTO
-#
-# De esta manera, el CASO 2 complementa al CASO 1 sin alterar
-# su lógica original.
-#
-# IMPORTANTE:
-#
-# El CASO 1 tiene prioridad absoluta.
-#
-# Solamente cuando el CASO 1 NO encuentra un punto de corte,
-# se intenta el CASO 2.
-#
 # ============================================================
 
 
 # ============================================================
 # CONFIGURACIÓN DEL LAYOUT
-# ============================================================
-#
-# ÚNICA COORDENADA ESPECÍFICA DEL LAYOUT QUE NECESITAMOS:
-#
-# posición horizontal de la columna FECHA.
-#
-# Layout observado:
-#
-#     x ≈ 53
-#
-# Se deja margen suficiente para pequeñas variaciones.
-#
-# Si algún día cambia el layout del mismo banco, solamente
-# se ajustan estas coordenadas.
-#
 # ============================================================
 
 DATE_COLUMN_X0_MIN = 45.0
@@ -142,25 +126,6 @@ LINE_Y_TOLERANCE = 3.5
 # ============================================================
 # DETECCIÓN DEL BLOQUE CENTRADO
 # ============================================================
-#
-# El título posterior observado:
-#
-#     INVERSION ENLACE NEGOCIOS
-#
-# tiene aproximadamente:
-#
-#     x0 = 261
-#     x1 = 350
-#
-# mientras que el contenido de la tabla ocupa prácticamente
-# todo el ancho.
-#
-# No utilizamos esas coordenadas directamente.
-#
-# Calculamos el centro de la página a partir de las propias
-# palabras del PDF.
-#
-# ============================================================
 
 CENTER_TOLERANCE_RATIO = 0.15
 
@@ -169,28 +134,6 @@ MAX_CENTERED_TEXT_WIDTH_RATIO = 0.35
 
 # ============================================================
 # CASO 2 — BLOQUE DE TEXTO PLANO
-# ============================================================
-#
-# En este segundo layout, el bloque posterior comienza cerca
-# del margen izquierdo real de la página.
-#
-# Ejemplo:
-#
-#     Advertencia:
-#     El presente estado de cuenta...
-#
-# Ambas líneas empiezan aproximadamente en:
-#
-#     x0 = 50.313
-#
-# mientras que un concepto normal de movimiento comienza más
-# hacia la derecha, aproximadamente en:
-#
-#     x0 ≈ 85
-#
-# No utilizamos una coordenada absoluta para el margen.
-# Se calcula dinámicamente respecto al mínimo x0 de la página.
-#
 # ============================================================
 
 PLAIN_TEXT_LEFT_MARGIN_RATIO = 0.025
@@ -238,6 +181,16 @@ MONEY_PATTERN = re.compile(
     $
     """,
     re.VERBOSE,
+)
+
+
+# ============================================================
+# REGEX — CONTINUACIÓN
+# ============================================================
+
+CONTINUATION_PATTERN = re.compile(
+    r"\bCONTINUACI(?:Ó|O)N\b",
+    re.IGNORECASE,
 )
 
 
@@ -763,6 +716,92 @@ def page_center_x(
 
 
 # ============================================================
+# TEXTO COMPLETO DE UNA LÍNEA
+# ============================================================
+
+def line_text(
+    line: List[
+        Dict[str, Any]
+    ],
+) -> str:
+    """
+    Reconstruye el texto visible de una línea respetando el
+    orden horizontal.
+
+    Esto es importante porque CONTINUACIÓN viene como parte
+    de un renglón compuesto por varias palabras, por ejemplo:
+
+        DETALLE
+        DE
+        MOVIMIENTOS
+        (PESOS)
+        (CONTINUACIÓN)▼
+    """
+
+    if not line:
+        return ""
+
+    ordered = sorted(
+        line,
+        key=word_x0,
+    )
+
+    return normalize_text(
+        " ".join(
+            normalize_text(
+                word.get(
+                    "text",
+                    "",
+                )
+            )
+            for word in ordered
+            if normalize_text(
+                word.get(
+                    "text",
+                    "",
+                )
+            )
+        )
+    )
+
+
+# ============================================================
+# ¿ESTE MISMO RENGLÓN ES DE CONTINUACIÓN?
+# ============================================================
+
+def is_continuation_line(
+    line: List[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Determina si ESTE MISMO RENGLÓN corresponde al encabezado
+    de continuación.
+
+    NO inspecciona el renglón anterior.
+    NO inspecciona el renglón siguiente.
+
+    Solamente inspecciona el contenido de este mismo renglón.
+    """
+
+    if not line:
+        return False
+
+    text = line_text(
+        line
+    )
+
+    if not text:
+        return False
+
+    return bool(
+        CONTINUATION_PATTERN.search(
+            text
+        )
+    )
+
+
+# ============================================================
 # ¿LÍNEA PURAMENTE TEXTUAL?
 # ============================================================
 
@@ -846,12 +885,12 @@ def is_centered_section_line(
 
     No se conoce el contenido textual.
 
-    Por ejemplo, ambos son válidos:
+    Por ejemplo:
 
         INVERSION ENLACE NEGOCIOS
         OTROS▼
 
-    porque lo que importa es su geometría.
+    porque lo importante es la geometría.
     """
 
     if not line:
@@ -925,8 +964,6 @@ def is_centered_section_line(
 
     # --------------------------------------------------------
     # 5. Debe ser un bloque relativamente compacto.
-    #
-    # Una sección posterior no ocupa todo el ancho de la tabla.
     # --------------------------------------------------------
 
     if (
@@ -953,15 +990,7 @@ def is_centered_section_line(
         return False
 
     # --------------------------------------------------------
-    # 7. La línea no debe parecer una continuación normal del
-    #    concepto en la columna izquierda.
-    #
-    #    Un concepto normal comienza aproximadamente en x=84.
-    #
-    #    Una sección centrada comienza mucho más hacia el centro.
-    #
-    #    No fijamos una coordenada exacta; exigimos que el bloque
-    #    empiece claramente después de la zona izquierda.
+    # 7. No debe parecer una continuación normal del concepto.
     # --------------------------------------------------------
 
     left_zone_limit = (
@@ -974,6 +1003,246 @@ def is_centered_section_line(
         return False
 
     return True
+
+
+# ============================================================
+# CASO 1 — ENCONTRAR CORTE CENTRADO Y ÚLTIMO MOVIMIENTO REAL
+# ============================================================
+
+def find_centered_cutoff_and_last_movement(
+    lines: List[
+        List[
+            Dict[str, Any]
+        ]
+    ],
+    words: List[
+        Dict[str, Any]
+    ],
+) -> Optional[
+    tuple[
+        float,
+        float,
+    ]
+]:
+    """
+    Busca conjuntamente:
+
+        1. la última fecha de movimiento real antes del corte
+        2. el bloque centrado que representa el corte REAL
+
+    REGLA FUNDAMENTAL DEL LAYOUT:
+
+        CONTINUACIÓN
+        PRODUCTO
+        FECHA
+        MOVIMIENTOS
+        ...
+        MOVIMIENTOS
+        ...
+        PRODUCTO SIN CONTINUACIÓN
+        FECHA
+        MOVIMIENTOS
+
+    Entonces:
+
+        CONTINUACIÓN
+            ↓
+        ignorar
+            ↓
+        siguiente renglón = PRODUCTO
+            ↓
+        ignorar también
+            ↓
+        continuar recorriendo
+            ↓
+        seguir registrando fechas
+            ↓
+        encontrar finalmente un bloque centrado SIN
+        CONTINUACIÓN
+            ↓
+        CORTE
+
+    IMPORTANTE:
+
+    NO se busca la última fecha del documento antes de comenzar.
+
+    Se recorre el documento en orden físico.
+
+    Esto evita contaminar la detección con fechas de una segunda
+    tabla posterior al corte.
+    """
+
+    last_date_line: Optional[
+        List[
+            Dict[str, Any]
+        ]
+    ] = None
+
+    # --------------------------------------------------------
+    # Estado de continuación.
+    #
+    # True significa:
+    #
+    #     el renglón anterior fue CONTINUACIÓN
+    #
+    # Por lo tanto el siguiente renglón es el nombre del producto
+    # y debe ignorarse como candidato a corte.
+    # --------------------------------------------------------
+
+    skip_next_centered_product = False
+
+    continuation_page: Optional[int] = None
+
+    for line in lines:
+
+        if not line:
+            continue
+
+        current_page = word_page(
+            line[0]
+        )
+
+        # ====================================================
+        # 1. SI ESTAMOS EN LA PAREJA DE CONTINUACIÓN
+        # ====================================================
+        #
+        # El siguiente renglón después de CONTINUACIÓN es el
+        # nombre del producto.
+        #
+        # Ese renglón debe consumirse completo.
+        #
+        # ====================================================
+
+        if skip_next_centered_product:
+
+            # ------------------------------------------------
+            # Defensivamente, la pareja debe estar en la misma
+            # página.
+            # ------------------------------------------------
+
+            if (
+                continuation_page is None
+                or current_page
+                == continuation_page
+            ):
+
+                skip_next_centered_product = False
+                continuation_page = None
+
+                # --------------------------------------------
+                # ESTA LÍNEA ES LA PAREJA DEL RÉNGLÓN DE
+                # CONTINUACIÓN.
+                #
+                # No importa si es centrada.
+                # No importa su texto.
+                #
+                # Simplemente se consume y seguimos.
+                # --------------------------------------------
+
+                continue
+
+            # ------------------------------------------------
+            # Si por alguna anomalía cambia la página, se
+            # cancela el estado defensivamente y la línea
+            # actual vuelve a procesarse normalmente.
+            # ------------------------------------------------
+
+            skip_next_centered_product = False
+            continuation_page = None
+
+        # ====================================================
+        # 2. FECHA DE MOVIMIENTO
+        # ====================================================
+        #
+        # La fecha se actualiza ANTES del posible corte.
+        #
+        # Esto permite que la última fecha real siempre sea la
+        # última fecha encontrada ANTES del bloque que finalmente
+        # corta.
+        #
+        # ====================================================
+
+        if is_movement_date_line(
+            line
+        ):
+
+            last_date_line = line
+
+            continue
+
+        # ====================================================
+        # 3. DETECTAR SI ESTE MISMO RENGLÓN ES CONTINUACIÓN
+        # ====================================================
+        #
+        # Esta es la condición especial del layout Banorte.
+        #
+        # Si este renglón contiene CONTINUACIÓN:
+        #
+        #     NO cortar
+        #
+        # y además sabemos que el siguiente renglón es el nombre
+        # del producto que pertenece a esa continuación.
+        #
+        # ====================================================
+
+        if is_continuation_line(
+            line
+        ):
+
+            skip_next_centered_product = True
+            continuation_page = current_page
+
+            continue
+
+        # ====================================================
+        # 4. DETECTAR BLOQUE CENTRADO
+        # ====================================================
+
+        if not is_centered_section_line(
+            line,
+            words,
+        ):
+            continue
+
+        # ====================================================
+        # 5. ESTE BLOQUE CENTRADO NO ES CONTINUACIÓN
+        # ====================================================
+        #
+        # Llegar aquí significa:
+        #
+        #     - es texto puro
+        #     - no es fecha
+        #     - no es importe
+        #     - es un bloque centrado
+        #     - NO es un renglón CONTINUACIÓN
+        #     - tampoco es el producto inmediatamente posterior
+        #       a CONTINUACIÓN
+        #
+        # Por lo tanto:
+        #
+        #     ESTE ES EL CORTE REAL.
+        #
+        # ====================================================
+
+        if last_date_line is None:
+            continue
+
+        cutoff_doctop = min(
+            word_doctop(word)
+            for word in line
+        )
+
+        last_date_doctop = max(
+            word_doctop(word)
+            for word in last_date_line
+        )
+
+        return (
+            cutoff_doctop,
+            last_date_doctop,
+        )
+
+    return None
 
 
 # ============================================================
@@ -1000,14 +1269,6 @@ def is_plain_text_section_line(
         etc.
 
     La detección se basa en geometría + estructura.
-
-    La línea debe:
-
-        - ser texto puro
-        - no contener fecha
-        - no contener importe
-        - comenzar cerca del margen izquierdo real de la página
-        - no ser excesivamente ancha
     """
 
     if not line:
@@ -1066,13 +1327,6 @@ def is_plain_text_section_line(
 
     # --------------------------------------------------------
     # 5. Debe comenzar cerca del margen izquierdo.
-    #
-    #     margen permitido = máximo entre:
-    #
-    #         7 puntos
-    #         2.5% del ancho de página
-    #
-    # Esto evita fijar x=50.313.
     # --------------------------------------------------------
 
     left_margin_tolerance = max(
@@ -1089,10 +1343,7 @@ def is_plain_text_section_line(
         return False
 
     # --------------------------------------------------------
-    # 6. No debe ocupar un ancho absurdo.
-    #
-    # Un párrafo puede ser relativamente largo, pero no debería
-    # ser más ancho que prácticamente toda la página.
+    # 6. No debe ocupar prácticamente toda la página.
     # --------------------------------------------------------
 
     if (
@@ -1123,20 +1374,6 @@ def has_plain_text_block_following(
     """
     Verifica que una línea candidata realmente sea el inicio
     de un bloque textual y no una coincidencia aislada.
-
-    Se exige una pequeña secuencia de líneas de texto plano
-    consecutivas.
-
-    Esto es importante para NO cortar una continuación normal
-    del concepto de un movimiento.
-
-    Ejemplo esperado:
-
-        Advertencia:
-        Incumplir sus obligaciones le puede generar comisiones.
-        El presente estado de cuenta no es un comprobante fiscal.
-
-    No buscamos ninguna palabra concreta.
     """
 
     if (
@@ -1187,8 +1424,7 @@ def has_plain_text_block_following(
         )
 
         # ----------------------------------------------------
-        # El bloque tiene que permanecer dentro de la misma
-        # página. Esto evita mezclar contenido de otra página.
+        # El bloque tiene que permanecer en la misma página.
         # ----------------------------------------------------
 
         if line_page != page:
@@ -1253,19 +1489,7 @@ def find_plain_text_section_cutoff(
     Busca el punto de corte del CASO 2.
 
     La búsqueda comienza estrictamente después de la última
-    línea de movimiento.
-
-    Se busca:
-
-        última fecha
-              ↓
-        texto posterior
-              ↓
-        bloque de texto plano al margen izquierdo
-              ↓
-        al menos dos líneas coherentes
-              ↓
-        corte
+    línea de movimiento REAL.
     """
 
     for index, line in enumerate(
@@ -1281,7 +1505,7 @@ def find_plain_text_section_cutoff(
         )
 
         # ----------------------------------------------------
-        # Solamente después del último movimiento.
+        # Solamente después del último movimiento real.
         # ----------------------------------------------------
 
         if line_doctop <= last_date_doctop:
@@ -1289,7 +1513,7 @@ def find_plain_text_section_cutoff(
 
         # ----------------------------------------------------
         # Verificar que la línea sea el comienzo real de un
-        # bloque textual y no una línea aislada.
+        # bloque textual.
         # ----------------------------------------------------
 
         if not is_plain_text_section_line(
@@ -1305,17 +1529,13 @@ def find_plain_text_section_cutoff(
         ):
             continue
 
-        # ----------------------------------------------------
-        # Encontramos el inicio del bloque posterior.
-        # ----------------------------------------------------
-
         return line_doctop
 
     return None
 
 
 # ============================================================
-# ÚLTIMA FECHA
+# ÚLTIMA FECHA — FALLBACK
 # ============================================================
 
 def find_last_movement_date_line(
@@ -1330,21 +1550,17 @@ def find_last_movement_date_line(
     ]
 ]:
     """
-    Encuentra la última línea que inicia un movimiento.
+    Encuentra la última línea que contiene una fecha en la
+    columna FECHA.
 
-    IMPORTANTE:
+    NOTA:
 
-    No busca:
+    Esta función se conserva para mantener la API y para el
+    CASO 2.
 
-        OTROS
-        INVERSION
-        SALDO
-        GAT
-        etc.
-
-    Solamente utiliza el patrón:
-
-        fecha en la columna FECHA.
+    NO se utiliza para decidir el CASO 1 cuando existe una
+    sección centrada, porque en ese layout podría seleccionar
+    incorrectamente una fecha de una segunda tabla.
     """
 
     last_date_line: Optional[
@@ -1380,15 +1596,30 @@ def find_centered_section_cutoff(
     last_date_doctop: float,
 ) -> Optional[float]:
     """
-    Implementa exactamente la lógica original del CASO 1.
+    Implementación tradicional del CASO 1.
 
-    Se mantiene separada para que el CASO 2 pueda funcionar
-    únicamente como fallback.
+    Se conserva para mantener la API existente.
 
-    Si no encuentra una sección centrada devuelve None.
+    IMPORTANTE:
+
+    Respeta la misma estructura:
+
+        CONTINUACIÓN
+        PRODUCTO
+        ...
+
+    cuando la búsqueda ya se realiza desde una fecha conocida.
+
+    Si encuentra el renglón CONTINUACIÓN, consume también el
+    renglón siguiente y continúa.
     """
 
-    for line in lines:
+    skip_next_centered_product = False
+    continuation_page: Optional[int] = None
+
+    for index, line in enumerate(
+        lines
+    ):
 
         if not line:
             continue
@@ -1398,25 +1629,65 @@ def find_centered_section_cutoff(
             for word in line
         )
 
-        # ----------------------------------------------------
-        # Solamente buscamos después de la última fecha.
-        # ----------------------------------------------------
-
         if line_doctop <= last_date_doctop:
             continue
 
+        current_page = word_page(
+            line[0]
+        )
+
         # ----------------------------------------------------
-        # Detectar el patrón original:
-        #
-        #     TEXTO PURO + CENTRADO
+        # Consumir el producto asociado a CONTINUACIÓN.
         # ----------------------------------------------------
 
-        if is_centered_section_line(
+        if skip_next_centered_product:
+
+            if (
+                continuation_page is None
+                or current_page
+                == continuation_page
+            ):
+
+                skip_next_centered_product = False
+                continuation_page = None
+
+                continue
+
+            skip_next_centered_product = False
+            continuation_page = None
+
+        # ----------------------------------------------------
+        # Si ESTE MISMO renglón es CONTINUACIÓN:
+        #
+        # marcar que el siguiente renglón es el producto
+        # asociado y NO cortar.
+        # ----------------------------------------------------
+
+        if is_continuation_line(
+            line
+        ):
+
+            skip_next_centered_product = True
+            continuation_page = current_page
+
+            continue
+
+        # ----------------------------------------------------
+        # Detectar sección centrada.
+        # ----------------------------------------------------
+
+        if not is_centered_section_line(
             line,
             words,
         ):
+            continue
 
-            return line_doctop
+        # ----------------------------------------------------
+        # Este bloque centrado ya no pertenece a una pareja de
+        # CONTINUACIÓN, por lo tanto es el corte.
+        # ----------------------------------------------------
+
+        return line_doctop
 
     return None
 
@@ -1436,34 +1707,42 @@ def remove_after_last_movement(
     Corta absolutamente todo después de la sección que aparece
     inmediatamente después del último movimiento.
 
-    ORDEN DE PRIORIDAD:
+    PRIORIDAD:
 
         CASO 1
         --------
-        última fecha
+        recorrido físico completo del documento
              ↓
-        continuación
+        fecha de movimiento
              ↓
-        primera sección centrada
+        CONTINUACIÓN
              ↓
-        corte
+        PRODUCTO asociado
+             ↓
+        continuar movimientos
+             ↓
+        bloque centrado sin CONTINUACIÓN
+             ↓
+        CORTE ABSOLUTO
 
         CASO 2
         --------
         última fecha
              ↓
-        bloque de texto plano al margen izquierdo
+        bloque textual al margen izquierdo
              ↓
-        varias líneas consecutivas
-             ↓
-        corte
+        CORTE
 
-    El CASO 2 solamente se ejecuta si el CASO 1 no encuentra
-    ningún punto de corte.
+    IMPORTANTE:
 
-    La llamada pública continúa siendo exactamente:
+    El CASO 1 NO obtiene primero la última fecha de todo el
+    documento.
 
-        remove_after_last_movement(words)
+    El CASO 1 recorre las líneas en orden físico y mantiene
+    cuál fue la última fecha antes del verdadero corte.
+
+    Esto es indispensable porque puede haber otra tabla de
+    movimientos después del punto que queremos eliminar.
     """
 
     if not words:
@@ -1480,9 +1759,50 @@ def remove_after_last_movement(
     if not lines:
         return []
 
-    # --------------------------------------------------------
-    # 2. Encontrar la última fecha real.
-    # --------------------------------------------------------
+    # ========================================================
+    # CASO 1 — PROCESO PRINCIPAL
+    # ========================================================
+    #
+    # IMPORTANTE:
+    #
+    # Aquí NO buscamos primero la última fecha global.
+    #
+    # El propio detector mantiene internamente la última fecha
+    # real encontrada antes del corte.
+    # ========================================================
+
+    centered_result = (
+        find_centered_cutoff_and_last_movement(
+            lines,
+            words,
+        )
+    )
+
+    if centered_result is not None:
+
+        cutoff_doctop, _ = centered_result
+
+        # ----------------------------------------------------
+        # CORTE ABSOLUTO
+        #
+        # Se conserva todo lo anterior al encabezado del nuevo
+        # producto y se elimina absolutamente todo lo posterior.
+        # ----------------------------------------------------
+
+        return [
+            word
+            for word in words
+            if word_doctop(word)
+            < cutoff_doctop
+        ]
+
+    # ========================================================
+    # CASO 2 — FALLBACK
+    # ========================================================
+    #
+    # Solamente si el CASO 1 no encontró absolutamente ningún
+    # punto de corte.
+    # ========================================================
 
     last_date_line = (
         find_last_movement_date_line(
@@ -1493,78 +1813,34 @@ def remove_after_last_movement(
     if last_date_line is None:
         return words
 
-    # --------------------------------------------------------
-    # 3. Determinar doctop final de la línea de fecha.
-    # --------------------------------------------------------
-
     last_date_doctop = max(
         word_doctop(word)
         for word in last_date_line
     )
 
-    # ========================================================
-    # CASO 1 — PROCESO ORIGINAL
-    # ========================================================
-    #
-    # NO se cambia su comportamiento.
-    #
-    # Primero intentamos encontrar exactamente la sección
-    # centrada que ya reconocía la utilidad.
-    #
-    # ========================================================
-
     cutoff_doctop = (
-        find_centered_section_cutoff(
+        find_plain_text_section_cutoff(
             lines,
             words,
             last_date_doctop,
         )
     )
 
-    # ========================================================
-    # CASO 2 — FALLBACK
-    # ========================================================
-    #
-    # Solamente entra aquí cuando el CASO 1 no encontró nada.
-    #
-    # Busca el bloque textual posterior que comienza cerca del
-    # margen izquierdo y que presenta varias líneas consecutivas
-    # de texto puro.
-    #
-    # ========================================================
-
-    if cutoff_doctop is None:
-
-        cutoff_doctop = (
-            find_plain_text_section_cutoff(
-                lines,
-                words,
-                last_date_doctop,
-            )
-        )
-
     # --------------------------------------------------------
-    # Si ningún mecanismo encontró la sección posterior, no
-    # destruimos información.
+    # Si ningún mecanismo encontró la sección posterior,
+    # no destruimos información.
     # --------------------------------------------------------
 
     if cutoff_doctop is None:
         return words
 
     # --------------------------------------------------------
-    # CORTE ABSOLUTO.
-    #
-    # Se conserva todo lo anterior.
-    #
-    # Se elimina la línea de inicio de la nueva sección y
-    # absolutamente todo lo posterior.
+    # CORTE ABSOLUTO
     # --------------------------------------------------------
 
-    result = [
+    return [
         word
         for word in words
         if word_doctop(word)
         < cutoff_doctop
     ]
-
-    return result

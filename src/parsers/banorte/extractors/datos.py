@@ -63,6 +63,33 @@ SPATIAL_TOLERANCE_Y = 1.5
 
 
 # ============================================================
+# TOLERANCIA PARA AGRUPAR PALABRAS DEL MISMO RENGLÓN
+# ============================================================
+#
+# Se utiliza exclusivamente cuando un campo puede aparecer
+# en más de un renglón vertical dentro de la misma caja.
+#
+# En el nuevo layout BANORTE tenemos:
+#
+#     Primer renglón:
+#         top ≈ 220.899
+#
+#     Segundo renglón:
+#         top ≈ 230.859
+#
+# La diferencia es ≈ 9.96 puntos.
+#
+# Por lo tanto podemos considerar como pertenecientes al
+# mismo renglón palabras cuyo TOP difiera muy poco.
+#
+# Esto NO reemplaza la lógica espacial general.
+# Solamente se utiliza para seleccionar un renglón concreto.
+# ============================================================
+
+ROW_TOP_TOLERANCE = 1.5
+
+
+# ============================================================
 # PRODUCTO PRINCIPAL
 # ============================================================
 #
@@ -97,20 +124,38 @@ BOX_PRODUCTO_PRINCIPAL = (
 # NÚMERO DE CUENTA
 # ============================================================
 #
-# Valor observado:
+# Valor observado en el nuevo layout:
 #
-#     1260110302
+#     Primer renglón:
+#
+#         1098973139
+#
+#     Segundo renglón:
+#
+#         1109382534
 #
 # Coordenadas:
 #
 #     x0 = 216.588
 #     x1 = 251.238
 #
-# Y:
+# Y primer renglón:
 #
 #     top    = 220.899
 #     bottom = 229.899
 #
+# Y segundo renglón:
+#
+#     top    = 230.859
+#     bottom = 239.859
+#
+# IMPORTANTE:
+#
+# La caja continúa cubriendo el área original completa para
+# no modificar el comportamiento espacial existente.
+#
+# La selección del PRIMER RENGLÓN se hace posteriormente
+# mediante "_first_row_words_in_box".
 # ============================================================
 
 BOX_NUMERO_CUENTA = (
@@ -170,7 +215,7 @@ BOX_NUMERO_CLIENTE = (
 # ============================================================
 
 BOX_RFC = (
-    63.7,  # x0
+    63.7,   # x0
     112.3,  # x1
     146.0,  # top
     156.0,  # bottom
@@ -317,36 +362,41 @@ BOX_FECHA_CORTE = (
 # CLABE
 # ============================================================
 #
-# La CLABE está fragmentada:
+# En el nuevo layout la CLABE aparece fragmentada en el
+# PRIMER RENGLÓN:
 #
 #     072
-#     580
-#     01260110302
-#     0
+#     853
+#     01098973139
+#     3
 #
 # Coordenadas:
 #
 #     072
 #         x = 284.236 - 294.631
 #
-#     580
+#     853
 #         x = 296.044 - 306.439
 #
-#     01260110302
+#     01098973139
 #         x = 307.852 - 345.967
 #
-#     0
+#     3
 #         x = 347.380 - 350.845
 #
 # Todas en:
 #
 #     top    ≈ 220.899
-#     bottom ≈ 229.899
 #
-# CLABE resultante:
+# La segunda cuenta aparece en el SEGUNDO RENGLÓN con los
+# mismos rangos X pero:
 #
-#     072580012601103020
+#     top ≈ 230.859
 #
+# La caja permanece amplia para conservar la lógica original.
+#
+# La extracción posteriormente seleccionará únicamente
+# el PRIMER RENGLÓN.
 # ============================================================
 
 BOX_CLABE = (
@@ -362,7 +412,10 @@ BOX_CLABE = (
 # ============================================================
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
+def _safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
     """
     Convierte un valor espacial a float de forma segura.
     """
@@ -373,7 +426,9 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _normalize_text(value: Optional[str]) -> Optional[str]:
+def _normalize_text(
+    value: Optional[str],
+) -> Optional[str]:
     """
     Normaliza espacios de un texto.
 
@@ -383,7 +438,11 @@ def _normalize_text(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
 
-    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(
+        r"\s+",
+        " ",
+        value,
+    ).strip()
 
     return value or None
 
@@ -430,14 +489,25 @@ def word_inside_box(
         cada palabra pertenece al renglón definido por su TOP.
     """
 
-    page = word.get("page", 1)
+    page = word.get(
+        "page",
+        1,
+    )
 
     if page != page_number:
         return False
 
-    x0 = _safe_float(word.get("x0"))
-    x1 = _safe_float(word.get("x1"))
-    top = _safe_float(word.get("top"))
+    x0 = _safe_float(
+        word.get("x0")
+    )
+
+    x1 = _safe_float(
+        word.get("x1")
+    )
+
+    top = _safe_float(
+        word.get("top")
+    )
 
     xmin, xmax, ymin, ymax = box
 
@@ -536,13 +606,100 @@ def words_in_box(
 
     result.sort(
         key=lambda word: (
-            word.get("page", page_number),
-            _safe_float(word.get("top")),
-            _safe_float(word.get("x0")),
+            word.get(
+                "page",
+                page_number,
+            ),
+            _safe_float(
+                word.get("top")
+            ),
+            _safe_float(
+                word.get("x0")
+            ),
         )
     )
 
     return result
+
+
+def _first_row_words_in_box(
+    words: List[Dict[str, Any]],
+    box: tuple[float, float, float, float],
+    page_number: int,
+) -> List[Dict[str, Any]]:
+    """
+    Devuelve únicamente las palabras pertenecientes al
+    PRIMER RENGLÓN encontrado dentro de la caja espacial.
+
+    Esta función existe para layouts BANORTE donde una misma
+    caja horizontal puede contener varios registros verticales.
+
+    Ejemplo del nuevo layout:
+
+        top = 220.899  -> primer renglón
+        top = 230.859  -> segundo renglón
+
+    Se toma el menor TOP existente y se conservan todas las
+    palabras cuyo TOP esté suficientemente cerca de ese valor.
+
+    IMPORTANTE:
+
+    Esto NO cambia la extracción espacial general.
+
+    Solo permite resolver campos específicos que tienen más
+    de un renglón dentro de la misma región.
+    """
+
+    selected = words_in_box(
+        words,
+        box,
+        page_number,
+    )
+
+    if not selected:
+        return []
+
+    # ========================================================
+    # PRIMER TOP REAL EN LA CAJA
+    # ========================================================
+
+    first_top = min(
+        _safe_float(
+            word.get("top")
+        )
+        for word in selected
+    )
+
+    # ========================================================
+    # CONSERVAR SOLO LAS PALABRAS DEL PRIMER RENGLÓN
+    # ========================================================
+    #
+    # Todas las palabras pertenecientes al mismo renglón
+    # normalmente tienen el mismo TOP.
+    #
+    # La pequeña tolerancia permite resistir diferencias
+    # mínimas de renderizado.
+    # ========================================================
+
+    first_row = [
+        word
+        for word in selected
+        if abs(
+            _safe_float(
+                word.get("top")
+            ) - first_top
+        ) <= ROW_TOP_TOLERANCE
+    ]
+
+    first_row.sort(
+        key=lambda word: (
+            _safe_float(
+                word.get("x0")
+            )
+        )
+    )
+
+    return first_row
 
 
 def text_from_box(
@@ -571,7 +728,10 @@ def text_from_box(
     for word in selected:
 
         text = str(
-            word.get("text", "")
+            word.get(
+                "text",
+                "",
+            )
         ).strip()
 
         if text:
@@ -620,14 +780,21 @@ def numeric_text_from_box(
     for word in selected:
 
         text = str(
-            word.get("text", "")
+            word.get(
+                "text",
+                "",
+            )
         ).strip()
 
         if not text:
             continue
 
         # Conservamos únicamente caracteres numéricos.
-        digits = re.sub(r"\D", "", text)
+        digits = re.sub(
+            r"\D",
+            "",
+            text,
+        )
 
         if digits:
             parts.append(digits)
@@ -636,6 +803,118 @@ def numeric_text_from_box(
         return None
 
     return "".join(parts)
+
+
+def numeric_text_from_first_row(
+    words: List[Dict[str, Any]],
+    box: tuple[float, float, float, float],
+    page_number: int,
+) -> Optional[str]:
+    """
+    Extrae únicamente los fragmentos numéricos del PRIMER
+    RENGLÓN encontrado dentro de una caja.
+
+    Se utiliza para campos como CLABE cuando la misma región
+    horizontal contiene varios registros.
+
+    Ejemplo:
+
+        PRIMER RENGLÓN
+            072
+            853
+            01098973139
+            3
+
+        SEGUNDO RENGLÓN
+            072
+            853
+            01109382534
+            3
+
+    Resultado:
+
+        072853010989731393
+
+    Importante:
+
+    Si el layout antiguo solo tiene un renglón, se comporta
+    exactamente como numeric_text_from_box().
+    """
+
+    selected = _first_row_words_in_box(
+        words,
+        box,
+        page_number,
+    )
+
+    parts: List[str] = []
+
+    for word in selected:
+
+        text = str(
+            word.get(
+                "text",
+                "",
+            )
+        ).strip()
+
+        if not text:
+            continue
+
+        digits = re.sub(
+            r"\D",
+            "",
+            text,
+        )
+
+        if digits:
+            parts.append(digits)
+
+    if not parts:
+        return None
+
+    return "".join(parts)
+
+
+def text_from_first_row(
+    words: List[Dict[str, Any]],
+    box: tuple[float, float, float, float],
+    page_number: int,
+) -> Optional[str]:
+    """
+    Extrae texto únicamente del PRIMER RENGLÓN encontrado
+    dentro de una caja.
+
+    Si solamente existe un renglón, funciona exactamente igual
+    que text_from_box().
+    """
+
+    selected = _first_row_words_in_box(
+        words,
+        box,
+        page_number,
+    )
+
+    values: List[str] = []
+
+    for word in selected:
+
+        text = str(
+            word.get(
+                "text",
+                "",
+            )
+        ).strip()
+
+        if text:
+            values.append(text)
+
+    if not values:
+        return None
+
+    return _normalize_text(
+        " ".join(values)
+    )
 
 
 # ============================================================
@@ -660,7 +939,7 @@ def normalize_rfc(
         r"(?:RFC\s*:?\s*)+",
         "",
         value,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
 
     value = re.sub(
@@ -699,11 +978,17 @@ def normalize_customer_number(
     """
     Normaliza el número de cliente.
     """
+
     if value is None:
         return None
 
     # Conservamos únicamente dígitos para el número de cliente.
-    digits = re.sub(r"\D", "", value)
+    digits = re.sub(
+        r"\D",
+        "",
+        value,
+    )
+
     return digits or None
 
 
@@ -792,12 +1077,23 @@ def extract_numero_cuenta(
     """
     Extrae el número de cuenta.
 
-    Ejemplo:
+    En layouts donde la misma caja contiene varios renglones,
+    se toma exclusivamente el PRIMER RENGLÓN.
 
-        1260110302
+    Esto evita concatenar:
+
+        1098973139
+        1109382534
+
+    y obtener incorrectamente:
+
+        10989731391109382534
+
+    En layouts anteriores con un solo renglón, el comportamiento
+    permanece igual.
     """
 
-    value = text_from_box(
+    value = text_from_first_row(
         words,
         BOX_NUMERO_CUENTA,
         PAGE_DATOS,
@@ -939,21 +1235,18 @@ def extract_clabe(
     """
     Extrae la CLABE.
 
-    BANORTE puede fragmentarla visualmente como:
+    BANORTE puede fragmentarla visualmente en varios bloques.
 
-        072
-        580
-        01260110302
-        0
+    En el nuevo layout existen DOS renglones dentro de la misma
+    región espacial.
 
-    El extractor concatena los fragmentos en orden espacial.
+    Por eso se toma exclusivamente el PRIMER RENGLÓN.
 
-    Resultado esperado:
-
-        072580012601103020
+    Esto conserva el comportamiento anterior cuando solamente
+    existe un renglón.
     """
 
-    value = numeric_text_from_box(
+    value = numeric_text_from_first_row(
         words,
         BOX_CLABE,
         PAGE_DATOS,

@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from models.movimiento import Movimiento
 from parsers.banorte.utils.words_after_last_movement import remove_after_last_movement
+from parsers.banorte.utils.words_footer_filter import remove_banorte_footer
+
 
 
 # ============================================================
@@ -2185,6 +2187,15 @@ def extract_movimientos_words(
     if not words:
 
         return []
+
+
+    # --------------------------------------------------------
+    # ELIMINAR PIE DE PAGINA
+    # --------------------------------------------------------
+
+    words = remove_banorte_footer(
+        words
+    )
 
 
     # --------------------------------------------------------
