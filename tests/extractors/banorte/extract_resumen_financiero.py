@@ -8,7 +8,7 @@ from parsers.banorte.extractors.resumen import (
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "edo_banorte.pdf"
+PDF_PATH = ROOT / "data" / "12.1_Nómina_Banorte_Jun_26_TOGJ901201HMCRRS04.pdf"
 
 
 def main():

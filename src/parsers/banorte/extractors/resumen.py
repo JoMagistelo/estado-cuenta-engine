@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+
 from typing import Any, Dict, List, Optional
 
 from models.resumen_financiero import ResumenFinanciero
@@ -16,9 +17,9 @@ from models.resumen_financiero import ResumenFinanciero
 #
 # Ejemplos:
 #
-#   DETALLE NÓMINA BANORTE S/CH ▼
-#   DETALLE ENLACE NEGOCIOS BASICA ▼
-#   ...
+#     DETALLE NÓMINA BANORTE S/CH ▼
+#     DETALLE ENLACE NEGOCIOS BASICA ▼
+#     ...
 #
 # Lo estable es su posición espacial.
 #
@@ -53,7 +54,6 @@ AMOUNT_X1_MAX = 262.0
 # ------------------------------------------------------------
 
 LINE_Y_TOLERANCE = 3.5
-
 FIELD_Y_TOLERANCE = 4.0
 
 
@@ -61,11 +61,9 @@ FIELD_Y_TOLERANCE = 4.0
 # UTILIDADES BÁSICAS
 # ============================================================
 
-
 def normalize_text(
     value: Any,
 ) -> str:
-
     if value is None:
         return ""
 
@@ -90,14 +88,12 @@ def normalize_text(
 def normalize_upper(
     value: Any,
 ) -> str:
-
     return normalize_text(value).upper()
 
 
 def word_top(
     word: Dict[str, Any],
 ) -> float:
-
     try:
         return float(
             word.get("top", 0) or 0
@@ -112,7 +108,6 @@ def word_top(
 def word_bottom(
     word: Dict[str, Any],
 ) -> float:
-
     try:
         return float(
             word.get(
@@ -131,7 +126,6 @@ def word_bottom(
 def word_center_y(
     word: Dict[str, Any],
 ) -> float:
-
     return (
         word_top(word)
         + word_bottom(word)
@@ -141,7 +135,6 @@ def word_center_y(
 def word_x0(
     word: Dict[str, Any],
 ) -> float:
-
     try:
         return float(
             word.get(
@@ -160,7 +153,6 @@ def word_x0(
 def word_x1(
     word: Dict[str, Any],
 ) -> float:
-
     try:
         return float(
             word.get(
@@ -179,7 +171,6 @@ def word_x1(
 def word_page(
     word: Dict[str, Any],
 ) -> int:
-
     try:
         return int(
             word.get(
@@ -199,7 +190,6 @@ def word_page(
 # AGRUPACIÓN DE LÍNEAS
 # ============================================================
 
-
 def group_words_into_lines(
     words: List[Dict[str, Any]],
     tolerance: float = LINE_Y_TOLERANCE,
@@ -218,7 +208,6 @@ def group_words_into_lines(
     )
 
     lines: List[List[Dict[str, Any]]] = []
-
     current: List[Dict[str, Any]] = []
 
     current_page: Optional[int] = None
@@ -230,11 +219,9 @@ def group_words_into_lines(
         y = word_center_y(word)
 
         if current_y is None:
-
             current = [word]
             current_page = page
             current_y = y
-
             continue
 
         same_line = (
@@ -243,7 +230,6 @@ def group_words_into_lines(
         )
 
         if same_line:
-
             current.append(word)
 
             current_y = (
@@ -255,7 +241,6 @@ def group_words_into_lines(
             )
 
         else:
-
             current.sort(
                 key=word_x0
             )
@@ -267,7 +252,6 @@ def group_words_into_lines(
             current_y = y
 
     if current:
-
         current.sort(
             key=word_x0
         )
@@ -280,7 +264,6 @@ def group_words_into_lines(
 # ============================================================
 # TEXTO DE LÍNEA
 # ============================================================
-
 
 def line_text(
     line: List[Dict[str, Any]],
@@ -348,14 +331,13 @@ def line_page(
 #
 # NO dependemos del nombre:
 #
-#   DETALLE NÓMINA BANORTE S/CH
-#   DETALLE ENLACE NEGOCIOS BASICA
+#     DETALLE NÓMINA BANORTE S/CH
+#     DETALLE ENLACE NEGOCIOS BASICA
 #
 # El elemento realmente estable es la banda Y y la presencia
 # de la flecha "▼" que forma parte del selector del producto.
 #
 # ============================================================
-
 
 def is_product_header_line(
     line: List[Dict[str, Any]],
@@ -419,7 +401,6 @@ def find_product_header(
 # DETECCIÓN DEL RESUMEN DEL PERIODO
 # ============================================================
 
-
 def find_resumen_start(
     lines: List[List[Dict[str, Any]]],
     header_index: Optional[int],
@@ -462,7 +443,6 @@ def find_resumen_start(
 # ============================================================
 # DINÁMICA DE IMPORTES
 # ============================================================
-
 
 MONEY_PATTERN = re.compile(
     r"""
@@ -521,29 +501,22 @@ def parse_amount(
     negative = False
 
     if value.endswith("-"):
-
         negative = True
-
         value = value[:-1].strip()
 
     if (
         value.startswith("(")
         and value.endswith(")")
     ):
-
         negative = True
-
         value = value[1:-1].strip()
 
     try:
-
         amount = float(value)
-
     except (
         ValueError,
         TypeError,
     ):
-
         return 0.0
 
     if negative:
@@ -555,7 +528,6 @@ def parse_amount(
 # ============================================================
 # EXTRACCIÓN DE IMPORTE DE UNA LÍNEA
 # ============================================================
-
 
 def extract_amount_from_line(
     line: List[Dict[str, Any]],
@@ -602,9 +574,62 @@ def extract_amount_from_line(
 
 
 # ============================================================
-# LOCALIZAR LÍNEA POR TEXTO EXACTO / PARCIAL
+# SIGNO DEL RENGLÓN
 # ============================================================
 
+def get_line_sign(
+    line: List[Dict[str, Any]],
+) -> int:
+
+    for word in sorted(
+        line,
+        key=word_x0,
+    ):
+
+        text = normalize_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if text == "+":
+            return 1
+
+        if text == "-":
+            return -1
+
+        if text.startswith("+"):
+            return 1
+
+        if text.startswith("-"):
+            return -1
+
+    return 0
+
+
+def distribute_signed_amount(
+    line: List[Dict[str, Any]],
+    amount: Optional[float],
+) -> tuple[float, float]:
+
+    if amount is None:
+        return 0.0, 0.0
+
+    sign = get_line_sign(line)
+
+    if sign > 0:
+        return amount, 0.0
+
+    if sign < 0:
+        return 0.0, amount
+
+    return 0.0, 0.0
+
+
+# ============================================================
+# LOCALIZAR LÍNEA POR TEXTO EXACTO / PARCIAL
+# ============================================================
 
 def line_contains_all(
     line: List[Dict[str, Any]],
@@ -650,7 +675,6 @@ def find_line_by_patterns(
 # BUSCAR IMPORTE EN LA MISMA LÍNEA
 # ============================================================
 
-
 def extract_same_line_amount(
     lines: List[List[Dict[str, Any]]],
     line_index: int,
@@ -672,12 +696,11 @@ def extract_same_line_amount(
 #
 # Útil para:
 #
-#   SALDO PROMEDIO
+#     SALDO PROMEDIO
 #
 # donde la etiqueta no comparte línea con el importe.
 #
 # ============================================================
-
 
 def find_next_amount(
     lines: List[List[Dict[str, Any]]],
@@ -709,7 +732,6 @@ def find_next_amount(
 # ============================================================
 # CAMPO NORMAL
 # ============================================================
-
 
 def extract_field_same_line(
     lines: List[List[Dict[str, Any]]],
@@ -762,7 +784,6 @@ def extract_field_same_line(
 #
 # ============================================================
 
-
 def extract_saldo_promedio(
     lines: List[List[Dict[str, Any]]],
     start_index: int,
@@ -802,6 +823,7 @@ def extract_saldo_promedio(
         #
         #   En el Periodo ...
         #
+
         for next_index in range(
             index + 1,
             min(
@@ -843,7 +865,6 @@ def extract_saldo_promedio(
 # SALDO PROMEDIO MÍNIMO
 # ============================================================
 
-
 def extract_saldo_promedio_minimo(
     lines: List[List[Dict[str, Any]]],
     start_index: int,
@@ -872,7 +893,6 @@ def extract_saldo_promedio_minimo(
 # ============================================================
 # DÍAS DEL PERIODO
 # ============================================================
-
 
 def extract_days(
     lines: List[List[Dict[str, Any]]],
@@ -915,7 +935,6 @@ def extract_days(
 # TASA BRUTA ANUAL
 # ============================================================
 
-
 def extract_tasa_bruta_anual(
     lines: List[List[Dict[str, Any]]],
     start_index: int,
@@ -957,6 +976,7 @@ def extract_tasa_bruta_anual(
                     return float(
                         value.rstrip("%")
                     )
+
                 except ValueError:
                     return None
 
@@ -966,7 +986,6 @@ def extract_tasa_bruta_anual(
 # ============================================================
 # LÍMITE DEL BLOQUE RESUMEN
 # ============================================================
-
 
 def find_resumen_end(
     lines: List[List[Dict[str, Any]]],
@@ -991,7 +1010,6 @@ def find_resumen_end(
 # ============================================================
 # EXTRACTOR PRINCIPAL
 # ============================================================
-
 
 def extract_resumen_financiero_words(
     words: List[Dict[str, Any]],
@@ -1074,7 +1092,11 @@ def extract_resumen_financiero_words(
         resumen_end,
     )
 
-    depositos_abonos = extract_field_same_line(
+    # --------------------------------------------------------
+    # TOTAL DE DEPÓSITOS — VALOR ORIGINAL
+    # --------------------------------------------------------
+
+    total_depositos = extract_field_same_line(
         lines,
         (
             (
@@ -1092,7 +1114,11 @@ def extract_resumen_financiero_words(
         resumen_end,
     )
 
-    retiros_cargos = extract_field_same_line(
+    # --------------------------------------------------------
+    # TOTAL DE RETIROS — VALOR ORIGINAL
+    # --------------------------------------------------------
+
+    total_retiros = extract_field_same_line(
         lines,
         (
             (
@@ -1105,19 +1131,17 @@ def extract_resumen_financiero_words(
         resumen_end,
     )
 
-    saldo_promedio = extract_saldo_promedio(
-        lines,
-        resumen_start,
-        resumen_end,
-    )
-
-    saldo_promedio_minimo_mensual = (
-        extract_saldo_promedio_minimo(
-            lines,
-            resumen_start,
-            resumen_end,
-        )
-    )
+    # --------------------------------------------------------
+    # INTERESES NETOS GANADOS
+    # --------------------------------------------------------
+    #
+    # Este renglón está inmediatamente debajo de:
+    #
+    #     Total de retiros
+    #
+    # y su importe es el que corresponde a intereses_a_favor.
+    #
+    # --------------------------------------------------------
 
     intereses_a_favor = extract_field_same_line(
         lines,
@@ -1132,6 +1156,225 @@ def extract_resumen_financiero_words(
         resumen_end,
     )
 
+    # --------------------------------------------------------
+    # TOTAL DE DEPÓSITOS — AJUSTADO
+    # --------------------------------------------------------
+    #
+    # Al total de depósitos reportado por Banorte le restamos
+    # los intereses netos ganados.
+    #
+    # --------------------------------------------------------
+
+    depositos_abonos = total_depositos
+
+    if depositos_abonos is not None:
+
+        depositos_abonos += (
+            intereses_a_favor
+            if intereses_a_favor is not None
+            else 0.0
+        )
+
+    # --------------------------------------------------------
+    # SALDO PROMEDIO
+    # --------------------------------------------------------
+
+    saldo_promedio = extract_saldo_promedio(
+        lines,
+        resumen_start,
+        resumen_end,
+    )
+
+    # --------------------------------------------------------
+    # SALDO PROMEDIO MÍNIMO
+    # --------------------------------------------------------
+
+    saldo_promedio_minimo_mensual = (
+        extract_saldo_promedio_minimo(
+            lines,
+            resumen_start,
+            resumen_end,
+        )
+    )
+
+    # --------------------------------------------------------
+    # COMISIONES COBRADAS / PAGADAS
+    # --------------------------------------------------------
+
+    comisiones_cobradas_pagadas = (
+        extract_field_same_line(
+            lines,
+            (
+                (
+                    "TOTAL",
+                    "DE",
+                    "COMISIONES",
+                    "COBRADAS",
+                    "/",
+                    "PAGADAS",
+                ),
+            ),
+            resumen_start,
+            resumen_end,
+        )
+    )
+
+    # Localizamos el renglón para conocer su signo.
+    comisiones_line_index = find_line_by_patterns(
+        lines,
+        (
+            (
+                "TOTAL",
+                "DE",
+                "COMISIONES",
+                "COBRADAS",
+                "/",
+                "PAGADAS",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    comisiones_depositos = 0.0
+    comisiones_retiros = 0.0
+
+    if comisiones_line_index is not None:
+
+        (
+            comisiones_depositos,
+            comisiones_retiros,
+        ) = distribute_signed_amount(
+            lines[comisiones_line_index],
+            comisiones_cobradas_pagadas,
+        )
+
+    # --------------------------------------------------------
+    # IVA SOBRE COMISIONES
+    # --------------------------------------------------------
+
+    iva_sobre_comisiones = extract_field_same_line(
+        lines,
+        (
+            (
+                "IVA",
+                "SOBRE",
+                "COMISIONES",
+            ),
+        ),
+        resumen_start,
+        resumen_end,
+    )
+
+    # --------------------------------------------------------
+    # INTERESES COBRADOS / PAGADOS
+    # --------------------------------------------------------
+
+    intereses_cobrados_pagados = (
+        extract_field_same_line(
+            lines,
+            (
+                (
+                    "INTERESES",
+                    "COBRADOS",
+                    "/",
+                    "PAGADOS",
+                ),
+            ),
+            resumen_start,
+            resumen_end,
+        )
+    )
+
+    # Localizamos el renglón para conocer su signo.
+    intereses_cobrados_line_index = (
+        find_line_by_patterns(
+            lines,
+            (
+                (
+                    "INTERESES",
+                    "COBRADOS",
+                    "/",
+                    "PAGADOS",
+                ),
+            ),
+            resumen_start,
+            resumen_end,
+        )
+    )
+
+    intereses_depositos = 0.0
+    intereses_retiros = 0.0
+
+    if intereses_cobrados_line_index is not None:
+
+        (
+            intereses_depositos,
+            intereses_retiros,
+        ) = distribute_signed_amount(
+            lines[intereses_cobrados_line_index],
+            intereses_cobrados_pagados,
+        )
+
+    # --------------------------------------------------------
+    # AJUSTES DE DEPÓSITOS
+    # --------------------------------------------------------
+    #
+    # Comisiones:
+    #     + -> depósitos
+    #     - -> retiros
+    #
+    # Intereses cobrados/pagados:
+    #     + -> depósitos
+    #     - -> retiros
+    #
+    # --------------------------------------------------------
+
+    if depositos_abonos is not None:
+
+        depositos_abonos += comisiones_depositos
+        depositos_abonos += intereses_depositos
+
+    # --------------------------------------------------------
+    # AJUSTES DE RETIROS
+    # --------------------------------------------------------
+    #
+    # Siempre agregamos el IVA sobre comisiones a retiros.
+    #
+    # Además:
+    #
+    #     comisiones negativas -> retiros
+    #     intereses negativos  -> retiros
+    #
+    # --------------------------------------------------------
+
+    retiros_cargos = total_retiros
+
+    if retiros_cargos is not None:
+
+        retiros_cargos += (
+            iva_sobre_comisiones
+            if iva_sobre_comisiones is not None
+            else 0.0
+        )
+
+        retiros_cargos += comisiones_retiros
+        retiros_cargos += intereses_retiros
+
+    # --------------------------------------------------------
+    # INTERESES A FAVOR
+    # --------------------------------------------------------
+    #
+    # Se conserva exactamente el valor extraído de:
+    #
+    #     Intereses Netos Ganados
+    #
+    # --------------------------------------------------------
+
+    # --------------------------------------------------------
+    # MANEJO DE CUENTA
+    # --------------------------------------------------------
+
     manejo_cuenta = extract_field_same_line(
         lines,
         (
@@ -1144,6 +1387,10 @@ def extract_resumen_financiero_words(
         resumen_start,
         resumen_end,
     )
+
+    # --------------------------------------------------------
+    # ISR RETENIDO
+    # --------------------------------------------------------
 
     isr_retenido = extract_field_same_line(
         lines,
@@ -1163,6 +1410,10 @@ def extract_resumen_financiero_words(
         resumen_end,
     )
 
+    # --------------------------------------------------------
+    # SALDO FINAL
+    # --------------------------------------------------------
+
     saldo_final = extract_field_same_line(
         lines,
         (
@@ -1175,11 +1426,19 @@ def extract_resumen_financiero_words(
         resumen_end,
     )
 
+    # --------------------------------------------------------
+    # DÍAS DEL PERIODO
+    # --------------------------------------------------------
+
     dias_periodo = extract_days(
         lines,
         resumen_start,
         resumen_end,
     )
+
+    # --------------------------------------------------------
+    # TASA BRUTA ANUAL
+    # --------------------------------------------------------
 
     tasa_bruta_anual = extract_tasa_bruta_anual(
         lines,
@@ -1192,38 +1451,22 @@ def extract_resumen_financiero_words(
     # --------------------------------------------------------
 
     return ResumenFinanciero(
-
         saldo_promedio=saldo_promedio,
-
         dias_periodo=dias_periodo,
-
         tasa_bruta_anual=tasa_bruta_anual,
-
         saldo_promedio_gravable=None,
-
         intereses_a_favor=intereses_a_favor,
-
         isr_retenido=isr_retenido,
-
         cheques_pagados=None,
-
         manejo_cuenta=manejo_cuenta,
-
         cargos_objetados=None,
-
         abonos_objetados=None,
-
         saldo_anterior=saldo_anterior,
-
         depositos_abonos=depositos_abonos,
-
         retiros_cargos=retiros_cargos,
-
         saldo_final=saldo_final,
-
         saldo_promedio_minimo_mensual=(
             saldo_promedio_minimo_mensual
         ),
-
         saldo_global=None,
     )
