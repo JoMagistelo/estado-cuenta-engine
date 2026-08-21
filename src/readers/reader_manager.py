@@ -8,10 +8,55 @@ from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
 
 
+# ============================================================
+# RESULTADO DE LA PRIMERA ETAPA
+# ============================================================
+
+
+class PDFTextStageResult:
+    """
+    Resultado de la primera etapa de lectura.
+
+    Contiene:
+
+        document
+            -> DocumentData con raw_text pero todavía sin
+               spatial_words.
+
+        initial_empty_pages
+            -> páginas iniciales sin texto.
+
+        has_extractable_text
+            -> indica si existe texto extraíble.
+    """
+
+    __slots__ = (
+        "document",
+        "initial_empty_pages",
+        "has_extractable_text",
+    )
+
+    def __init__(
+        self,
+        document: DocumentData,
+        initial_empty_pages: int,
+        has_extractable_text: bool,
+    ) -> None:
+
+        self.document = document
+        self.initial_empty_pages = initial_empty_pages
+        self.has_extractable_text = has_extractable_text
+
+
+# ============================================================
+# READER MANAGER
+# ============================================================
+
+
 class ReaderManager:
 
     # ========================================================
-    # LECTURA ORIGINAL
+    # LECTURA COMPLETA
     # ========================================================
 
     @staticmethod
@@ -20,24 +65,16 @@ class ReaderManager:
         start_page: int = 0,
     ) -> DocumentData:
         """
-        Lee un PDF sin modificarlo físicamente.
+        Lee texto y palabras espaciales.
 
-        start_page:
-            Índice físico base 0 desde donde comienza la lectura.
-
-        Ejemplo:
-
-            start_page=0
-            -> página física 1 = página lógica 1
-
-            start_page=2
-            -> página física 3 = página lógica 1
+        Esta función conserva el comportamiento original
+        de ReaderManager.read().
         """
 
         file_path = Path(file_path)
 
         # ====================================================
-        # TEXTO DIGITAL
+        # TEXTO
         # ====================================================
 
         raw_text = PDFTextReader.read(
@@ -46,7 +83,7 @@ class ReaderManager:
         )
 
         # ====================================================
-        # PALABRAS CON COORDENADAS
+        # PALABRAS ESPACIALES
         # ====================================================
 
         spatial_words = PDFWordReader.read(
@@ -65,4 +102,65 @@ class ReaderManager:
             metadata={
                 "start_page": start_page,
             },
+        )
+
+    # ========================================================
+    # PRIMERA ETAPA: SOLO TEXTO
+    # ========================================================
+
+    @staticmethod
+    def read_text_stage(
+        file_path: str | Path,
+        start_page: int = 0,
+    ) -> PDFTextStageResult:
+        """
+        Primera etapa optimizada.
+
+        Lee únicamente texto.
+
+        NO ejecuta PDFWordReader.
+        """
+
+        file_path = Path(file_path)
+
+        result = PDFTextReader.read_stage(
+            file_path,
+            start_page=start_page,
+        )
+
+        document = DocumentData(
+            raw_text=result.raw_text,
+            normalized_text="",
+            spatial_words=[],
+            metadata={
+                "start_page": start_page,
+            },
+        )
+
+        return PDFTextStageResult(
+            document=document,
+            initial_empty_pages=result.initial_empty_pages,
+            has_extractable_text=result.has_extractable_text,
+        )
+
+    # ========================================================
+    # SOLO PALABRAS ESPACIALES
+    # ========================================================
+
+    @staticmethod
+    def read_spatial_words(
+        file_path: str | Path,
+        start_page: int = 0,
+    ) -> list[dict]:
+        """
+        Extrae únicamente las palabras espaciales.
+
+        No vuelve a ejecutar PDFTextReader.
+        """
+
+        file_path = Path(file_path)
+
+        return PDFWordReader.read(
+            file_path,
+            start_page=start_page,
         )

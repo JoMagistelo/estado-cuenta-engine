@@ -5,7 +5,6 @@ from pathlib import Path
 from engine.statement_processor import process_single_statement
 from models.processing_result import ProcessingResult
 from readers.reader_manager import ReaderManager
-from readers.pdf_preprocessor import count_initial_empty_pages
 
 from detectors.bank_detector import identify_bank_key
 
@@ -45,30 +44,23 @@ def process_bank_statements(
     """
     Procesa múltiples estados de cuenta.
 
-    Flujo:
+    Flujo optimizado:
 
         PDF ORIGINAL
             ↓
-        ReaderManager
+        lectura inicial SOLO de texto
             ↓
         detectar tipo de documento
             │
             ├── PDF IMAGEN
             │       ↓
-            │   NO tocar PDF
-            │       ↓
-            │   OCR
+            │   no ejecutar PDFWordReader
             │
             └── PDF DIGITAL
                     ↓
-              detectar páginas iniciales
-              sin texto
+              determinar páginas iniciales vacías
                     ↓
-              desplazamiento lógico
-                    ↓
-              página física 3
-              se convierte en
-              página lógica 1
+              PDFWordReader
                     ↓
               detectar banco
                     ↓
@@ -83,6 +75,9 @@ def process_bank_statements(
     Nunca se crea un PDF nuevo.
 
     Nunca se modifica el PDF original.
+
+    La optimización consiste únicamente en evitar la extracción
+    de palabras espaciales cuando el documento no las necesita.
     """
 
     results: list[ProcessingResult] = []
@@ -100,28 +95,45 @@ def process_bank_statements(
         )
 
         # =====================================================
-        # PRIMERA LECTURA
+        # PRIMERA ETAPA
         # =====================================================
         #
-        # Se lee el PDF ORIGINAL.
+        # Solo lectura de texto.
         #
-        # En esta etapa todavía NO sabemos si es:
+        # Esta operación además obtiene:
         #
-        #   - PDF digital
-        #   - PDF imagen
+        #   - raw_text
+        #   - initial_empty_pages
+        #   - has_extractable_text
         #
-        # Por eso NO debemos eliminar ni desplazar páginas
-        # todavía.
+        # Todavía NO extraemos todas las palabras espaciales.
         #
         # =====================================================
 
-        document = ReaderManager.read(
+        text_stage = ReaderManager.read_text_stage(
             pdf_path,
             start_page=0,
         )
 
+        document = text_stage.document
+
         # =====================================================
-        # DETECCIÓN DEL TIPO DE DOCUMENTO
+        # PRIMERA DETECCIÓN
+        # =====================================================
+        #
+        # Si raw_text ya es utilizable, detect_document_type()
+        # puede determinar directamente que es PDF_DIGITAL.
+        #
+        # Si raw_text no es utilizable, todavía debemos
+        # distinguir:
+        #
+        #   A) PDF realmente imagen
+        #   B) PDF digital con fuente mal codificada
+        #   C) PDF digital cuyo contenido empieza después
+        #      de las primeras MAX_PAGES
+        #
+        # Para esos casos consultamos has_extractable_text.
+        #
         # =====================================================
 
         document_type = detect_document_type(
@@ -129,22 +141,50 @@ def process_bank_statements(
         )
 
         # =====================================================
-        # CASO: PDF IMAGEN / OCR
+        # SI RAW TEXT FALLA
+        # =====================================================
+        #
+        # En este punto document.spatial_words está vacío
+        # intencionalmente.
+        #
+        # Si existe texto extraíble en alguna página, debemos
+        # conservar el comportamiento anterior del detector:
+        #
+        #       raw_text + spatial_words
+        #
+        # Por eso solamente en este escenario ejecutamos
+        # PDFWordReader completo.
+        #
         # =====================================================
 
         if document_type == DocumentType.PDF_IMAGEN:
 
-            # -------------------------------------------------
-            # MUY IMPORTANTE:
-            #
-            # NO se llama:
-            #
-            # count_initial_empty_pages()
-            #
-            # NO se vuelve a escribir el PDF.
-            #
-            # El PDF original permanece intacto.
-            # -------------------------------------------------
+            if text_stage.has_extractable_text:
+
+                # -------------------------------------------------
+                # Existe texto en el PDF, pero raw_text no fue
+                # suficiente para determinarlo.
+                #
+                # Leemos palabras espaciales para conservar el
+                # fallback original del detector.
+                # -------------------------------------------------
+
+                spatial_words = ReaderManager.read_spatial_words(
+                    pdf_path,
+                    start_page=0,
+                )
+
+                document.spatial_words = spatial_words
+
+                document_type = detect_document_type(
+                    document
+                )
+
+        # =====================================================
+        # CASO: PDF IMAGEN
+        # =====================================================
+
+        if document_type == DocumentType.PDF_IMAGEN:
 
             result = ProcessingResult(
                 file_name=file_name,
@@ -165,52 +205,55 @@ def process_bank_statements(
         # CASO: PDF DIGITAL
         # =====================================================
 
-        # -----------------------------------------------------
-        # Ahora sí podemos buscar páginas iniciales vacías.
-        #
-        # Esta función solamente inspecciona el PDF.
-        #
-        # NO crea ningún archivo.
-        # -----------------------------------------------------
-
-        initial_empty_pages = count_initial_empty_pages(
-            pdf_path
+        initial_empty_pages = (
+            text_stage.initial_empty_pages
         )
 
         # =====================================================
-        # SEGUNDA LECTURA LÓGICA
+        # PREPARAR DOCUMENTO FINAL
         # =====================================================
         #
-        # Ejemplo:
+        # CASO 1:
         #
-        # página física 1 -> vacía
-        # página física 2 -> vacía
-        # página física 3 -> contenido
+        # No hay páginas iniciales vacías.
         #
-        # initial_empty_pages = 2
+        # La lectura de texto que ya hicimos corresponde
+        # exactamente a start_page=0.
         #
-        # start_page=2
+        # Por tanto NO volvemos a extraer raw_text.
         #
-        # entonces:
-        #
-        # física 3 -> lógica 1
-        # física 4 -> lógica 2
-        # física 5 -> lógica 3
+        # Solamente extraemos las palabras espaciales.
         #
         # =====================================================
 
-        if initial_empty_pages > 0:
+        if initial_empty_pages == 0:
 
-            document = ReaderManager.read(
+            spatial_words = ReaderManager.read_spatial_words(
                 pdf_path,
-                start_page=initial_empty_pages,
+                start_page=0,
             )
+
+            document.spatial_words = spatial_words
+
+        # =====================================================
+        # CASO 2:
+        #
+        # Existen páginas iniciales vacías.
+        #
+        # Ahora sí debemos crear la representación lógica:
+        #
+        # física 3 → lógica 1
+        #
+        # Para ello necesitamos volver a leer desde
+        # initial_empty_pages.
+        #
+        # =====================================================
 
         else:
 
             document = ReaderManager.read(
                 pdf_path,
-                start_page=0,
+                start_page=initial_empty_pages,
             )
 
         # =====================================================
