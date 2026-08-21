@@ -2096,8 +2096,9 @@ def extract_referencia_from_spei_recibido(
     return referencia or None
 
 
+
 # ============================================================
-# SPEI RECIBIDO — DISPATCHERS
+# DISPATCHERS DE CAMPOS EXTRAÍDOS DESDE CONCEPTO
 # ============================================================
 
 def extract_beneficiario_from_concepto(
@@ -2107,12 +2108,9 @@ def extract_beneficiario_from_concepto(
     """
     Extrae el beneficiario según el tipo de movimiento.
 
-    Actualmente implementado:
+    Actualmente:
 
         SPEI RECIBIDO
-
-    Próximamente:
-
         ORDEN DE PAGO SPEI
     """
 
@@ -2124,6 +2122,14 @@ def extract_beneficiario_from_concepto(
             concepto
         )
 
+    if is_orden_pago_spei_movement(
+        concepto
+    ):
+
+        return extract_beneficiario_from_orden_pago_spei(
+            concepto
+        )
+
     return None
 
 
@@ -2132,13 +2138,17 @@ def extract_cuenta_beneficiario_from_concepto(
 ) -> Optional[str]:
 
     """
-    Extrae la cuenta del beneficiario según el tipo
-    de movimiento.
+    Extrae la cuenta del beneficiario.
 
-    Actualmente no aplica para SPEI RECIBIDO.
+    Actualmente no se utiliza para:
+
+        SPEI RECIBIDO
+        ORDEN DE PAGO SPEI
+
+    porque en ambos casos estamos obteniendo la CLABE
+    mediante clabe_beneficiario.
     """
 
-    # Preparado para futuras variantes.
     return None
 
 
@@ -2159,6 +2169,14 @@ def extract_clabe_beneficiario_from_concepto(
             concepto
         )
 
+    if is_orden_pago_spei_movement(
+        concepto
+    ):
+
+        return extract_clabe_beneficiario_from_orden_pago_spei(
+            concepto
+        )
+
     return None
 
 
@@ -2167,7 +2185,8 @@ def extract_concepto_original_from_concepto(
 ) -> Optional[str]:
 
     """
-    Extrae el concepto original según el tipo de movimiento.
+    Extrae el concepto original según el tipo
+    de movimiento.
     """
 
     if is_spei_recibido_movement(
@@ -2175,6 +2194,14 @@ def extract_concepto_original_from_concepto(
     ):
 
         return extract_concepto_original_from_spei_recibido(
+            concepto
+        )
+
+    if is_orden_pago_spei_movement(
+        concepto
+    ):
+
+        return extract_concepto_original_from_orden_pago_spei(
             concepto
         )
 
@@ -2186,7 +2213,8 @@ def extract_referencia_from_concepto(
 ) -> Optional[str]:
 
     """
-    Extrae la referencia según el tipo de movimiento.
+    Extrae la referencia según el tipo
+    de movimiento.
     """
 
     if is_spei_recibido_movement(
@@ -2194,6 +2222,14 @@ def extract_referencia_from_concepto(
     ):
 
         return extract_referencia_from_spei_recibido(
+            concepto
+        )
+
+    if is_orden_pago_spei_movement(
+        concepto
+    ):
+
+        return extract_referencia_from_orden_pago_spei(
             concepto
         )
 
@@ -2205,7 +2241,8 @@ def extract_rfc_from_concepto(
 ) -> Optional[str]:
 
     """
-    Extrae el RFC según el tipo de movimiento.
+    Extrae el RFC según el tipo
+    de movimiento.
     """
 
     if is_spei_recibido_movement(
@@ -2213,6 +2250,14 @@ def extract_rfc_from_concepto(
     ):
 
         return extract_rfc_from_spei_recibido(
+            concepto
+        )
+
+    if is_orden_pago_spei_movement(
+        concepto
+    ):
+
+        return extract_rfc_from_orden_pago_spei(
             concepto
         )
 
@@ -2224,7 +2269,8 @@ def extract_hora_from_concepto(
 ) -> Optional[str]:
 
     """
-    Extrae la hora de operación según el tipo de movimiento.
+    Extrae la hora de operación según el tipo
+    de movimiento.
     """
 
     if is_spei_recibido_movement(
@@ -2235,11 +2281,20 @@ def extract_hora_from_concepto(
             concepto
         )
 
+    if is_orden_pago_spei_movement(
+        concepto
+    ):
+
+        return extract_hora_from_orden_pago_spei(
+            concepto
+        )
+
     return None
 
 
+
 # ============================================================
-# FUNCIONES PREPARADAS PARA FUTURAS VARIANTES
+# ORDEN DE PAGO SPEI
 # ============================================================
 
 def is_orden_pago_spei_movement(
@@ -2251,7 +2306,7 @@ def is_orden_pago_spei_movement(
 
         ORDEN DE PAGO SPEI
 
-    Se deja preparado para una siguiente etapa.
+    El movimiento comienza directamente con esta expresión.
     """
 
     first_line = get_first_concepto_line(
@@ -2259,7 +2314,6 @@ def is_orden_pago_spei_movement(
     )
 
     if not first_line:
-
         return False
 
     return bool(
@@ -2271,15 +2325,47 @@ def is_orden_pago_spei_movement(
     )
 
 
-def extract_beneficiario_from_orden_pago_spei(
+def extract_referencia_from_orden_pago_spei(
     concepto: str,
 ) -> Optional[str]:
 
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae la referencia de un movimiento
+    ORDEN DE PAGO SPEI.
+
+    Ejemplo:
+
+        ORDEN DE PAGO SPEI 0250605 =REFERENCIA ...
+
+    Resultado:
+
+        0250605
     """
 
-    return None
+    if not is_orden_pago_spei_movement(
+        concepto
+    ):
+        return None
+
+    first_line = get_first_concepto_line(
+        concepto
+    )
+
+    if not first_line:
+        return None
+
+    match = re.search(
+        r"^ORDEN\s+DE\s+PAGO\s+SPEI\s+"
+        r"([A-Z0-9]+)"
+        r"\s*=?\s*REFERENCIA\b",
+        first_line,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    return match.group(1).strip() or None
 
 
 def extract_clabe_beneficiario_from_orden_pago_spei(
@@ -2287,10 +2373,108 @@ def extract_clabe_beneficiario_from_orden_pago_spei(
 ) -> Optional[str]:
 
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae la CLABE/cuenta indicada después de:
+
+        CTA/CLABE:
+
+    Ejemplo:
+
+        CTA/CLABE: 722969010122398083
     """
 
-    return None
+    if not is_orden_pago_spei_movement(
+        concepto
+    ):
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bCTA\s*/\s*CLABE\s*:\s*"
+        r"(\d{16,18})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    return match.group(1).strip() or None
+
+
+def extract_beneficiario_from_orden_pago_spei(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae el beneficiario después de:
+
+        BENEF:
+
+    El valor puede ser:
+
+        NO INGRESADO
+        NO INGRESAD
+        Ro
+        Oma
+        Reward
+        etc.
+
+    Se conserva el texto hasta:
+
+        (DATO NO VERIF POR ESTA INST)
+    """
+
+    if not is_orden_pago_spei_movement(
+        concepto
+    ):
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bBENEF\s*:\s*"
+        r"(.*?)"
+        r"\s*\(\s*DATO\s+NO\s+VERIF\s+POR\s+ESTA\s+INST\s*\)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+
+        beneficiario = normalize_text(
+            match.group(1)
+        )
+
+        return beneficiario or None
+
+    # --------------------------------------------------------
+    # Fallback:
+    #
+    # Si por alguna razón no aparece la leyenda
+    # "(DATO NO VERIF POR ESTA INST)", tomamos el texto
+    # hasta ", Pago" / ", Pgo".
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\bBENEF\s*:\s*"
+        r"(.*?)(?:,\s*(?:PAGO|PGO)\b)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    beneficiario = normalize_text(
+        match.group(1)
+    )
+
+    return beneficiario or None
 
 
 def extract_rfc_from_orden_pago_spei(
@@ -2298,10 +2482,51 @@ def extract_rfc_from_orden_pago_spei(
 ) -> Optional[str]:
 
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae el RFC de un movimiento ORDEN DE PAGO SPEI.
+
+    Ejemplos:
+
+        RFC: ND
+        RFC: No capturado
+        RFC: ABC123456XYZ
+
+    ND / No capturado no se consideran RFC válido.
     """
 
-    return None
+    if not is_orden_pago_spei_movement(
+        concepto
+    ):
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bRFC\s*:\s*"
+        r"([A-Z&Ñ0-9]+(?:\s+[A-Z&Ñ0-9]+)*)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    rfc = normalize_text(
+        match.group(1)
+    )
+
+    if not rfc:
+        return None
+
+    if normalize_upper(rfc) in {
+        "ND",
+        "N D",
+        "NO CAPTURADO",
+    }:
+        return None
+
+    return rfc.upper()
 
 
 def extract_hora_from_orden_pago_spei(
@@ -2309,10 +2534,34 @@ def extract_hora_from_orden_pago_spei(
 ) -> Optional[str]:
 
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae la hora de liquidación.
+
+    Ejemplos:
+
+        HORA LIQ: 07:37:35
+        HORA   LIQ: 06:32:05
     """
 
-    return None
+    if not is_orden_pago_spei_movement(
+        concepto
+    ):
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bHORA\s+LIQ\s*:\s*"
+        r"((?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    return match.group(1).strip()
 
 
 def extract_concepto_original_from_orden_pago_spei(
@@ -2320,21 +2569,47 @@ def extract_concepto_original_from_orden_pago_spei(
 ) -> Optional[str]:
 
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae el concepto original del pago.
+
+    Ejemplos:
+
+        ), Pago CVE RASTREO:
+        ), Pago 97 CVE RASTREO:
+        ), Sin información CVE RASTREO:
+
+    Resultado:
+
+        Pago
+        Pago 97
+        Sin información
     """
 
-    return None
+    if not is_orden_pago_spei_movement(
+        concepto
+    ):
+        return None
 
+    text = normalize_concepto_for_search(
+        concepto
+    )
 
-def extract_referencia_from_orden_pago_spei(
-    concepto: str,
-) -> Optional[str]:
+    match = re.search(
+        r"\)\s*,\s*"
+        r"(.*?)"
+        r"\s+CVE\s+RASTREO\s*:",
+        text,
+        re.IGNORECASE,
+    )
 
-    """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
-    """
+    if not match:
+        return None
 
-    return None
+    concepto_original = normalize_text(
+        match.group(1)
+    )
+
+    return concepto_original or None
+
 
 
 # ============================================================
