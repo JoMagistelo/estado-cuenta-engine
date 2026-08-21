@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import re
+
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from models.movimiento import Movimiento
-from parsers.banorte.utils.words_after_last_movement import remove_after_last_movement
-from parsers.banorte.utils.words_footer_filter import remove_banorte_footer
 
+from parsers.banorte.utils.words_after_last_movement import (
+    remove_after_last_movement,
+)
+
+from parsers.banorte.utils.words_footer_filter import (
+    remove_banorte_footer,
+)
 
 
 # ============================================================
@@ -16,11 +22,11 @@ from parsers.banorte.utils.words_footer_filter import remove_banorte_footer
 #
 # Layout observado:
 #
-#   FECHA
-#   DESCRIPCIÓN / ESTABLECIMIENTO
-#   MONTO DEL DEPÓSITO
-#   MONTO DEL RETIRO
-#   SALDO
+#     FECHA
+#     DESCRIPCIÓN / ESTABLECIMIENTO
+#     MONTO DEL DEPÓSITO
+#     MONTO DEL RETIRO
+#     SALDO
 #
 # El parser trabaja exclusivamente mediante coordenadas
 # espaciales para separar las columnas.
@@ -28,9 +34,7 @@ from parsers.banorte.utils.words_footer_filter import remove_banorte_footer
 # Características particulares del PDF BANORTE:
 #
 #   1. La fecha y el primer fragmento del concepto pueden
-#      venir físicamente unidos:
-#
-#          02-JUN-25OXXOLAS
+#      venir físicamente unidos.
 #
 #   2. Una operación puede ocupar muchas líneas verticales.
 #
@@ -71,32 +75,9 @@ BOX_TOLERANCE_Y = 1.5
 # ============================================================
 # CONFIGURACIÓN ESPACIAL BANORTE
 # ============================================================
-#
-# Coordenadas observadas:
-#
-# FECHA
-#     aproximadamente x=53 → 84
-#
-# DESCRIPCIÓN / ESTABLECIMIENTO
-#     aproximadamente x=84 → 352
-#
-# MONTO DEL DEPÓSITO
-#     aproximadamente x=353 → 428
-#
-# MONTO DEL RETIRO
-#     aproximadamente x=429 → 520
-#
-# SALDO
-#     aproximadamente x=521 → 566
-#
-# IMPORTANTE:
-#
-# Los límites se construyen como regiones de columna y no
-# como distancia respecto al centro de la cabecera.
-#
-# ============================================================
 
 DEFAULT_COLUMN_BOUNDS = {
+
     "FECHA": (
         50.0,
         84.0,
@@ -121,6 +102,7 @@ DEFAULT_COLUMN_BOUNDS = {
         520.0,
         568.0,
     ),
+
 }
 
 
@@ -139,29 +121,31 @@ HEADER_REQUIRED = {
 # ============================================================
 # REGEX — FECHAS
 # ============================================================
-#
-# Banorte puede entregar:
-#
-#     02-JUN-25
-#
-# pegado al concepto:
-#
-#     02-JUN-25OXXOLAS
-#
-# Por ello usamos match sobre el INICIO del texto.
-#
-# ============================================================
 
 DATE_PREFIX_PATTERN = re.compile(
+
     r"^"
+
     r"(?P<date>"
+
     r"\d{1,2}"
+
     r"-"
+
     r"[A-ZÁÉÍÓÚÑ]{3}"
+
     r"-"
-    r"\d{2,4}"
+
+    r"(?:"
+        r"\d{4}(?!\d)"
+        r"|"
+        r"\d{2}"
+    ")"
+
     r")",
+
     re.IGNORECASE,
+
 )
 
 
@@ -275,9 +259,9 @@ REFERENCE_PATTERN = re.compile(
 # ESTRUCTURA DE CONFIGURACIÓN
 # ============================================================
 
-
 @dataclass(frozen=True)
 class ColumnConfig:
+
     """
     Define los límites horizontales de las columnas BANORTE.
     """
@@ -297,13 +281,14 @@ class ColumnConfig:
 # CONFIGURACIÓN BASE
 # ============================================================
 
-
 def build_default_config() -> ColumnConfig:
+
     """
     Construye la configuración espacial BANORTE.
     """
 
     return ColumnConfig(
+
         fecha=DEFAULT_COLUMN_BOUNDS[
             "FECHA"
         ],
@@ -323,6 +308,7 @@ def build_default_config() -> ColumnConfig:
         saldo=DEFAULT_COLUMN_BOUNDS[
             "SALDO"
         ],
+
     )
 
 
@@ -330,10 +316,10 @@ def build_default_config() -> ColumnConfig:
 # NORMALIZACIÓN
 # ============================================================
 
-
 def normalize_text(
     value: Any,
 ) -> str:
+
     """
     Normaliza espacios y caracteres básicos.
     """
@@ -362,6 +348,7 @@ def normalize_text(
 def normalize_upper(
     value: Any,
 ) -> str:
+
     """
     Normaliza y convierte a mayúsculas.
     """
@@ -375,17 +362,18 @@ def normalize_upper(
 # COORDENADAS
 # ============================================================
 
-
 def safe_float(
     value: Any,
     default: float = 0.0,
 ) -> float:
+
     """
     Conversión segura a float.
     """
 
     try:
         return float(value)
+
     except (
         TypeError,
         ValueError,
@@ -475,7 +463,6 @@ def word_height(
 # SOLAPAMIENTO ESPACIAL
 # ============================================================
 
-
 def word_inside_box(
     word: Dict[str, Any],
     box: tuple[
@@ -486,18 +473,13 @@ def word_inside_box(
     ],
     page_number: Optional[int] = None,
 ) -> bool:
+
     """
     Determina si una palabra se encuentra espacialmente
     dentro de una caja.
 
     Se utiliza SOLAPAMIENTO de rectángulos y no solamente
     el centro de la palabra.
-
-    Esto hace el extractor más tolerante a:
-        - palabras anchas
-        - pequeños desplazamientos
-        - diferencias de renderizado
-        - límites de columna
     """
 
     if (
@@ -517,7 +499,6 @@ def word_inside_box(
 
     xmin -= BOX_TOLERANCE_X
     xmax += BOX_TOLERANCE_X
-
     ymin -= BOX_TOLERANCE_Y
     ymax += BOX_TOLERANCE_Y
 
@@ -569,6 +550,7 @@ def words_in_box(
 ) -> List[
     Dict[str, Any]
 ]:
+
     """
     Devuelve las palabras contenidas en una caja espacial.
     """
@@ -602,7 +584,6 @@ def words_in_box(
 # AGRUPACIÓN DE LÍNEAS
 # ============================================================
 
-
 def group_words_into_lines(
     words: List[
         Dict[str, Any]
@@ -612,21 +593,21 @@ def group_words_into_lines(
         Dict[str, Any]
     ]
 ]:
+
     """
     Agrupa palabras por posición vertical.
-
     Conserva la separación por página.
-
-    Es suficientemente tolerante para el espaciado observado
-    en BANORTE.
     """
 
     if not words:
         return []
 
     words = sorted(
+
         words,
+
         key=lambda word: (
+
             int(
                 word.get(
                     "page",
@@ -634,9 +615,13 @@ def group_words_into_lines(
                 )
                 or 1
             ),
+
             word_center_y(word),
+
             word_x0(word),
+
         ),
+
     )
 
     heights = [
@@ -703,10 +688,13 @@ def group_words_into_lines(
             continue
 
         same_line = (
+
             page == current_page
+
             and abs(
                 y - current_y
             ) <= tolerance
+
         )
 
         if same_line:
@@ -760,12 +748,12 @@ def group_words_into_lines(
 # TEXTO DE LÍNEA
 # ============================================================
 
-
 def line_text(
     line: List[
         Dict[str, Any]
     ],
 ) -> str:
+
     """
     Construye el texto completo de una línea.
     """
@@ -799,13 +787,13 @@ def line_text(
 # HEADER
 # ============================================================
 
-
 def find_normalized_token(
     line: List[
         Dict[str, Any]
     ],
     token: str,
 ) -> bool:
+
     """
     Busca un token normalizado dentro de una línea.
     """
@@ -835,16 +823,9 @@ def is_movements_header(
         Dict[str, Any]
     ],
 ) -> bool:
+
     """
     Detecta los encabezados repetidos de movimientos BANORTE.
-
-    Ejemplo:
-
-        FECHA
-        DESCRIPCIÓN / ESTABLECIMIENTO
-        MONTO DEL DEPOSITO
-        MONTO DEL RETIRO
-        SALDO
     """
 
     if not line:
@@ -883,12 +864,12 @@ def is_movements_header(
 # ENCABEZADOS SECUNDARIOS
 # ============================================================
 
-
 def is_detail_title(
     line: List[
         Dict[str, Any]
     ],
 ) -> bool:
+
     """
     Detecta:
 
@@ -910,6 +891,7 @@ def is_product_header(
         Dict[str, Any]
     ],
 ) -> bool:
+
     """
     Detecta el encabezado auxiliar:
 
@@ -930,7 +912,6 @@ def is_product_header(
 # COLUMNA
 # ============================================================
 
-
 def word_inside_column(
     word: Dict[str, Any],
     column: tuple[
@@ -938,13 +919,13 @@ def word_inside_column(
         float,
     ],
 ) -> bool:
+
     """
     Determina pertenencia a una columna mediante el centro X.
 
     Para texto general esto funciona adecuadamente.
-
-    Para importes se utiliza una función específica basada en
-    x1.
+    Para importes se utiliza una función específica basada
+    en x1.
     """
 
     center_x = word_center_x(
@@ -971,17 +952,22 @@ def words_in_column(
 ) -> List[
     Dict[str, Any]
 ]:
+
     """
     Devuelve palabras pertenecientes a una columna.
     """
 
     result = [
+
         word
+
         for word in line
+
         if word_inside_column(
             word,
             column,
         )
+
     ]
 
     result.sort(
@@ -1000,6 +986,7 @@ def column_text(
         float,
     ],
 ) -> str:
+
     """
     Extrae texto de una columna dentro de una línea.
     """
@@ -1035,10 +1022,10 @@ def column_text(
 # IMPORTES
 # ============================================================
 
-
 def is_money(
     text: str,
 ) -> bool:
+
     """
     Determina si una cadena representa un importe.
     """
@@ -1053,6 +1040,7 @@ def is_money(
 def parse_amount(
     text: str,
 ) -> float:
+
     """
     Convierte un importe textual a float.
     """
@@ -1062,6 +1050,7 @@ def parse_amount(
     )
 
     if not value:
+
         return 0.0
 
     value = (
@@ -1115,19 +1104,10 @@ def money_word_inside_column(
         float,
     ],
 ) -> bool:
+
     """
     Determina si un importe pertenece a una columna usando
     su borde derecho X1.
-
-    Esto es deliberado.
-
-    Los importes BANORTE están alineados hacia la derecha:
-
-        255.00
-        350.00
-        40.00
-
-    por lo que X1 es una señal mucho más estable que el centro.
     """
 
     x1 = word_x1(
@@ -1154,17 +1134,11 @@ def extract_amount_from_block(
         float,
     ],
 ) -> float:
+
     """
     Busca importes en todas las líneas del movimiento.
 
-    El importe puede encontrarse en:
-        - la línea principal
-        - una línea posterior
-
     Se conserva el último importe que pertenezca a la columna.
-
-    En el patrón observado, esto permite obtener correctamente
-    el valor asociado a la operación completa.
     """
 
     candidates: List[
@@ -1227,20 +1201,18 @@ def extract_amount_from_block(
 # FECHA — BANORTE
 # ============================================================
 
-
 def extract_date_prefix(
     text: str,
 ) -> Optional[str]:
+
     """
     Extrae una fecha al principio del texto.
 
-    Soporta casos como:
+    Soporta:
 
         02-JUN-25
         02-JUN-2025
         02-JUN-25OXXOLAS
-        31-MAY-25SALDO
-        06-JUN-25036CLAR...
     """
 
     text = normalize_text(
@@ -1248,6 +1220,7 @@ def extract_date_prefix(
     )
 
     if not text:
+
         return None
 
     match = DATE_PREFIX_PATTERN.match(
@@ -1255,6 +1228,7 @@ def extract_date_prefix(
     )
 
     if not match:
+
         return None
 
     return match.group(
@@ -1265,6 +1239,7 @@ def extract_date_prefix(
 def is_movement_date(
     text: str,
 ) -> bool:
+
     """
     Determina si el texto empieza con una fecha Banorte.
     """
@@ -1282,12 +1257,10 @@ def extract_date_from_line(
         Dict[str, Any]
     ],
 ) -> Optional[str]:
+
     """
     Busca la fecha al inicio de cualquiera de las palabras
     de la línea.
-
-    En BANORTE normalmente está en la primera palabra:
-        02-JUN-25OXXOLAS
     """
 
     for word in sorted(
@@ -1318,10 +1291,9 @@ def is_movement_start(
         Dict[str, Any]
     ],
 ) -> bool:
+
     """
     Detecta el comienzo de una operación.
-
-    No requiere que toda la palabra sea una fecha.
     """
 
     return (
@@ -1336,18 +1308,12 @@ def is_movement_start(
 # LIMPIEZA DE FECHA DEL CONCEPTO
 # ============================================================
 
-
 def remove_date_prefix(
     text: str,
 ) -> str:
+
     """
-    Elimina únicamente el prefijo de fecha de una cadena.
-
-    Ejemplo:
-
-        02-JUN-25OXXOLAS
-        ↓
-        OXXOLAS
+    Elimina únicamente el prefijo de fecha.
     """
 
     text = normalize_text(
@@ -1355,6 +1321,7 @@ def remove_date_prefix(
     )
 
     if not text:
+
         return ""
 
     return DATE_PREFIX_PATTERN.sub(
@@ -1368,7 +1335,6 @@ def remove_date_prefix(
 # EXTRACCIÓN DEL CONCEPTO
 # ============================================================
 
-
 def extract_concepto_from_line(
     line: List[
         Dict[str, Any]
@@ -1376,22 +1342,9 @@ def extract_concepto_from_line(
     config: ColumnConfig,
     first_line: bool = False,
 ) -> str:
+
     """
     Extrae la descripción de una línea.
-
-    La descripción BANORTE puede contener datos adicionales:
-
-        OXXOLAS
-        VEGAS
-        TRC
-        RFC:CCO
-        ...
-    
-    De momento TODOS esos elementos permanecen dentro de
-    concepto_original/concepto.
-
-    Únicamente eliminamos el prefijo de fecha de la primera
-    línea del movimiento.
     """
 
     selected = words_in_column(
@@ -1411,6 +1364,7 @@ def extract_concepto_from_line(
         )
 
         if not text:
+
             continue
 
         if first_line:
@@ -1422,6 +1376,7 @@ def extract_concepto_from_line(
             first_line = False
 
             if not text:
+
                 continue
 
         values.append(
@@ -1441,23 +1396,11 @@ def extract_concepto(
     ],
     config: ColumnConfig,
 ) -> str:
+
     """
     Construye el concepto completo de una operación.
 
-    Cada línea se conserva.
-
-    NO intenta extraer todavía:
-        - referencia
-        - beneficiario
-        - RFC
-        - autorización
-        - CLABE
-        - cuenta
-        - sucursal
-        - caja
-        - hora
-
-    Esas funciones quedan preparadas para una siguiente etapa.
+    Todas las líneas se conservan.
     """
 
     values: List[str] = []
@@ -1489,13 +1432,13 @@ def extract_concepto(
 # SALDO ANTERIOR
 # ============================================================
 
-
 def is_saldo_anterior(
     line: List[
         Dict[str, Any]
     ],
     config: ColumnConfig,
 ) -> bool:
+
     """
     Detecta la fila:
 
@@ -1528,16 +1471,14 @@ def is_saldo_anterior(
 # FILTROS DE LÍNEAS
 # ============================================================
 
-
 def should_skip_line(
     line: List[
         Dict[str, Any]
     ],
 ) -> bool:
+
     """
     Determina si una línea debe ignorarse.
-
-    NO elimina líneas internas de movimientos.
     """
 
     if not line:
@@ -1577,7 +1518,6 @@ def should_skip_line(
 # TRUNCAMIENTO OPCIONAL
 # ============================================================
 
-
 def truncate_after_marker(
     words: List[
         Dict[str, Any]
@@ -1592,12 +1532,10 @@ def truncate_after_marker(
 ) -> List[
     Dict[str, Any]
 ]:
+
     """
     Detiene el análisis si aparece una sección posterior
     irrelevante.
-
-    No depende de una utilidad externa para evitar acoplar
-    este parser a filtros de BANAMEX.
     """
 
     if not words:
@@ -1674,8 +1612,8 @@ def truncate_after_marker(
             continue
 
         if (
-            word_top(word)
-            < cutoff_y
+            cutoff_y is not None
+            and word_top(word) < cutoff_y
         ):
 
             result.append(
@@ -1688,7 +1626,6 @@ def truncate_after_marker(
 # ============================================================
 # BLOQUES DE MOVIMIENTOS
 # ============================================================
-
 
 def build_movement_blocks(
     lines: List[
@@ -1704,6 +1641,7 @@ def build_movement_blocks(
         ]
     ]
 ]:
+
     """
     Divide el documento en bloques de movimientos.
 
@@ -1713,19 +1651,6 @@ def build_movement_blocks(
 
     Todo lo posterior hasta encontrar la siguiente fecha
     pertenece al movimiento actual.
-
-    Esto permite manejar:
-
-        línea principal
-        detalle SPEI
-        cliente
-        CLABE
-        referencia
-        beneficiario
-        RFC
-        etc.
-
-    aunque todo eso aparezca en varias líneas.
     """
 
     blocks: List[
@@ -1757,7 +1682,6 @@ def build_movement_blocks(
             )
         )
 
-        # No procesamos páginas previas al bloque de movimientos.
         if page < FIRST_MOVEMENTS_PAGE:
 
             continue
@@ -1794,53 +1718,411 @@ def build_movement_blocks(
 
 
 # ============================================================
-# FUNCIONES PREPARADAS — CONCEPTO
-# ============================================================
-#
-# De momento NO extraemos estas variables.
-#
-# Se deja la API preparada para una siguiente iteración.
-#
+# UTILIDADES DE CONCEPTO
 # ============================================================
 
+def get_concepto_lines(
+    concepto: str,
+) -> List[str]:
 
-def extract_referencia_from_concepto(
+    """
+    Convierte el concepto completo en líneas limpias.
+    """
+
+    if not concepto:
+
+        return []
+
+    return [
+        line.strip()
+        for line in concepto.splitlines()
+        if line.strip()
+    ]
+
+
+def get_first_concepto_line(
     concepto: str,
 ) -> Optional[str]:
-    """
-    PREPARADO.
 
-    Futuramente puede extraer:
-        REFERENCIA:
-        REFERENCIA
-        etc.
     """
+    Devuelve la primera línea no vacía del concepto.
+    """
+
+    lines = get_concepto_lines(
+        concepto
+    )
+
+    return (
+        lines[0]
+        if lines
+        else None
+    )
+
+
+def normalize_concepto_for_search(
+    concepto: str,
+) -> str:
+
+    """
+    Normaliza el concepto para búsquedas mediante regex.
+
+    Convierte saltos de línea y espacios múltiples en un
+    único espacio, sin alterar el concepto original almacenado.
+    """
+
+    return normalize_text(
+        concepto.replace(
+            "\n",
+            " ",
+        )
+    )
+
+
+# ============================================================
+# SPEI RECIBIDO
+# ============================================================
+
+
+def is_spei_recibido_movement(
+    concepto: str,
+) -> bool:
+
+    """
+    Determina si el movimiento corresponde a:
+
+        SPEI RECIBIDO
+
+    Banorte puede colocar antes del texto
+    un identificador de rastreo, por ejemplo:
+
+        062025101259L0CNKLIYC SPEI RECIBIDO, ...
+        5902081890317359 SPEI RECIBIDO, ...
+        HSBC432658 SPEI RECIBIDO, ...
+    """
+
+    first_line = get_first_concepto_line(
+        concepto
+    )
+
+    if not first_line:
+        return False
+
+    return bool(
+        re.search(
+            r"\bSPEI\s+RECIBIDO\b",
+            first_line,
+            re.IGNORECASE,
+        )
+    )
+
+
+def extract_hora_from_spei_recibido(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae la hora de liquidación de un SPEI RECIBIDO.
+
+    Ejemplo:
+
+        HR LIQ: 10:13:04
+
+    Resultado:
+
+        10:13:04
+    """
+
+    if not is_spei_recibido_movement(
+        concepto
+    ):
+
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bHR\s+LIQ\s*:\s*"
+        r"([01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+
+        return None
+
+    return match.group(
+        0
+    ).split(
+        ":",
+        1,
+    )[1].strip()
+
+
+def extract_beneficiario_from_spei_recibido(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae el beneficiario de un SPEI RECIBIDO.
+
+    Estructura:
+
+        DEL CLIENTE
+        DISTRIBUIDORA LIVERPOOL SA DE CV
+        DE LA CLABE ...
+
+    Resultado:
+
+        DISTRIBUIDORA LIVERPOOL SA DE CV
+    """
+
+    if not is_spei_recibido_movement(
+        concepto
+    ):
+
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bDEL\s+CLIENTE\s+"
+        r"(.*?)"
+        r"\s+DE\s+LA\s+CLABE\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+
+        return None
+
+    beneficiario = normalize_text(
+        match.group(1)
+    )
+
+    return beneficiario or None
+
+
+def extract_clabe_beneficiario_from_spei_recibido(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae la CLABE del beneficiario de un SPEI RECIBIDO.
+
+    Estructura:
+
+        DE LA CLABE 646180284630000004
+    """
+
+    if not is_spei_recibido_movement(
+        concepto
+    ):
+
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bDE\s+LA\s+CLABE\s+"
+        r"(\d{18})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+
+        return match.group(
+            1
+        )
+
+    # Fallback por si el PDF introduce texto adicional
+    # alrededor de la etiqueta.
+    match = re.search(
+        r"\bCLABE\s+"
+        r"(\d{18})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+
+        return match.group(
+            1
+        )
 
     return None
 
 
-def extract_autorizacion_from_concepto(
+def extract_rfc_from_spei_recibido(
     concepto: str,
 ) -> Optional[str]:
+
     """
-    PREPARADO.
+    Extrae el RFC del cliente que envía el SPEI.
 
-    Futuramente puede extraer:
-        AUT
-        AUT:
-        AUT-
-        etc.
+    Estructura:
+
+        CON RFC DLI931201MI9
     """
 
-    return None
+    if not is_spei_recibido_movement(
+        concepto
+    ):
 
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bCON\s+RFC\s+"
+        r"([A-Z&Ñ]{3,4}"
+        r"\d{6}"
+        r"[A-Z0-9]{3})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+
+        return None
+
+    return match.group(
+        1
+    ).upper()
+
+
+def extract_concepto_original_from_spei_recibido(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae el concepto escrito por el emisor de un
+    SPEI RECIBIDO.
+
+    Estructura:
+
+        CONCEPTO: DISPOSICION EFE REFERENCIA: 3322101
+
+    Resultado:
+
+        DISPOSICION EFE
+    """
+
+    if not is_spei_recibido_movement(
+        concepto
+    ):
+
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bCONCEPTO\s*:\s*"
+        r"(.*?)"
+        r"\s+REFERENCIA\s*:",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+
+        return None
+
+    concepto_original = normalize_text(
+        match.group(1)
+    )
+
+    return (
+        concepto_original
+        if concepto_original
+        else None
+    )
+
+
+def extract_referencia_from_spei_recibido(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae la referencia de un SPEI RECIBIDO.
+
+    Estructura:
+
+        REFERENCIA: 3322101 CVE RAST:
+
+    Resultado:
+
+        3322101
+    """
+
+    if not is_spei_recibido_movement(
+        concepto
+    ):
+
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    match = re.search(
+        r"\bREFERENCIA\s*:\s*"
+        r"(.*?)"
+        r"\s+CVE\s+RAST\s*:",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+
+        return None
+
+    referencia = normalize_text(
+        match.group(1)
+    )
+
+    return referencia or None
+
+
+# ============================================================
+# SPEI RECIBIDO — DISPATCHERS
+# ============================================================
 
 def extract_beneficiario_from_concepto(
     concepto: str,
 ) -> Optional[str]:
+
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae el beneficiario según el tipo de movimiento.
+
+    Actualmente implementado:
+
+        SPEI RECIBIDO
+
+    Próximamente:
+
+        ORDEN DE PAGO SPEI
     """
+
+    if is_spei_recibido_movement(
+        concepto
+    ):
+
+        return extract_beneficiario_from_spei_recibido(
+            concepto
+        )
 
     return None
 
@@ -1848,24 +2130,72 @@ def extract_beneficiario_from_concepto(
 def extract_cuenta_beneficiario_from_concepto(
     concepto: str,
 ) -> Optional[str]:
-    """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
 
-    Posibles fuentes:
-        CTA/CLABE:
-        CUENTA:
-        CTA:
+    """
+    Extrae la cuenta del beneficiario según el tipo
+    de movimiento.
+
+    Actualmente no aplica para SPEI RECIBIDO.
     """
 
+    # Preparado para futuras variantes.
     return None
 
 
 def extract_clabe_beneficiario_from_concepto(
     concepto: str,
 ) -> Optional[str]:
+
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae la CLABE del beneficiario según el tipo
+    de movimiento.
     """
+
+    if is_spei_recibido_movement(
+        concepto
+    ):
+
+        return extract_clabe_beneficiario_from_spei_recibido(
+            concepto
+        )
+
+    return None
+
+
+def extract_concepto_original_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae el concepto original según el tipo de movimiento.
+    """
+
+    if is_spei_recibido_movement(
+        concepto
+    ):
+
+        return extract_concepto_original_from_spei_recibido(
+            concepto
+        )
+
+    return None
+
+
+def extract_referencia_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    Extrae la referencia según el tipo de movimiento.
+    """
+
+    if is_spei_recibido_movement(
+        concepto
+    ):
+
+        return extract_referencia_from_spei_recibido(
+            concepto
+        )
 
     return None
 
@@ -1873,29 +2203,18 @@ def extract_clabe_beneficiario_from_concepto(
 def extract_rfc_from_concepto(
     concepto: str,
 ) -> Optional[str]:
-    """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
-    """
 
-    return None
-
-
-def extract_sucursal_from_concepto(
-    concepto: str,
-) -> Optional[str]:
     """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    Extrae el RFC según el tipo de movimiento.
     """
 
-    return None
+    if is_spei_recibido_movement(
+        concepto
+    ):
 
-
-def extract_caja_from_concepto(
-    concepto: str,
-) -> Optional[str]:
-    """
-    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
-    """
+        return extract_rfc_from_spei_recibido(
+            concepto
+        )
 
     return None
 
@@ -1903,6 +2222,114 @@ def extract_caja_from_concepto(
 def extract_hora_from_concepto(
     concepto: str,
 ) -> Optional[str]:
+
+    """
+    Extrae la hora de operación según el tipo de movimiento.
+    """
+
+    if is_spei_recibido_movement(
+        concepto
+    ):
+
+        return extract_hora_from_spei_recibido(
+            concepto
+        )
+
+    return None
+
+
+# ============================================================
+# FUNCIONES PREPARADAS PARA FUTURAS VARIANTES
+# ============================================================
+
+def is_orden_pago_spei_movement(
+    concepto: str,
+) -> bool:
+
+    """
+    Determina si el movimiento corresponde a:
+
+        ORDEN DE PAGO SPEI
+
+    Se deja preparado para una siguiente etapa.
+    """
+
+    first_line = get_first_concepto_line(
+        concepto
+    )
+
+    if not first_line:
+
+        return False
+
+    return bool(
+        re.match(
+            r"^ORDEN\s+DE\s+PAGO\s+SPEI\b",
+            first_line,
+            re.IGNORECASE,
+        )
+    )
+
+
+def extract_beneficiario_from_orden_pago_spei(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_clabe_beneficiario_from_orden_pago_spei(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_rfc_from_orden_pago_spei(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_hora_from_orden_pago_spei(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_concepto_original_from_orden_pago_spei(
+    concepto: str,
+) -> Optional[str]:
+
+    """
+    PREPARADO PARA FUTURA IMPLEMENTACIÓN.
+    """
+
+    return None
+
+
+def extract_referencia_from_orden_pago_spei(
+    concepto: str,
+) -> Optional[str]:
+
     """
     PREPARADO PARA FUTURA IMPLEMENTACIÓN.
     """
@@ -1914,19 +2341,16 @@ def extract_hora_from_concepto(
 # TIPO DE OPERACIÓN
 # ============================================================
 
-
 def extract_tipo_operacion(
     deposito: float,
     retiro: float,
 ) -> Optional[str]:
+
     """
     Determina el tipo directamente desde la columna monetaria.
 
-    BANORTE tiene una ventaja importante:
-    no necesitamos inferirlo inicialmente desde el concepto.
-
-        deposito > 0  -> ABONO
-        retiro > 0    -> CARGO
+        deposito > 0 -> ABONO
+        retiro > 0   -> CARGO
     """
 
     if retiro > 0:
@@ -1944,7 +2368,6 @@ def extract_tipo_operacion(
 # CONSTRUCCIÓN DEL MOVIMIENTO
 # ============================================================
 
-
 def build_movimiento(
     block: List[
         List[
@@ -1953,6 +2376,7 @@ def build_movimiento(
     ],
     config: ColumnConfig,
 ) -> Optional[Movimiento]:
+
     """
     Construye un Movimiento a partir de un bloque espacial.
     """
@@ -2020,25 +2444,15 @@ def build_movimiento(
     )
 
     # --------------------------------------------------------
-    # VARIABLES PREPARADAS
+    # CAMPOS DERIVADOS DEL CONCEPTO
     # --------------------------------------------------------
 
-    referencia = (
-        extract_referencia_from_concepto(
-            concepto
-        )
+    referencia = extract_referencia_from_concepto(
+        concepto
     )
 
-    autorizacion = (
-        extract_autorizacion_from_concepto(
-            concepto
-        )
-    )
-
-    beneficiario = (
-        extract_beneficiario_from_concepto(
-            concepto
-        )
+    beneficiario = extract_beneficiario_from_concepto(
+        concepto
     )
 
     cuenta_beneficiario = (
@@ -2053,28 +2467,18 @@ def build_movimiento(
         )
     )
 
-    rfc = (
-        extract_rfc_from_concepto(
+    concepto_original = (
+        extract_concepto_original_from_concepto(
             concepto
         )
     )
 
-    sucursal = (
-        extract_sucursal_from_concepto(
-            concepto
-        )
+    rfc = extract_rfc_from_concepto(
+        concepto
     )
 
-    caja = (
-        extract_caja_from_concepto(
-            concepto
-        )
-    )
-
-    hora = (
-        extract_hora_from_concepto(
-            concepto
-        )
+    hora = extract_hora_from_concepto(
+        concepto
     )
 
     # --------------------------------------------------------
@@ -2125,7 +2529,7 @@ def build_movimiento(
         ),
 
         autorizacion=(
-            autorizacion
+            None
         ),
 
         beneficiario=(
@@ -2145,11 +2549,11 @@ def build_movimiento(
         ),
 
         sucursal=(
-            sucursal
+            None
         ),
 
         caja=(
-            caja
+            None
         ),
 
         hora_operacion=(
@@ -2165,8 +2569,9 @@ def build_movimiento(
         ),
 
         concepto_original=(
-            concepto
+            concepto_original
         ),
+
     )
 
 
@@ -2174,12 +2579,12 @@ def build_movimiento(
 # FUNCIÓN PRINCIPAL PÚBLICA
 # ============================================================
 
-
 def extract_movimientos_words(
     words: List[
         Dict[str, Any]
     ],
 ) -> List[Movimiento]:
+
     """
     Extractor espacial principal de movimientos BANORTE.
     """
@@ -2187,7 +2592,6 @@ def extract_movimientos_words(
     if not words:
 
         return []
-
 
     # --------------------------------------------------------
     # ELIMINAR PIE DE PAGINA
@@ -2197,7 +2601,6 @@ def extract_movimientos_words(
         words
     )
 
-
     # --------------------------------------------------------
     # ELIMINAR TODO DESPUÉS DEL ULTIMO MOVIMIENTO
     # --------------------------------------------------------
@@ -2205,7 +2608,6 @@ def extract_movimientos_words(
     words = remove_after_last_movement(
         words
     )
-
 
     # --------------------------------------------------------
     # 1. LIMITAR SECCIONES POSTERIORES
