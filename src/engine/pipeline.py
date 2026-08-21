@@ -34,6 +34,7 @@ class OCRNotImplementedError(Exception):
 # PROCESAMIENTO DE ESTADOS DE CUENTA
 # ============================================================
 
+
 def process_bank_statements(
     pdf_paths: list[str],
     file_names: list[str] | None = None,
@@ -62,6 +63,10 @@ def process_bank_statements(
         └── PDF IMAGEN
                 ↓
         OCR pendiente
+                ↓
+        ProcessingResult individual
+                ↓
+        Continúa con el siguiente archivo
 
     ReaderManager proporciona actualmente:
 
@@ -77,6 +82,16 @@ def process_bank_statements(
     results = []
 
     for index, pdf_path in enumerate(pdf_paths):
+
+        # =====================================================
+        # NOMBRE DEL ARCHIVO
+        # =====================================================
+
+        file_name = (
+            file_names[index]
+            if file_names is not None
+            else Path(pdf_path).name
+        )
 
         # =====================================================
         # LECTURA DEL DOCUMENTO
@@ -101,16 +116,36 @@ def process_bank_statements(
         # =====================================================
         # CASO: PDF IMAGEN
         # =====================================================
+        #
+        # IMPORTANTE:
+        #
+        # NO se lanza la excepción hacia afuera de
+        # process_bank_statements().
+        #
+        # El problema original era que el "raise" abortaba
+        # todo el procesamiento de la lista de archivos.
+        #
+        # Ahora se genera un resultado individual para este
+        # archivo y el ciclo continúa con el siguiente PDF.
+        #
+        # =====================================================
 
         if document_type == DocumentType.PDF_IMAGEN:
 
-            raise OCRNotImplementedError(
-                f"El archivo '{Path(pdf_path).name}' "
-                "fue detectado como un PDF basado en imagen "
-                "o escaneado. "
-                "La extracción mediante OCR todavía está "
-                "pendiente de implementación."
+            result = ProcessingResult(
+                file_name=file_name,
+                bank_key="imagen_no_procesada",
+                estado_cuenta=None,
+                raw_text=document.raw_text,
+                normalized_text=document.normalized_text,
+                validaciones=[],
             )
+
+            results.append(
+                result
+            )
+
+            continue
 
         # =====================================================
         # CASO: PDF DIGITAL
@@ -157,11 +192,7 @@ def process_bank_statements(
         # =====================================================
 
         result = ProcessingResult(
-            file_name=(
-                file_names[index]
-                if file_names is not None
-                else Path(pdf_path).name
-            ),
+            file_name=file_name,
 
             bank_key=bank_key,
 

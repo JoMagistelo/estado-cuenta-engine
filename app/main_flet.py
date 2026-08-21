@@ -275,7 +275,11 @@ def main(page: ft.Page):
     # FUNCIÓN: TABLA DE MOVIMIENTOS
     # ========================================================
 
-    def create_movements_table(movimientos, fecha_corte_documento: str | None = None) -> ft.Column:
+    def create_movements_table(
+        movimientos,
+        fecha_corte_documento: str | None = None,
+        numero_cuenta_documento: str | None = None,
+    ) -> ft.Column:
         """
         Crea una tabla de datos (DataTable) para mostrar los movimientos.
 
@@ -292,8 +296,9 @@ def main(page: ft.Page):
         # Define el orden y las columnas que se intentarán mostrar.
         # "numero_movimiento" es un campo virtual que generaremos aquí mismo.
         columnas_mostrar = [
-            "numero_movimiento",
             "fecha_corte",
+            "numero_cuenta",
+            "numero_movimiento",
             "fecha_operacion",
             "fecha_liquidacion",
             "concepto",
@@ -323,6 +328,8 @@ def main(page: ft.Page):
                     columnas_existentes.append(columna)
                 elif columna == "fecha_corte" and fecha_corte_documento:
                     columnas_existentes.append(columna)
+                elif columna == "numero_cuenta" and numero_cuenta_documento:
+                    columnas_existentes.append(columna)
                 elif hasattr(movimiento_prueba, columna):
                     columnas_existentes.append(columna)
 
@@ -331,6 +338,7 @@ def main(page: ft.Page):
         for columna in columnas_existentes:
             nombres = {
                 "fecha_corte": "Fecha Corte",
+                "numero_cuenta": "Número de Cuenta",
                 "fecha_operacion": "Fecha Operación",
                 "fecha_liquidacion": "Fecha Liquidación",
                 "concepto": "Concepto",
@@ -376,6 +384,8 @@ def main(page: ft.Page):
                     value = index
                 elif columna == "fecha_corte":
                     value = fecha_corte_documento
+                elif columna == "numero_cuenta":
+                    value = numero_cuenta_documento
                 else:
                     value = getattr(
                         movimiento,
@@ -1000,6 +1010,7 @@ def main(page: ft.Page):
                 create_movements_table(
                     movimientos,
                     fecha_corte_documento=dc.fecha_corte if dc else None,
+                    numero_cuenta_documento=dc.numero_cuenta if dc else None,
                 )
             )
 
@@ -1325,7 +1336,7 @@ def main(page: ft.Page):
                             weight=ft.FontWeight.W_500,
                         ),
                         ft.Text(
-                            "Bancos habilitados (v1.0): BBVA. Próximamente (v1.1): Banamex, HSBC, Banorte y Estados de Cuenta Escaneados (OCR).",
+                            "Bancos habilitados (v1.0.1): BBVA, Banorte y Banamex Próximamente (v1.0.2): Estados de cuenta escaneados de: BBVA, Banamex, HSBC.",
                             size=10,
                             weight=ft.FontWeight.W_500,
                         ),
@@ -1342,7 +1353,7 @@ def main(page: ft.Page):
                     size=32,
                     weight=ft.FontWeight.BOLD,
                 ),
-                ft.Text("Versión 1.0"),
+                ft.Text("Versión 1.0.1"),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         ),

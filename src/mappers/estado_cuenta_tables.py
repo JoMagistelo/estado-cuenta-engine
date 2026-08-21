@@ -211,7 +211,10 @@ def estado_cuenta_to_tables(
                 "id_estado": estado_id,
                 "Nombre del Archivo": result.file_name,
                 "Banco": result.bank_key,
+
                 "Fecha de Corte": dc.fecha_corte,
+
+                "Número de Cuenta": dc.numero_cuenta,
 
                 "No. de Movimiento":
                     numero,
