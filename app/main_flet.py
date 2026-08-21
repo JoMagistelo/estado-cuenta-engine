@@ -1336,7 +1336,7 @@ def main(page: ft.Page):
                             weight=ft.FontWeight.W_500,
                         ),
                         ft.Text(
-                            "Bancos habilitados (v1.0.1): BBVA, Banorte y Banamex Próximamente (v1.0.2): Estados de cuenta escaneados de: BBVA, Banamex, HSBC.",
+                            "Bancos habilitados (v1.0.2): BBVA, Banorte y Banamex Próximamente (v1.2.0): Estados de cuenta escaneados de: BBVA, Banamex, HSBC.",
                             size=10,
                             weight=ft.FontWeight.W_500,
                         ),
@@ -1353,7 +1353,7 @@ def main(page: ft.Page):
                     size=32,
                     weight=ft.FontWeight.BOLD,
                 ),
-                ft.Text("Versión 1.0.1"),
+                ft.Text("Versión 1.0.2"),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         ),
