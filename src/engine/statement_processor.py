@@ -63,18 +63,7 @@ def process_single_statement(
         )
 
     # ========================================================
-    # PARSER
-    # ========================================================
-    #
-    # El parser recibe el DocumentData completo.
-    #
-    # Esto permite que los parsers actuales utilicen:
-    #
-    #   document.raw_text
-    #   document.normalized_text
-    #   document.tables
-    #   document.spatial_words
-    #
+    # PARSER: El parser recibe el DocumentData completo.
     # ========================================================
 
     estado = parser_fn(
