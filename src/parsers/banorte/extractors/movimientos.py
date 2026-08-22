@@ -977,6 +977,95 @@ def words_in_column(
     return result
 
 
+# ============================================================
+# COLUMNA DE TEXTO — SOLAPAMIENTO HORIZONTAL
+# ============================================================
+
+def word_overlaps_text_column(
+    word: Dict[str, Any],
+    column: tuple[
+        float,
+        float,
+    ],
+) -> bool:
+    """
+    Determina si una palabra tiene solapamiento horizontal
+    con una columna de texto.
+
+    Para la extracción de conceptos no usamos el centro de
+    la palabra, porque Banorte puede unir físicamente la fecha
+    con el primer fragmento del concepto:
+
+        06-JUN-25SALDO
+        06-JUN-25Retiro
+        06-JUN-25Pago
+
+    Aunque el centro de toda la palabra quede dentro de la
+    columna FECHA, una parte del texto puede extenderse hacia
+    la columna DESCRIPCIÓN.
+
+    Se considera perteneciente a la columna si existe
+    cualquier solapamiento horizontal real.
+    """
+
+    x0 = word_x0(
+        word
+    )
+
+    x1 = word_x1(
+        word
+    )
+
+    xmin, xmax = column
+
+    return (
+        min(
+            x1,
+            xmax,
+        )
+        > max(
+            x0,
+            xmin,
+        )
+    )
+
+
+def words_in_text_column(
+    line: List[
+        Dict[str, Any]
+    ],
+    column: tuple[
+        float,
+        float,
+    ],
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Devuelve las palabras que tienen solapamiento horizontal
+    con una columna de texto.
+
+    A diferencia de words_in_column(), aquí no usamos el
+    centro de la palabra.
+    """
+
+    result = [
+        word
+        for word in line
+        if word_overlaps_text_column(
+            word,
+            column,
+        )
+    ]
+
+    result.sort(
+        key=word_x0
+    )
+
+    return result
+
+
+
 def column_text(
     line: List[
         Dict[str, Any]
@@ -1342,12 +1431,25 @@ def extract_concepto_from_line(
     config: ColumnConfig,
     first_line: bool = False,
 ) -> str:
-
     """
     Extrae la descripción de una línea.
+
+    Para el concepto se utiliza solapamiento horizontal y no
+    el centro de la palabra.
+
+    Esto permite recuperar correctamente casos donde Banorte
+    une físicamente la fecha con el primer fragmento del
+    concepto, por ejemplo:
+
+        06-JUN-25SALDO
+        06-JUN-25Retiro
+        06-JUN-25Pago
+
+    En esos casos remove_date_prefix() elimina únicamente
+    la fecha y conserva el texto real del concepto.
     """
 
-    selected = words_in_column(
+    selected = words_in_text_column(
         line,
         config.descripcion,
     )
@@ -1364,7 +1466,6 @@ def extract_concepto_from_line(
         )
 
         if not text:
-
             continue
 
         if first_line:
@@ -1376,7 +1477,6 @@ def extract_concepto_from_line(
             first_line = False
 
             if not text:
-
                 continue
 
         values.append(
@@ -1816,49 +1916,95 @@ def is_spei_recibido_movement(
     )
 
 
+
 def extract_hora_from_spei_recibido(
     concepto: str,
 ) -> Optional[str]:
-
     """
     Extrae la hora de liquidación de un SPEI RECIBIDO.
 
-    Ejemplo:
+    Formatos soportados:
 
-        HR LIQ: 10:13:04
+        HR LIQ: 10:22:45
+        HR LIQ: 07:37:35
+        HR LIQ: 180246
 
-    Resultado:
+    En el último caso se interpreta como:
 
-        10:13:04
+        HHMMSS
+
+    y se devuelve:
+
+        HH:MM:SS
     """
 
     if not is_spei_recibido_movement(
         concepto
     ):
-
         return None
 
     text = normalize_concepto_for_search(
         concepto
     )
 
+    # --------------------------------------------------------
+    # FORMATO NORMAL
+    #
+    # 10:22:45
+    # --------------------------------------------------------
+
     match = re.search(
         r"\bHR\s+LIQ\s*:\s*"
-        r"([01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?",
+        r"((?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)",
         text,
         re.IGNORECASE,
     )
 
-    if not match:
+    if match:
+        return match.group(1).strip()
 
-        return None
+    # --------------------------------------------------------
+    # FORMATO COMPACTO
+    #
+    # 180246
+    #
+    # HHMMSS
+    # --------------------------------------------------------
 
-    return match.group(
-        0
-    ).split(
-        ":",
-        1,
-    )[1].strip()
+    match = re.search(
+        r"\bHR\s+LIQ\s*:\s*"
+        r"(\d{6})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+
+        value = match.group(1)
+
+        hours = value[0:2]
+        minutes = value[2:4]
+        seconds = value[4:6]
+
+        try:
+            h = int(hours)
+            m = int(minutes)
+            s = int(seconds)
+        except ValueError:
+            return None
+
+        if (
+            0 <= h <= 23
+            and 0 <= m <= 59
+            and 0 <= s <= 59
+        ):
+            return (
+                f"{h:02d}:"
+                f"{m:02d}:"
+                f"{s:02d}"
+            )
+
+    return None
 
 
 def extract_beneficiario_from_spei_recibido(
@@ -2239,29 +2385,48 @@ def extract_referencia_from_concepto(
 def extract_rfc_from_concepto(
     concepto: str,
 ) -> Optional[str]:
+    """
+    Extrae el RFC según el tipo de movimiento.
 
+    Prioridad:
+
+        1. SPEI RECIBIDO
+        2. ORDEN DE PAGO SPEI
+        3. MOVIMIENTO GENERAL
+
+    Esto evita que el extractor general interfiera con los
+    formatos específicos ya implementados.
     """
-    Extrae el RFC según el tipo
-    de movimiento.
-    """
+
+    # --------------------------------------------------------
+    # SPEI RECIBIDO
+    # --------------------------------------------------------
 
     if is_spei_recibido_movement(
         concepto
     ):
-
         return extract_rfc_from_spei_recibido(
             concepto
         )
 
+    # --------------------------------------------------------
+    # ORDEN DE PAGO SPEI
+    # --------------------------------------------------------
+
     if is_orden_pago_spei_movement(
         concepto
     ):
-
         return extract_rfc_from_orden_pago_spei(
             concepto
         )
 
-    return None
+    # --------------------------------------------------------
+    # MOVIMIENTO GENERAL
+    # --------------------------------------------------------
+
+    return extract_rfc_from_general_concepto(
+        concepto
+    )
 
 
 def extract_hora_from_concepto(
@@ -2292,7 +2457,6 @@ def extract_hora_from_concepto(
     return None
 
 
-
 # ============================================================
 # ORDEN DE PAGO SPEI
 # ============================================================
@@ -2300,13 +2464,17 @@ def extract_hora_from_concepto(
 def is_orden_pago_spei_movement(
     concepto: str,
 ) -> bool:
-
     """
     Determina si el movimiento corresponde a:
 
         ORDEN DE PAGO SPEI
 
-    El movimiento comienza directamente con esta expresión.
+    El texto puede contener un pequeño prefijo residual
+    antes de la expresión debido a la extracción espacial.
+
+    Lo importante es detectar de forma robusta la firma:
+
+        ORDEN DE PAGO SPEI
     """
 
     first_line = get_first_concepto_line(
@@ -2316,10 +2484,14 @@ def is_orden_pago_spei_movement(
     if not first_line:
         return False
 
+    text = normalize_text(
+        first_line
+    )
+
     return bool(
-        re.match(
-            r"^ORDEN\s+DE\s+PAGO\s+SPEI\b",
-            first_line,
+        re.search(
+            r"\bORDEN\s+DE\s+PAGO\s+SPEI\b",
+            text,
             re.IGNORECASE,
         )
     )
@@ -2328,7 +2500,6 @@ def is_orden_pago_spei_movement(
 def extract_referencia_from_orden_pago_spei(
     concepto: str,
 ) -> Optional[str]:
-
     """
     Extrae la referencia de un movimiento
     ORDEN DE PAGO SPEI.
@@ -2355,7 +2526,7 @@ def extract_referencia_from_orden_pago_spei(
         return None
 
     match = re.search(
-        r"^ORDEN\s+DE\s+PAGO\s+SPEI\s+"
+        r"\bORDEN\s+DE\s+PAGO\s+SPEI\s+"
         r"([A-Z0-9]+)"
         r"\s*=?\s*REFERENCIA\b",
         first_line,
@@ -2365,13 +2536,14 @@ def extract_referencia_from_orden_pago_spei(
     if not match:
         return None
 
-    return match.group(1).strip() or None
+    return match.group(
+        1
+    ).strip() or None
 
 
 def extract_clabe_beneficiario_from_orden_pago_spei(
     concepto: str,
 ) -> Optional[str]:
-
     """
     Extrae la CLABE/cuenta indicada después de:
 
@@ -2392,39 +2564,56 @@ def extract_clabe_beneficiario_from_orden_pago_spei(
     )
 
     match = re.search(
-        r"\bCTA\s*/\s*CLABE\s*:\s*"
+        r"\bCTA/CLABE\s*:\s*"
         r"(\d{16,18})\b",
         text,
         re.IGNORECASE,
     )
 
     if not match:
+
+        # Fallback por si el PDF introduce
+        # espacios alrededor de la diagonal.
+
+        match = re.search(
+            r"\bCTA\s*/\s*CLABE\s*:\s*"
+            r"(\d{16,18})\b",
+            text,
+            re.IGNORECASE,
+        )
+
+    if not match:
         return None
 
-    return match.group(1).strip() or None
+    return match.group(
+        1
+    ).strip() or None
 
 
 def extract_beneficiario_from_orden_pago_spei(
     concepto: str,
 ) -> Optional[str]:
-
     """
     Extrae el beneficiario después de:
 
         BENEF:
 
-    El valor puede ser:
+    Ejemplos:
 
-        NO INGRESADO
-        NO INGRESAD
-        Ro
-        Oma
-        Reward
-        etc.
+        BENEF:NO INGRESADO
+        BENEF:Oma
+        BENEF:Reward
 
-    Se conserva el texto hasta:
+    Cuando existe:
 
         (DATO NO VERIF POR ESTA INST)
+
+    se toma todo lo anterior.
+
+    También existe fallback hasta:
+
+        , Pago
+        , Pgo
     """
 
     if not is_orden_pago_spei_movement(
@@ -2436,10 +2625,14 @@ def extract_beneficiario_from_orden_pago_spei(
         concepto
     )
 
+    # --------------------------------------------------------
+    # CASO PRINCIPAL
+    # --------------------------------------------------------
+
     match = re.search(
         r"\bBENEF\s*:\s*"
         r"(.*?)"
-        r"\s*\(\s*DATO\s+NO\s+VERIF\s+POR\s+ESTA\s+INST\s*\)",
+        r"\s*\(?\s*DATO\s+NO\s+VERIF\s+POR\s+ESTA\s+INST\s*\)?",
         text,
         re.IGNORECASE,
     )
@@ -2453,11 +2646,7 @@ def extract_beneficiario_from_orden_pago_spei(
         return beneficiario or None
 
     # --------------------------------------------------------
-    # Fallback:
-    #
-    # Si por alguna razón no aparece la leyenda
-    # "(DATO NO VERIF POR ESTA INST)", tomamos el texto
-    # hasta ", Pago" / ", Pgo".
+    # FALLBACK
     # --------------------------------------------------------
 
     match = re.search(
@@ -2480,7 +2669,6 @@ def extract_beneficiario_from_orden_pago_spei(
 def extract_rfc_from_orden_pago_spei(
     concepto: str,
 ) -> Optional[str]:
-
     """
     Extrae el RFC de un movimiento ORDEN DE PAGO SPEI.
 
@@ -2504,7 +2692,7 @@ def extract_rfc_from_orden_pago_spei(
 
     match = re.search(
         r"\bRFC\s*:\s*"
-        r"([A-Z&Ñ0-9]+(?:\s+[A-Z&Ñ0-9]+)*)",
+        r"([A-Z&Ñ0-9]+(?:\s+[A-Z&Ñ0-9]+)?)\b",
         text,
         re.IGNORECASE,
     )
@@ -2526,20 +2714,23 @@ def extract_rfc_from_orden_pago_spei(
     }:
         return None
 
-    return rfc.upper()
+    return re.sub(
+        r"\s+",
+        "",
+        rfc,
+    ).upper()
 
 
 def extract_hora_from_orden_pago_spei(
     concepto: str,
 ) -> Optional[str]:
-
     """
     Extrae la hora de liquidación.
 
     Ejemplos:
 
         HORA LIQ: 07:37:35
-        HORA   LIQ: 06:32:05
+        HORA LIQ: 06:32:05
     """
 
     if not is_orden_pago_spei_movement(
@@ -2561,13 +2752,14 @@ def extract_hora_from_orden_pago_spei(
     if not match:
         return None
 
-    return match.group(1).strip()
+    return match.group(
+        1
+    ).strip()
 
 
 def extract_concepto_original_from_orden_pago_spei(
     concepto: str,
 ) -> Optional[str]:
-
     """
     Extrae el concepto original del pago.
 
@@ -2609,6 +2801,97 @@ def extract_concepto_original_from_orden_pago_spei(
     )
 
     return concepto_original or None
+
+
+# ============================================================
+# RFC — MOVIMIENTO GENERAL
+# ============================================================
+
+
+def extract_rfc_from_general_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    Extrae el RFC de movimientos generales.
+
+    Patrones:
+
+        RFC:NWM 9709244W4
+        RFC:MAG 2105031W3
+        RFC:DLI 931201MI9
+
+    También:
+
+        AL RFC BMN930209927
+    """
+
+    if not concepto:
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    # --------------------------------------------------------
+    # CASO:
+    #
+    # RFC:NWM 9709244W4
+    # RFC:MAG 2105031W3
+    # RFC:DLI 931201MI9
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\bRFC\s*:\s*"
+        r"([A-Z&Ñ]{3,4}"
+        r"\s*"
+        r"\d{6}"
+        r"\s*"
+        r"[A-Z0-9]{2,3})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+
+        rfc = re.sub(
+            r"\s+",
+            "",
+            match.group(1),
+        ).upper()
+
+        if rfc:
+            return rfc
+
+    # --------------------------------------------------------
+    # CASO:
+    #
+    # AL RFC BMN930209927
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\bAL\s+RFC\s+"
+        r"([A-Z&Ñ]{3,4}"
+        r"\s*"
+        r"\d{6}"
+        r"\s*"
+        r"[A-Z0-9]{2,3})\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+
+        rfc = re.sub(
+            r"\s+",
+            "",
+            match.group(1),
+        ).upper()
+
+        if rfc:
+            return rfc
+
+    return None
+
 
 
 
