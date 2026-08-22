@@ -6,7 +6,7 @@ from readers.models import DocumentData
 
 from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
-
+from .tesseract_pdf_reader import TesseractPDFReader
 
 # ============================================================
 # RESULTADO DE LA PRIMERA ETAPA
@@ -161,6 +161,16 @@ class ReaderManager:
         file_path = Path(file_path)
 
         return PDFWordReader.read(
+            file_path,
+            start_page=start_page,
+        )
+
+    @staticmethod
+    def read_ocr(
+        file_path: str | Path,
+        start_page: int = 0,
+    ) -> DocumentData:
+        return TesseractPDFReader.read(
             file_path,
             start_page=start_page,
         )

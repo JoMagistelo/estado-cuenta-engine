@@ -14,12 +14,6 @@ from detectors.document_type_detector import (
 from validators.movimiento_validator import validar_movimientos
 
 
-class OCRNotImplementedError(Exception):
-    """Señala que el documento requiere OCR y aún no hay OCR disponible."""
-
-    pass
-
-
 def process_bank_statements(
     pdf_paths: list[str],
     file_names: list[str] | None = None,
@@ -71,44 +65,34 @@ def process_bank_statements(
             document_type = detect_document_type(document)
 
         if document_type == DocumentType.PDF_IMAGEN:
-            results.append(
-                ProcessingResult(
-                    file_name=file_name,
-                    bank_key="imagen_no_procesada",
-                    estado_cuenta=None,
-                    raw_text=document.raw_text,
-                    normalized_text=document.normalized_text,
-                    validaciones=[],
-                )
+            document = ReaderManager.read_ocr(
+                pdf_path,
+                start_page=0,
             )
-            continue
-
-        initial_empty_pages = text_stage.initial_empty_pages
-
-        if initial_empty_pages == 0:
-            # Ya tenemos el texto correcto desde start_page=0.
-            # Solo falta extraer la estructura espacial.
-            if spatial_words is None:
-                spatial_words = ReaderManager.read_spatial_words(
-                    pdf_path,
-                    start_page=0,
-                )
-
-            document.spatial_words = spatial_words
 
         else:
-            # Repetimos únicamente la etapa de texto desde la primera
-            # página con contenido para conservar la numeración lógica.
-            logical_text_stage = ReaderManager.read_text_stage(
-                pdf_path,
-                start_page=initial_empty_pages,
-            )
+            initial_empty_pages = text_stage.initial_empty_pages
 
-            document = logical_text_stage.document
-            document.spatial_words = ReaderManager.read_spatial_words(
-                pdf_path,
-                start_page=initial_empty_pages,
-            )
+            if initial_empty_pages == 0:
+                if spatial_words is None:
+                    spatial_words = ReaderManager.read_spatial_words(
+                        pdf_path,
+                        start_page=0,
+                    )
+
+                document.spatial_words = spatial_words
+
+            else:
+                logical_text_stage = ReaderManager.read_text_stage(
+                    pdf_path,
+                    start_page=initial_empty_pages,
+                )
+
+                document = logical_text_stage.document
+                document.spatial_words = ReaderManager.read_spatial_words(
+                    pdf_path,
+                    start_page=initial_empty_pages,
+                )
 
         bank_key = identify_bank_key(document.raw_text)
 
