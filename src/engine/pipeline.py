@@ -18,36 +18,10 @@ def process_bank_statements(
     pdf_paths: list[str],
     file_names: list[str] | None = None,
 ) -> list[ProcessingResult]:
-    """
-    Procesa múltiples estados de cuenta.
-
-    El pipeline realiza una primera lectura únicamente de texto.
-    Las palabras espaciales se extraen solo cuando el documento
-    ha sido identificado como PDF digital o cuando son necesarias
-    como respaldo para clasificar una extracción de texto dudosa.
-
-    El PDF original nunca se modifica ni se reemplaza.
-
-    La identificación del banco utiliza:
-
-        1. CLABE
-        2. Nombre del archivo como fallback
-
-    Cuando ambas fuentes están disponibles, la CLABE tiene prioridad.
-
-    Además, cada resultado registra el método utilizado:
-
-        - "Digital"
-        - "OCR"
-    """
 
     results: list[ProcessingResult] = []
 
     for index, pdf_path in enumerate(pdf_paths):
-
-        # ========================================================
-        # NOMBRE DEL ARCHIVO
-        # ========================================================
 
         file_name = (
             file_names[index]
@@ -55,9 +29,9 @@ def process_bank_statements(
             else Path(pdf_path).name
         )
 
-        # ========================================================
-        # PRIMERA ETAPA: TEXTO
-        # ========================================================
+        # ====================================================
+        # 1. SOLO TEXTO
+        # ====================================================
 
         text_stage = ReaderManager.read_text_stage(
             pdf_path,
@@ -65,53 +39,18 @@ def process_bank_statements(
         )
 
         document = text_stage.document
-        spatial_words: list[dict] | None = None
-
-        document_type = detect_document_type(
-            document
-        )
-
-        # ========================================================
-        # FALLBACK ESPACIAL
-        # ========================================================
-
-        if (
-            document_type == DocumentType.PDF_IMAGEN
-            and text_stage.has_extractable_text
-        ):
-
-            spatial_words = ReaderManager.read_spatial_words(
-                pdf_path,
-                start_page=0,
-            )
-
-            document.spatial_words = spatial_words
-
-            document_type = detect_document_type(
-                document
-            )
-
-        # ========================================================
-        # MÉTODO DE PROCESAMIENTO
-        # ========================================================
-        #
-        # Esta variable representa el método realmente utilizado
-        # para producir el DocumentData que llegará al parser.
-        #
-        # PDF_IMAGEN confirmado -> OCR
-        # cualquier otro caso   -> Digital
-        #
-        # El fallback espacial NO convierte el documento en OCR:
-        # sigue siendo un PDF digital.
-        # ========================================================
-
         processing_method = "Digital"
 
-        # ========================================================
-        # OCR
-        # ========================================================
+        # ====================================================
+        # 2. ¿HAY TEXTO EXTRAÍBLE?
+        # ====================================================
 
-        if document_type == DocumentType.PDF_IMAGEN:
+        if not text_stage.has_extractable_text:
+
+            # ------------------------------------------------
+            # SIN TEXTO
+            # → OCR DIRECTO
+            # ------------------------------------------------
 
             processing_method = "OCR"
 
@@ -120,30 +59,95 @@ def process_bank_statements(
                 start_page=0,
             )
 
-        # ========================================================
-        # PDF DIGITAL
-        # ========================================================
-
         else:
+
+            # ------------------------------------------------
+            # HAY TEXTO
+            # → VERIFICAR SU CALIDAD
+            # ------------------------------------------------
+
+            document_type = detect_document_type(
+                document
+            )
+
+            # =================================================
+            # 3A. TEXTO ÚTIL
+            # =================================================
+
+            if (
+                document_type
+                == DocumentType.PDF_DIGITAL
+            ):
+
+                document.spatial_words = (
+                    ReaderManager.read_spatial_words(
+                        pdf_path,
+                        start_page=0,
+                    )
+                )
+
+            # =================================================
+            # 3B. TEXTO SOSPECHOSO
+            # =================================================
+
+            else:
+
+                spatial_words = (
+                    ReaderManager.read_spatial_words(
+                        pdf_path,
+                        start_page=0,
+                    )
+                )
+
+                document.spatial_words = spatial_words
+
+                document_type = detect_document_type(
+                    document
+                )
+
+                # ------------------------------------------------
+                # Las spatial_words son válidas:
+                # → DIGITAL
+                #
+                # Las spatial_words también son basura:
+                # → OCR
+                # ------------------------------------------------
+
+                if (
+                    document_type
+                    == DocumentType.PDF_IMAGEN
+                ):
+
+                    processing_method = "OCR"
+
+                    document = ReaderManager.read_ocr(
+                        pdf_path,
+                        start_page=0,
+                    )
+
+                # ------------------------------------------------
+                # Si sigue siendo DIGITAL, document ya contiene
+                # las spatial_words que acabamos de extraer.
+                # NO las volvemos a leer.
+                # ------------------------------------------------
+
+        # ====================================================
+        # 4. AJUSTE POR PÁGINAS INICIALES VACÍAS
+        # ====================================================
+        #
+        # Esto solamente aplica al camino digital.
+        #
+        # No se ejecuta para OCR.
+        #
+        # ====================================================
+
+        if processing_method == "Digital":
 
             initial_empty_pages = (
                 text_stage.initial_empty_pages
             )
 
-            if initial_empty_pages == 0:
-
-                if spatial_words is None:
-
-                    spatial_words = (
-                        ReaderManager.read_spatial_words(
-                            pdf_path,
-                            start_page=0,
-                        )
-                    )
-
-                document.spatial_words = spatial_words
-
-            else:
+            if initial_empty_pages != 0:
 
                 logical_text_stage = (
                     ReaderManager.read_text_stage(
@@ -163,9 +167,9 @@ def process_bank_statements(
                     )
                 )
 
-        # ========================================================
-        # DETECCIÓN DE BANCO
-        # ========================================================
+        # ====================================================
+        # 5. DETECCIÓN DE BANCO
+        # ====================================================
 
         bank_key = identify_bank_key(
             raw_text=document.raw_text,
@@ -181,9 +185,9 @@ def process_bank_statements(
                 "una firma bancaria reconocible en el nombre del archivo."
             )
 
-        # ========================================================
-        # PARSER
-        # ========================================================
+        # ====================================================
+        # 6. PARSER
+        # ====================================================
 
         estado_cuenta, document = (
             process_single_statement(
@@ -192,9 +196,9 @@ def process_bank_statements(
             )
         )
 
-        # ========================================================
-        # VALIDACIONES
-        # ========================================================
+        # ====================================================
+        # 7. VALIDACIONES
+        # ====================================================
 
         validaciones = []
 
@@ -208,9 +212,9 @@ def process_bank_statements(
                 resumen=estado_cuenta.resumen_financiero,
             )
 
-        # ========================================================
-        # RESULTADO
-        # ========================================================
+        # ====================================================
+        # 8. RESULTADO
+        # ====================================================
 
         results.append(
             ProcessingResult(

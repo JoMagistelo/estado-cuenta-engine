@@ -8,6 +8,7 @@ from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
 from .tesseract_pdf_reader import TesseractPDFReader
 
+
 # ============================================================
 # RESULTADO DE LA PRIMERA ETAPA
 # ============================================================
@@ -73,27 +74,15 @@ class ReaderManager:
 
         file_path = Path(file_path)
 
-        # ====================================================
-        # TEXTO
-        # ====================================================
-
         raw_text = PDFTextReader.read(
             file_path,
             start_page=start_page,
         )
 
-        # ====================================================
-        # PALABRAS ESPACIALES
-        # ====================================================
-
         spatial_words = PDFWordReader.read(
             file_path,
             start_page=start_page,
         )
-
-        # ====================================================
-        # DOCUMENT DATA
-        # ====================================================
 
         return DocumentData(
             raw_text=raw_text,
@@ -114,11 +103,18 @@ class ReaderManager:
         start_page: int = 0,
     ) -> PDFTextStageResult:
         """
-        Primera etapa optimizada.
+        Primera etapa del pipeline.
 
         Lee únicamente texto.
 
         NO ejecuta PDFWordReader.
+
+        Esta operación permite decidir posteriormente si
+        el documento debe tratarse como:
+
+            - PDF digital
+            - PDF con extracción sospechosa
+            - PDF imagen / OCR
         """
 
         file_path = Path(file_path)
@@ -155,7 +151,10 @@ class ReaderManager:
         """
         Extrae únicamente las palabras espaciales.
 
-        No vuelve a ejecutar PDFTextReader.
+        No ejecuta PDFTextReader.
+
+        Esta es la lectura principal utilizada por los parsers
+        de documentos digitales.
         """
 
         file_path = Path(file_path)
@@ -165,11 +164,21 @@ class ReaderManager:
             start_page=start_page,
         )
 
+    # ========================================================
+    # OCR
+    # ========================================================
+
     @staticmethod
     def read_ocr(
         file_path: str | Path,
         start_page: int = 0,
     ) -> DocumentData:
+        """
+        Procesa el PDF mediante Tesseract OCR.
+        """
+
+        file_path = Path(file_path)
+
         return TesseractPDFReader.read(
             file_path,
             start_page=start_page,
