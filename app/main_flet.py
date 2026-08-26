@@ -26,7 +26,9 @@ sys.path.append(
     )
 )
 
-from engine.pipeline import process_bank_statements
+from engine.pipeline import (
+    process_bank_statements_incremental,
+)
 from exporters.excel import export_batch_excel
 
 
@@ -169,6 +171,21 @@ def main(page: ft.Page):
     page.padding = 18
     page.theme_mode = ft.ThemeMode.LIGHT
 
+    # ========================================================
+    # ESCALA GENERAL DE LA INTERFAZ
+    # ========================================================
+    #
+    # 1.00 = escala original
+    # 0.90 = 10 % más pequeña
+    #
+    # Se aplica al contenido completo de la aplicación para
+    # conservar intactos los tamaños relativos, la lógica y
+    # el comportamiento actual de todos los controles.
+    #
+    # ========================================================
+
+    UI_SCALE = 0.90
+
     # Scroll global de la aplicación
     page.scroll = ft.ScrollMode.AUTO
 
@@ -177,6 +194,27 @@ def main(page: ft.Page):
     # ========================================================
 
     results = []
+
+    # ========================================================
+    # ESTADO DEL PROCESAMIENTO
+    # ========================================================
+    #
+    # Cada elemento corresponde a un archivo seleccionado.
+    #
+    # Estructura:
+    #
+    # {
+    #     "file_name": str,
+    #     "processing_method": str | None,
+    #     "status": "classifying" | "processing" |
+    #               "completed" | "error",
+    #     "result": ProcessingResult | None,
+    #     "error": str | None,
+    # }
+    #
+    # ========================================================
+
+    processing_items: list[dict[str, Any]] = []
 
     # ========================================================
     # CONTROLES DINÁMICOS
@@ -200,7 +238,7 @@ def main(page: ft.Page):
     )
 
     # ========================================================
-    # RESUMEN DE ARCHIVOS PROCESADOS
+    # RESUMEN DE ARCHIVOS
     # ========================================================
 
     processing_summary_view = ft.Container(
@@ -245,13 +283,7 @@ def main(page: ft.Page):
         validacion,
     ) -> ft.Container:
         """
-        Construye visualmente el resultado de una validación.
-
-        Estados:
-
-            ✅ correcta -> verde
-            ❌ incorrecta -> rojo
-            — no disponible -> neutro
+        Representa el resultado final de una validación.
         """
 
         if validacion is None:
@@ -287,6 +319,44 @@ def main(page: ft.Page):
         return ft.Container(
             content=ft.Text(
                 "❌",
+                size=16,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            bgcolor=ft.Colors.RED_50,
+            padding=8,
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+        )
+
+
+    def create_pending_validation_status() -> ft.Container:
+        """
+        Representa una validación que todavía no puede mostrarse
+        porque el documento continúa procesándose.
+        """
+
+        return ft.Container(
+            content=ft.Text(
+                "⏳",
+                size=16,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            bgcolor=ft.Colors.AMBER_50,
+            padding=8,
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+        )
+
+
+    def create_error_validation_status() -> ft.Container:
+        """
+        Representa un archivo cuyo procesamiento terminó con
+        error.
+        """
+
+        return ft.Container(
+            content=ft.Text(
+                "⚠️",
                 size=16,
                 text_align=ft.TextAlign.CENTER,
             ),
@@ -337,11 +407,35 @@ def main(page: ft.Page):
         )
 
 
+    def create_processing_state_status() -> ft.Container:
+        """
+        Estado mostrado mientras todavía no se ha determinado
+        si el documento será Digital u OCR.
+        """
+
+        return ft.Container(
+            content=ft.Text(
+                "Detectando",
+                size=11,
+                weight=ft.FontWeight.BOLD,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
+            padding=ft.Padding.symmetric(
+                horizontal=8,
+                vertical=6,
+            ),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+        )
+
+
     def create_processing_summary(
-        processed_results,
+        items,
     ) -> ft.Container:
         """
-        Construye la tabla resumen de archivos procesados.
+        Construye la tabla resumen de todos los archivos
+        seleccionados.
 
         Columnas:
 
@@ -350,49 +444,120 @@ def main(page: ft.Page):
             Abonos
             Cargos
 
-        Las validaciones mostradas son exclusivamente:
+        Los archivos que todavía están procesándose permanecen
+        visibles en esta tabla, pero sus validaciones aparecen
+        como pendientes.
 
-            Total depósitos / abonos
-            Total retiros / cargos
+        Solamente los resultados terminados se incorporan al
+        selector de documentos.
         """
 
         rows = []
 
-        for result in processed_results:
+        for item in items:
 
-            validacion_abonos = get_validation_result(
-                result,
-                "Total depósitos / abonos",
+            status = item.get(
+                "status"
             )
 
-            validacion_cargos = get_validation_result(
-                result,
-                "Total retiros / cargos",
+            result = item.get(
+                "result"
             )
+
+            processing_method = item.get(
+                "processing_method"
+            )
+
+            # ------------------------------------------------
+            # MÉTODO
+            # ------------------------------------------------
+
+            if processing_method:
+
+                process_control = (
+                    create_processing_method_status(
+                        processing_method
+                    )
+                )
+
+            else:
+
+                process_control = (
+                    create_processing_state_status()
+                )
+
+            # ------------------------------------------------
+            # VALIDACIONES
+            # ------------------------------------------------
+
+            if status == "completed" and result:
+
+                validacion_abonos = (
+                    get_validation_result(
+                        result,
+                        "Total depósitos / abonos",
+                    )
+                )
+
+                validacion_cargos = (
+                    get_validation_result(
+                        result,
+                        "Total retiros / cargos",
+                    )
+                )
+
+                abonos_control = (
+                    create_validation_status(
+                        validacion_abonos
+                    )
+                )
+
+                cargos_control = (
+                    create_validation_status(
+                        validacion_cargos
+                    )
+                )
+
+            elif status == "error":
+
+                abonos_control = (
+                    create_error_validation_status()
+                )
+
+                cargos_control = (
+                    create_error_validation_status()
+                )
+
+            else:
+
+                abonos_control = (
+                    create_pending_validation_status()
+                )
+
+                cargos_control = (
+                    create_pending_validation_status()
+                )
 
             rows.append(
                 ft.DataRow(
                     cells=[
                         ft.DataCell(
                             content=ft.Text(
-                                result.file_name,
+                                item.get(
+                                    "file_name",
+                                    "",
+                                ),
                                 size=12,
                             )
                         ),
                         ft.DataCell(
-                            content=create_processing_method_status(
-                                result.processing_method
-                            )
+                            content=process_control
                         ),
                         ft.DataCell(
-                            content=create_validation_status(
-                                validacion_abonos
-                            )
+                            content=abonos_control
                         ),
                         ft.DataCell(
-                            content=create_validation_status(
-                                validacion_cargos
-                            )
+                            content=cargos_control
                         ),
                     ]
                 )
@@ -469,11 +634,11 @@ def main(page: ft.Page):
 
     def update_processing_summary():
         """
-        Actualiza la tabla resumen utilizando el estado actual
-        de results.
+        Reconstruye la tabla resumen utilizando el estado actual
+        de processing_items.
         """
 
-        if not results:
+        if not processing_items:
 
             processing_summary_view.content = None
             processing_summary_view.visible = False
@@ -482,11 +647,130 @@ def main(page: ft.Page):
 
         processing_summary_view.content = (
             create_processing_summary(
-                results
+                processing_items
             )
         )
 
         processing_summary_view.visible = True
+
+
+    def update_dropdown():
+        """
+        Actualiza el selector exclusivamente con archivos que
+        ya terminaron correctamente.
+        """
+
+        dropdown_files.options = [
+            ft.DropdownOption(
+                key=str(index),
+                text=result.file_name,
+            )
+            for index, result in enumerate(
+                results
+            )
+        ]
+
+        if results:
+
+            dropdown_files.visible = True
+
+            export_button.disabled = False
+
+        else:
+
+            dropdown_files.visible = False
+
+            export_button.disabled = True
+
+
+    def update_processing_status():
+        """
+        Actualiza el texto superior con el estado actual
+        del lote.
+        """
+
+        total = len(
+            processing_items
+        )
+
+        completed = sum(
+            1
+            for item in processing_items
+            if item.get("status") == "completed"
+        )
+
+        errors = sum(
+            1
+            for item in processing_items
+            if item.get("status") == "error"
+        )
+
+        pending = total - completed - errors
+
+        ocr_pending = sum(
+            1
+            for item in processing_items
+            if (
+                item.get("status") == "processing"
+                and item.get("processing_method") == "OCR"
+            )
+        )
+
+        if pending > 0:
+
+            status_text.value = (
+                f"Procesando {completed} de {total} archivos"
+            )
+
+            if ocr_pending:
+
+                status_text.value += (
+                    f" · {ocr_pending} OCR en segundo plano"
+                )
+
+            if errors:
+
+                status_text.value += (
+                    f" · {errors} con error"
+                )
+
+            status_text.color = (
+                ft.Colors.ON_SURFACE
+            )
+
+            return
+
+        # ====================================================
+        # LOTE TERMINADO
+        # ====================================================
+
+        if errors == 0:
+
+            status_text.value = (
+                f"✅ {completed} estados de cuenta "
+                f"procesados correctamente."
+            )
+
+            status_text.color = ft.Colors.GREEN
+
+        elif completed > 0:
+
+            status_text.value = (
+                f"✅ {completed} estados de cuenta "
+                f"procesados correctamente."
+                f" ⚠️ {errors} con error."
+            )
+
+            status_text.color = ft.Colors.ERROR
+
+        else:
+
+            status_text.value = (
+                f"❌ No fue posible procesar los "
+                f"{errors} archivos seleccionados."
+            )
+
+            status_text.color = ft.Colors.RED
 
 
     # ========================================================
@@ -562,18 +846,6 @@ def main(page: ft.Page):
         fecha_corte_documento: str | None = None,
         numero_cuenta_documento: str | None = None,
     ) -> ft.Column:
-        """
-        Crea una tabla de datos (DataTable) para mostrar los movimientos.
-
-        Nota sobre el "No. de Movimiento":
-        El modelo de datos `Movimiento` que viene del motor de procesamiento
-        no incluye un número de movimiento secuencial (ej. 1, 2, 3...).
-        Para poder mostrar un número de fila en la tabla, este se genera
-        dinámicamente en esta función usando `enumerate()` al momento de
-        crear las filas. Esto evita modificar el modelo de datos del backend
-        solo por una necesidad de la interfaz de usuario.
-        Lo mismo con la fecha de corte, se imprime en el fronted pero pertenece al modelo de datos de la cuenta.
-        """
 
         columnas_mostrar = [
             "fecha_corte",
@@ -599,30 +871,43 @@ def main(page: ft.Page):
         columnas_existentes: list[str] = []
 
         if movimientos:
+
             movimiento_prueba = movimientos[0]
 
             for columna in columnas_mostrar:
 
                 if columna == "numero_movimiento":
-                    columnas_existentes.append(columna)
+
+                    columnas_existentes.append(
+                        columna
+                    )
 
                 elif (
                     columna == "fecha_corte"
                     and fecha_corte_documento
                 ):
-                    columnas_existentes.append(columna)
+
+                    columnas_existentes.append(
+                        columna
+                    )
 
                 elif (
                     columna == "numero_cuenta"
                     and numero_cuenta_documento
                 ):
-                    columnas_existentes.append(columna)
+
+                    columnas_existentes.append(
+                        columna
+                    )
 
                 elif hasattr(
                     movimiento_prueba,
                     columna,
                 ):
-                    columnas_existentes.append(columna)
+
+                    columnas_existentes.append(
+                        columna
+                    )
 
         columns = []
 
@@ -676,15 +961,19 @@ def main(page: ft.Page):
             for columna in columnas_existentes:
 
                 if columna == "numero_movimiento":
+
                     value = index
 
                 elif columna == "fecha_corte":
+
                     value = fecha_corte_documento
 
                 elif columna == "numero_cuenta":
+
                     value = numero_cuenta_documento
 
                 else:
+
                     value = getattr(
                         movimiento,
                         columna,
@@ -697,10 +986,13 @@ def main(page: ft.Page):
                     "saldo_operacion",
                     "saldo_liquidacion",
                 }:
+
                     text_value = format_money(
                         value
                     )
+
                 else:
+
                     text_value = safe_value(
                         value
                     )
@@ -759,7 +1051,9 @@ def main(page: ft.Page):
         auditoria_view.controls.clear()
 
         if result is None:
+
             page.update()
+
             return
 
         estado = result.estado_cuenta
@@ -770,7 +1064,9 @@ def main(page: ft.Page):
 
         if result.bank_key == "imagen_no_procesada":
 
-            render_image_document(result)
+            render_image_document(
+                result
+            )
 
             page.update()
 
@@ -954,7 +1250,10 @@ def main(page: ft.Page):
 
             saldo_anterior = rf.saldo_anterior or 0
             saldo_final = rf.saldo_final or 0
-            delta_val = saldo_final - saldo_anterior
+            delta_val = (
+                saldo_final
+                - saldo_anterior
+            )
 
             auditoria_view.controls.append(
                 ft.Row(
@@ -1222,22 +1521,16 @@ def main(page: ft.Page):
                     icono = "❌"
                     color = ft.Colors.RED
 
-                esperado = (
-                    format_money(
-                        validacion.esperado
-                    )
+                esperado = format_money(
+                    validacion.esperado
                 )
 
-                obtenido = (
-                    format_money(
-                        validacion.obtenido
-                    )
+                obtenido = format_money(
+                    validacion.obtenido
                 )
 
-                diferencia = (
-                    format_money(
-                        validacion.diferencia
-                    )
+                diferencia = format_money(
+                    validacion.diferencia
                 )
 
                 validaciones_controls.append(
@@ -1306,8 +1599,16 @@ def main(page: ft.Page):
             auditoria_view.controls.append(
                 create_movements_table(
                     movimientos,
-                    fecha_corte_documento=dc.fecha_corte if dc else None,
-                    numero_cuenta_documento=dc.numero_cuenta if dc else None,
+                    fecha_corte_documento=(
+                        dc.fecha_corte
+                        if dc
+                        else None
+                    ),
+                    numero_cuenta_documento=(
+                        dc.numero_cuenta
+                        if dc
+                        else None
+                    ),
                 )
             )
 
@@ -1327,7 +1628,7 @@ def main(page: ft.Page):
 
 
     # ========================================================
-    # PROCESAMIENTO
+    # PROCESAMIENTO INCREMENTAL
     # ========================================================
 
     def process_selected_files(
@@ -1335,77 +1636,151 @@ def main(page: ft.Page):
         names: list[str],
     ):
 
+        # ====================================================
+        # REINICIAR ESTADO
+        # ====================================================
+
+        results.clear()
+        processing_items.clear()
+
+        for file_name in names:
+
+            processing_items.append(
+                {
+                    "file_name": file_name,
+                    "processing_method": None,
+                    "status": "classifying",
+                    "result": None,
+                    "error": None,
+                }
+            )
+
+        # ====================================================
+        # UI INICIAL
+        # ====================================================
+
         loading_ring.visible = True
-        status_text.value = "Procesando estados de cuenta..."
-        status_text.color = ft.Colors.ON_SURFACE
+
         upload_button.disabled = True
+
+        export_button.disabled = True
+
+        dropdown_files.visible = False
+
+        auditoria_view.controls.clear()
+
+        update_processing_summary()
+        update_processing_status()
 
         page.update()
 
+        # ====================================================
+        # PROCESAMIENTO CONCURRENTE
+        # ====================================================
+
         try:
 
-            processed_results = process_bank_statements(
+            for event in process_bank_statements_incremental(
                 paths,
                 names,
-            )
+            ):
 
-            results.clear()
-            results.extend(
-                processed_results
-            )
+                # =========================================
+                # ELEMENTO ASOCIADO
+                # =========================================
 
-            # =================================================
-            # ACTUALIZAR RESUMEN DE ARCHIVOS
-            # =================================================
+                item = processing_items[
+                    event.index
+                ]
 
-            update_processing_summary()
+                # =========================================
+                # MÉTODO DETERMINADO
+                # =========================================
 
-            # =================================================
-            # ACTUALIZAR SELECTOR
-            # =================================================
+                if event.kind == "started":
 
-            dropdown_files.options = [
-                ft.DropdownOption(
-                    key=str(index),
-                    text=result.file_name,
-                )
-                for index, result in enumerate(results)
-            ]
-
-            if results:
-
-                dropdown_files.value = "0"
-                dropdown_files.visible = True
-
-                export_button.disabled = False
-
-                status_text.value = (
-                    f"✅ {len(results)} estados de cuenta "
-                    f"procesados correctamente."
-                )
-
-                status_text.color = ft.Colors.GREEN
-
-                render_result(
-                    results[0]
-                )
-
-            else:
-
-                dropdown_files.visible = False
-                export_button.disabled = True
-
-                status_text.value = (
-                    "⚠️ No se obtuvieron resultados."
-                )
-
-                auditoria_view.controls.clear()
-
-                auditoria_view.controls.append(
-                    ft.Text(
-                        "No se encontraron estados de cuenta procesables."
+                    item["processing_method"] = (
+                        event.processing_method
                     )
-                )
+
+                    item["status"] = "processing"
+
+                    item["error"] = None
+
+                # =========================================
+                # PROCESAMIENTO TERMINADO
+                # =========================================
+
+                elif event.kind == "completed":
+
+                    item["processing_method"] = (
+                        event.processing_method
+                    )
+
+                    item["status"] = "completed"
+
+                    item["result"] = event.result
+
+                    item["error"] = None
+
+                    # -------------------------------------
+                    # AGREGAR AL CONJUNTO DISPONIBLE
+                    # -------------------------------------
+
+                    result = event.result
+
+                    if result is not None:
+
+                        was_empty = not results
+
+                        results.append(
+                            result
+                        )
+
+                        update_dropdown()
+
+                        # ---------------------------------
+                        # SOLO EL PRIMER RESULTADO SE
+                        # MUESTRA AUTOMÁTICAMENTE
+                        # ---------------------------------
+
+                        if was_empty:
+
+                            dropdown_files.value = "0"
+
+                            render_result(
+                                result
+                            )
+
+                # =========================================
+                # ERROR INDIVIDUAL
+                # =========================================
+
+                elif event.kind == "error":
+
+                    item["processing_method"] = (
+                        event.processing_method
+                    )
+
+                    item["status"] = "error"
+
+                    item["result"] = None
+
+                    item["error"] = (
+                        str(event.error)
+                        if event.error
+                        else "Error desconocido."
+                    )
+
+                # =========================================
+                # ACTUALIZAR INTERFAZ
+                # =========================================
+
+                update_processing_summary()
+
+                update_processing_status()
+
+                page.update()
 
         except Exception as ex:
 
@@ -1444,8 +1819,16 @@ def main(page: ft.Page):
 
         finally:
 
+            # =================================================
+            # FINALIZACIÓN DEL LOTE
+            # =================================================
+
             loading_ring.visible = False
+
             upload_button.disabled = False
+
+            update_processing_summary()
+            update_processing_status()
 
             page.update()
 
@@ -1466,6 +1849,7 @@ def main(page: ft.Page):
             )
 
             if not files:
+
                 return
 
             paths = [
@@ -1494,8 +1878,15 @@ def main(page: ft.Page):
                 return
 
             loading_ring.visible = True
-            status_text.value = "Procesando estados de cuenta..."
-            status_text.color = ft.Colors.ON_SURFACE
+
+            status_text.value = (
+                "Preparando estados de cuenta..."
+            )
+
+            status_text.color = (
+                ft.Colors.ON_SURFACE
+            )
+
             upload_button.disabled = True
 
             page.update()
@@ -1539,6 +1930,7 @@ def main(page: ft.Page):
             TypeError,
             ValueError,
         ):
+
             return
 
         page.update()
@@ -1551,6 +1943,7 @@ def main(page: ft.Page):
     async def export_excel(e):
 
         if not results:
+
             return
 
         try:
@@ -1563,10 +1956,20 @@ def main(page: ft.Page):
             )
 
             if not path:
+
                 return
 
             if not path.lower().endswith(".xlsx"):
+
                 path += ".xlsx"
+
+            # =================================================
+            # TOMAR SNAPSHOT DE LOS RESULTADOS DISPONIBLES
+            # =================================================
+
+            results_snapshot = list(
+                results
+            )
 
             export_button.disabled = True
 
@@ -1574,7 +1977,9 @@ def main(page: ft.Page):
                 "Generando archivo Excel..."
             )
 
-            status_text.color = ft.Colors.ON_SURFACE
+            status_text.color = (
+                ft.Colors.ON_SURFACE
+            )
 
             page.update()
 
@@ -1583,7 +1988,7 @@ def main(page: ft.Page):
                 try:
 
                     export_batch_excel(
-                        results,
+                        results_snapshot,
                         path,
                     )
 
@@ -1591,7 +1996,9 @@ def main(page: ft.Page):
                         "✅ Archivo Excel exportado correctamente."
                     )
 
-                    status_text.color = ft.Colors.GREEN
+                    status_text.color = (
+                        ft.Colors.GREEN
+                    )
 
                     try:
 
@@ -1631,7 +2038,8 @@ def main(page: ft.Page):
                     except Exception as folder_ex:
 
                         print(
-                            f"No se pudo abrir la carpeta: {folder_ex}"
+                            "No se pudo abrir la carpeta: "
+                            f"{folder_ex}"
                         )
 
                 except Exception as ex:
@@ -1640,7 +2048,9 @@ def main(page: ft.Page):
                         f"❌ Error al exportar Excel: {ex}"
                     )
 
-                    status_text.color = ft.Colors.RED
+                    status_text.color = (
+                        ft.Colors.RED
+                    )
 
                 finally:
 
@@ -1658,7 +2068,9 @@ def main(page: ft.Page):
                 f"❌ Error al guardar el archivo: {ex}"
             )
 
-            status_text.color = ft.Colors.RED
+            status_text.color = (
+                ft.Colors.RED
+            )
 
             export_button.disabled = False
 
@@ -1681,120 +2093,145 @@ def main(page: ft.Page):
 
 
     # ========================================================
-    # UI
+    # CONTENIDO PRINCIPAL
+    # ========================================================
+    #
+    # Todo el contenido existente se agrupa en un único
+    # contenedor raíz para poder aplicar la escala global
+    # sin modificar individualmente los controles.
+    #
+    # ========================================================
+
+    app_content = ft.Column(
+        controls=[
+
+            ft.Row(
+                controls=[
+                    ft.Column(
+                        controls=[
+                            ft.Text(
+                                "Secretaría Anticorrupción y Buen Gobierno",
+                                size=15,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            ft.Text(
+                                "Dirección General de Evaluación de Confianza",
+                                size=13,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            ft.Text(
+                                "Departamento de Investigación de Antecedentes",
+                                size=13,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                            ft.Text(
+                                "Bancos habilitados (v1.0.3): BBVA, Banorte y Banamex Próximamente (v1.2.0): Estados de cuenta escaneados de: BBVA, Banamex, HSBC.",
+                                size=10,
+                                weight=ft.FontWeight.W_500,
+                            ),
+                        ],
+                        spacing=2,
+                    ),
+                ],
+            ),
+
+            ft.Divider(
+                height=10
+            ),
+
+            ft.Row(
+                controls=[
+                    ft.Text(
+                        "📄 Motor de Estados de Cuenta",
+                        size=32,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                    ft.Text(
+                        "Versión 1.0.3"
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+
+            ft.Divider(),
+
+            ft.Row(
+                controls=[
+                    upload_button,
+                    loading_ring,
+                    status_text,
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+
+            ft.Divider(),
+
+            ft.Text(
+                "🔍 Auditoría de Resultados",
+                size=24,
+                weight=ft.FontWeight.BOLD,
+            ),
+
+            # ====================================================
+            # TABLA + SELECTOR
+            # ====================================================
+
+            ft.Row(
+                controls=[
+                    processing_summary_view,
+
+                    ft.Container(
+                        content=dropdown_files,
+                        width=390,
+                        padding=10,
+                    ),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.START,
+                spacing=15,
+            ),
+
+            auditoria_view,
+
+            ft.Divider(),
+
+            ft.Text(
+                "📤 Exportar Todos los Resultados a Excel",
+                size=24,
+                weight=ft.FontWeight.BOLD,
+            ),
+
+            ft.Container(
+                content=ft.Text(
+                    "Haz clic en el botón para generar un único archivo "
+                    "Excel con los datos de todos los estados de cuenta "
+                    "procesados."
+                ),
+                padding=ft.Padding.only(
+                    bottom=10,
+                ),
+            ),
+
+            export_button,
+
+            ft.Container(
+                height=50,
+            ),
+        ],
+        spacing=0,
+    )
+
+
+    # ========================================================
+    # CONTENEDOR RAÍZ CON ESCALA GLOBAL
     # ========================================================
 
     page.add(
-
-        ft.Row(
-            controls=[
-                ft.Column(
-                    controls=[
-                        ft.Text(
-                            "Secretaría Anticorrupción y Buen Gobierno",
-                            size=15,
-                            weight=ft.FontWeight.W_500,
-                        ),
-                        ft.Text(
-                            "Dirección General de Evaluación de Confianza",
-                            size=13,
-                            weight=ft.FontWeight.W_500,
-                        ),
-                        ft.Text(
-                            "Departamento de Investigación de Antecedentes",
-                            size=13,
-                            weight=ft.FontWeight.W_500,
-                        ),
-                        ft.Text(
-                            "Bancos habilitados (v1.0.3): BBVA, Banorte y Banamex Próximamente (v1.2.0): Estados de cuenta escaneados de: BBVA, Banamex, HSBC.",
-                            size=10,
-                            weight=ft.FontWeight.W_500,
-                        ),
-                    ],
-                    spacing=2,
-                ),
-            ],
-        ),
-
-        ft.Divider(height=10),
-
-        ft.Row(
-            controls=[
-                ft.Text(
-                    "📄 Motor de Estados de Cuenta",
-                    size=32,
-                    weight=ft.FontWeight.BOLD,
-                ),
-                ft.Text(
-                    "Versión 1.0.3"
-                ),
-            ],
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-        ),
-
-        ft.Divider(),
-
-        ft.Row(
-            controls=[
-                upload_button,
-                loading_ring,
-                status_text,
-            ],
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-
-        ft.Divider(),
-
-        ft.Text(
-            "🔍 Auditoría de Resultados",
-            size=24,
-            weight=ft.FontWeight.BOLD,
-        ),
-
-        # ====================================================
-        # TABLA + SELECTOR
-        # ====================================================
-
-        ft.Row(
-            controls=[
-                processing_summary_view,
-
-                ft.Container(
-                    content=dropdown_files,
-                    width=390,
-                    padding=10,
-                ),
-            ],
-            vertical_alignment=ft.CrossAxisAlignment.START,
-            spacing=15,
-        ),
-
-        auditoria_view,
-
-        ft.Divider(),
-
-        ft.Text(
-            "📤 Exportar Todos los Resultados a Excel",
-            size=24,
-            weight=ft.FontWeight.BOLD,
-        ),
-
         ft.Container(
-            content=ft.Text(
-                "Haz clic en el botón para generar un único archivo "
-                "Excel con los datos de todos los estados de cuenta "
-                "procesados."
-            ),
-            padding=ft.Padding.only(
-                bottom=10,
-            ),
-        ),
-
-        export_button,
-
-        ft.Container(
-            height=50,
-        ),
+            content=app_content,
+            width=1100,
+            scale=UI_SCALE,
+            alignment=ft.Alignment.TOP_LEFT,
+        )
     )
 
 
