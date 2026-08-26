@@ -195,7 +195,16 @@ def main(page: ft.Page):
 
     dropdown_files = ft.Dropdown(
         label="Selecciona el estado de cuenta que deseas revisar",
-        width=600,
+        width=390,
+        visible=False,
+    )
+
+    # ========================================================
+    # RESUMEN DE ARCHIVOS PROCESADOS
+    # ========================================================
+
+    processing_summary_view = ft.Container(
+        width=650,
         visible=False,
     )
 
@@ -208,6 +217,277 @@ def main(page: ft.Page):
         icon=ft.Icons.DOWNLOAD,
         disabled=True,
     )
+
+    # ========================================================
+    # FUNCIONES: RESUMEN DE PROCESAMIENTO
+    # ========================================================
+
+    def get_validation_result(
+        result,
+        validation_name: str,
+    ):
+        """
+        Busca una validación concreta por nombre.
+
+        No depende de la posición de la validación dentro de
+        result.validaciones.
+        """
+
+        for validacion in result.validaciones:
+
+            if validacion.nombre == validation_name:
+                return validacion
+
+        return None
+
+
+    def create_validation_status(
+        validacion,
+    ) -> ft.Container:
+        """
+        Construye visualmente el resultado de una validación.
+
+        Estados:
+
+            ✅ correcta -> verde
+            ❌ incorrecta -> rojo
+            — no disponible -> neutro
+        """
+
+        if validacion is None:
+
+            return ft.Container(
+                content=ft.Text(
+                    "—",
+                    size=14,
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
+                padding=8,
+                border_radius=6,
+                alignment=ft.Alignment.CENTER,
+            )
+
+        if validacion.correcto:
+
+            return ft.Container(
+                content=ft.Text(
+                    "✅",
+                    size=16,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                bgcolor=ft.Colors.GREEN_50,
+                padding=8,
+                border_radius=6,
+                alignment=ft.Alignment.CENTER,
+            )
+
+        return ft.Container(
+            content=ft.Text(
+                "❌",
+                size=16,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            bgcolor=ft.Colors.RED_50,
+            padding=8,
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+        )
+
+
+    def create_processing_method_status(
+        processing_method: str,
+    ) -> ft.Container:
+        """
+        Representa visualmente el método de procesamiento.
+        """
+
+        if processing_method.upper() == "OCR":
+
+            return ft.Container(
+                content=ft.Text(
+                    "OCR",
+                    size=12,
+                    weight=ft.FontWeight.BOLD,
+                ),
+                bgcolor=ft.Colors.BLUE_50,
+                padding=ft.Padding.symmetric(
+                    horizontal=8,
+                    vertical=6,
+                ),
+                border_radius=6,
+                alignment=ft.Alignment.CENTER,
+            )
+
+        return ft.Container(
+            content=ft.Text(
+                "Digital",
+                size=12,
+                weight=ft.FontWeight.BOLD,
+            ),
+            bgcolor=ft.Colors.GREEN_50,
+            padding=ft.Padding.symmetric(
+                horizontal=8,
+                vertical=6,
+            ),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+        )
+
+
+    def create_processing_summary(
+        processed_results,
+    ) -> ft.Container:
+        """
+        Construye la tabla resumen de archivos procesados.
+
+        Columnas:
+
+            Archivo
+            Proceso
+            Abonos
+            Cargos
+
+        Las validaciones mostradas son exclusivamente:
+
+            Total depósitos / abonos
+            Total retiros / cargos
+        """
+
+        rows = []
+
+        for result in processed_results:
+
+            validacion_abonos = get_validation_result(
+                result,
+                "Total depósitos / abonos",
+            )
+
+            validacion_cargos = get_validation_result(
+                result,
+                "Total retiros / cargos",
+            )
+
+            rows.append(
+                ft.DataRow(
+                    cells=[
+                        ft.DataCell(
+                            content=ft.Text(
+                                result.file_name,
+                                size=12,
+                            )
+                        ),
+                        ft.DataCell(
+                            content=create_processing_method_status(
+                                result.processing_method
+                            )
+                        ),
+                        ft.DataCell(
+                            content=create_validation_status(
+                                validacion_abonos
+                            )
+                        ),
+                        ft.DataCell(
+                            content=create_validation_status(
+                                validacion_cargos
+                            )
+                        ),
+                    ]
+                )
+            )
+
+        table = ft.DataTable(
+            columns=[
+                ft.DataColumn(
+                    label=ft.Text(
+                        "Archivo",
+                        weight=ft.FontWeight.BOLD,
+                    )
+                ),
+                ft.DataColumn(
+                    label=ft.Text(
+                        "Proceso",
+                        weight=ft.FontWeight.BOLD,
+                    )
+                ),
+                ft.DataColumn(
+                    label=ft.Text(
+                        "Abonos",
+                        weight=ft.FontWeight.BOLD,
+                    )
+                ),
+                ft.DataColumn(
+                    label=ft.Text(
+                        "Cargos",
+                        weight=ft.FontWeight.BOLD,
+                    )
+                ),
+            ],
+            rows=rows,
+            border=ft.Border.all(
+                1,
+                ft.Colors.OUTLINE_VARIANT,
+            ),
+            vertical_lines=ft.BorderSide(
+                1,
+                ft.Colors.OUTLINE_VARIANT,
+            ),
+            horizontal_lines=ft.BorderSide(
+                1,
+                ft.Colors.OUTLINE_VARIANT,
+            ),
+            column_spacing=18,
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Text(
+                        "Archivos procesados",
+                        size=18,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                    ft.Row(
+                        controls=[
+                            table
+                        ],
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                ],
+                spacing=8,
+            ),
+            padding=10,
+            border=ft.Border.all(
+                1,
+                ft.Colors.OUTLINE_VARIANT,
+            ),
+            border_radius=8,
+        )
+
+
+    def update_processing_summary():
+        """
+        Actualiza la tabla resumen utilizando el estado actual
+        de results.
+        """
+
+        if not results:
+
+            processing_summary_view.content = None
+            processing_summary_view.visible = False
+
+            return
+
+        processing_summary_view.content = (
+            create_processing_summary(
+                results
+            )
+        )
+
+        processing_summary_view.visible = True
+
 
     # ========================================================
     # FUNCIÓN: RENDER IMAGEN
@@ -272,6 +552,7 @@ def main(page: ft.Page):
             ]
         )
 
+
     # ========================================================
     # FUNCIÓN: TABLA DE MOVIMIENTOS
     # ========================================================
@@ -294,8 +575,6 @@ def main(page: ft.Page):
         Lo mismo con la fecha de corte, se imprime en el fronted pero pertenece al modelo de datos de la cuenta.
         """
 
-        # Define el orden y las columnas que se intentarán mostrar.
-        # "numero_movimiento" es un campo virtual que generaremos aquí mismo.
         columnas_mostrar = [
             "fecha_corte",
             "numero_cuenta",
@@ -321,22 +600,34 @@ def main(page: ft.Page):
 
         if movimientos:
             movimiento_prueba = movimientos[0]
+
             for columna in columnas_mostrar:
-                # Caso especial: "numero_movimiento" no existe en el modelo `Movimiento`,
-                # pero como lo generamos aquí, lo agregamos incondicionalmente a la
-                # lista de columnas que se van a renderizar.
+
                 if columna == "numero_movimiento":
                     columnas_existentes.append(columna)
-                elif columna == "fecha_corte" and fecha_corte_documento:
+
+                elif (
+                    columna == "fecha_corte"
+                    and fecha_corte_documento
+                ):
                     columnas_existentes.append(columna)
-                elif columna == "numero_cuenta" and numero_cuenta_documento:
+
+                elif (
+                    columna == "numero_cuenta"
+                    and numero_cuenta_documento
+                ):
                     columnas_existentes.append(columna)
-                elif hasattr(movimiento_prueba, columna):
+
+                elif hasattr(
+                    movimiento_prueba,
+                    columna,
+                ):
                     columnas_existentes.append(columna)
 
         columns = []
 
         for columna in columnas_existentes:
+
             nombres = {
                 "fecha_corte": "Fecha Corte",
                 "numero_cuenta": "Número de Cuenta",
@@ -363,7 +654,10 @@ def main(page: ft.Page):
                     label=ft.Text(
                         nombres.get(
                             columna,
-                            columna.replace("_", " ").title(),
+                            columna.replace(
+                                "_",
+                                " ",
+                            ).title(),
                         ),
                         weight=ft.FontWeight.BOLD,
                     )
@@ -372,21 +666,24 @@ def main(page: ft.Page):
 
         rows = []
 
-        # Se usa enumerate(..., start=1) para generar un índice secuencial
-        # para cada movimiento, que usaremos como "No. de Movimiento".
-        for index, movimiento in enumerate(movimientos, start=1):
+        for index, movimiento in enumerate(
+            movimientos,
+            start=1,
+        ):
 
             cells = []
 
-            # Se itera sobre las columnas que sí existen o que generamos.
             for columna in columnas_existentes:
 
                 if columna == "numero_movimiento":
                     value = index
+
                 elif columna == "fecha_corte":
                     value = fecha_corte_documento
+
                 elif columna == "numero_cuenta":
                     value = numero_cuenta_documento
+
                 else:
                     value = getattr(
                         movimiento,
@@ -400,9 +697,13 @@ def main(page: ft.Page):
                     "saldo_operacion",
                     "saldo_liquidacion",
                 }:
-                    text_value = format_money(value)
+                    text_value = format_money(
+                        value
+                    )
                 else:
-                    text_value = safe_value(value)
+                    text_value = safe_value(
+                        value
+                    )
 
                 cells.append(
                     ft.DataCell(
@@ -437,9 +738,6 @@ def main(page: ft.Page):
             column_spacing=20,
         )
 
-        # Para tener scroll vertical, la tabla debe estar en una Columna
-        # con la propiedad scroll activada.
-        # El Row interno se mantiene para el scroll horizontal si la tabla es ancha.
         return ft.Column(
             controls=[
                 ft.Row(
@@ -447,12 +745,10 @@ def main(page: ft.Page):
                     scroll=ft.ScrollMode.ALWAYS,
                 )
             ],
-            # Esta es la clave para el scroll vertical
             scroll=ft.ScrollMode.ALWAYS,
             height=500,
-            # El borde y padding se aplican a la columna ahora
-            # en lugar de a un contenedor externo.
         )
+
 
     # ========================================================
     # FUNCIÓN: RENDER RESULTADO
@@ -1029,11 +1325,15 @@ def main(page: ft.Page):
                 )
             )
 
+
     # ========================================================
     # PROCESAMIENTO
     # ========================================================
 
-    def process_selected_files(paths: list[str], names: list[str]):
+    def process_selected_files(
+        paths: list[str],
+        names: list[str],
+    ):
 
         loading_ring.visible = True
         status_text.value = "Procesando estados de cuenta..."
@@ -1053,6 +1353,16 @@ def main(page: ft.Page):
             results.extend(
                 processed_results
             )
+
+            # =================================================
+            # ACTUALIZAR RESUMEN DE ARCHIVOS
+            # =================================================
+
+            update_processing_summary()
+
+            # =================================================
+            # ACTUALIZAR SELECTOR
+            # =================================================
 
             dropdown_files.options = [
                 ft.DropdownOption(
@@ -1090,6 +1400,7 @@ def main(page: ft.Page):
                 )
 
                 auditoria_view.controls.clear()
+
                 auditoria_view.controls.append(
                     ft.Text(
                         "No se encontraron estados de cuenta procesables."
@@ -1138,6 +1449,7 @@ def main(page: ft.Page):
 
             page.update()
 
+
     # ========================================================
     # SELECCIÓN DE ARCHIVOS
     # ========================================================
@@ -1145,6 +1457,7 @@ def main(page: ft.Page):
     async def pick_files(e):
 
         try:
+
             files = await ft.FilePicker().pick_files(
                 dialog_title="Selecciona estados de cuenta PDF",
                 allow_multiple=True,
@@ -1168,18 +1481,23 @@ def main(page: ft.Page):
             ]
 
             if not paths:
+
                 status_text.value = (
                     "❌ No fue posible obtener las rutas "
                     "de los archivos seleccionados."
                 )
+
                 status_text.color = ft.Colors.RED
+
                 page.update()
+
                 return
 
             loading_ring.visible = True
             status_text.value = "Procesando estados de cuenta..."
             status_text.color = ft.Colors.ON_SURFACE
             upload_button.disabled = True
+
             page.update()
 
             page.run_thread(
@@ -1195,95 +1513,139 @@ def main(page: ft.Page):
             )
 
             status_text.color = ft.Colors.RED
+
             page.update()
+
 
     # ========================================================
     # CAMBIO DE ESTADO DE CUENTA
     # ========================================================
 
     def on_dropdown_change(e):
+
         try:
-            index = int(e.control.value)
+
+            index = int(
+                e.control.value
+            )
+
             if 0 <= index < len(results):
+
                 render_result(
                     results[index]
                 )
+
         except (
             TypeError,
             ValueError,
         ):
-            # Si hay un error, no hacemos nada, pero es bueno tener el pass.
             return
 
-        # Actualizamos la página para reflejar la nueva selección.
         page.update()
+
 
     # ========================================================
     # EXPORTACIÓN
     # ========================================================
 
     async def export_excel(e):
+
         if not results:
             return
 
         try:
+
             path = await ft.FilePicker().save_file(
                 dialog_title="Guardar reporte Excel",
                 file_name="reporte_estados_de_cuenta.xlsx",
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=["xlsx"],
             )
+
             if not path:
                 return
 
-            # Asegurarse de que la ruta tenga la extensión .xlsx
-            # Esta es la corrección para el problema.
             if not path.lower().endswith(".xlsx"):
                 path += ".xlsx"
 
             export_button.disabled = True
-            status_text.value = "Generando archivo Excel..."
+
+            status_text.value = (
+                "Generando archivo Excel..."
+            )
+
             status_text.color = ft.Colors.ON_SURFACE
+
             page.update()
 
             def export_worker():
+
                 try:
+
                     export_batch_excel(
                         results,
                         path,
                     )
+
                     status_text.value = (
                         "✅ Archivo Excel exportado correctamente."
                     )
+
                     status_text.color = ft.Colors.GREEN
 
-                    # Abrir el explorador y seleccionar el archivo
                     try:
+
                         if sys.platform == "win32":
-                            # /select, "path" abre la carpeta y selecciona el archivo.
-                            subprocess.run(["explorer", "/select,", path])
-                        elif sys.platform == "darwin":  # macOS
-                            # -R revela el archivo en el Finder.
-                            subprocess.run(["open", "-R", path])
-                        else:  # linux
-                            # xdg-open es el estándar, pero no tiene una forma
-                            # universal de seleccionar un archivo. Abrir el
-                            # directorio es la opción más segura.
-                            directory = os.path.dirname(path)
-                            subprocess.run(["xdg-open", directory])
+
+                            subprocess.run(
+                                [
+                                    "explorer",
+                                    "/select,",
+                                    path,
+                                ]
+                            )
+
+                        elif sys.platform == "darwin":
+
+                            subprocess.run(
+                                [
+                                    "open",
+                                    "-R",
+                                    path,
+                                ]
+                            )
+
+                        else:
+
+                            directory = os.path.dirname(
+                                path
+                            )
+
+                            subprocess.run(
+                                [
+                                    "xdg-open",
+                                    directory,
+                                ]
+                            )
 
                     except Exception as folder_ex:
-                        # Si falla, no es crítico. Se puede registrar en un futuro.
-                        print(f"No se pudo abrir la carpeta: {folder_ex}")
+
+                        print(
+                            f"No se pudo abrir la carpeta: {folder_ex}"
+                        )
 
                 except Exception as ex:
+
                     status_text.value = (
                         f"❌ Error al exportar Excel: {ex}"
                     )
+
                     status_text.color = ft.Colors.RED
 
                 finally:
+
                     export_button.disabled = False
+
                     page.update()
 
             page.run_thread(
@@ -1291,12 +1653,17 @@ def main(page: ft.Page):
             )
 
         except Exception as ex:
+
             status_text.value = (
                 f"❌ Error al guardar el archivo: {ex}"
             )
+
             status_text.color = ft.Colors.RED
+
             export_button.disabled = False
+
             page.update()
+
 
     # ========================================================
     # CONTROLES ESTÁTICOS
@@ -1307,16 +1674,18 @@ def main(page: ft.Page):
         icon=ft.Icons.UPLOAD_FILE,
         on_click=pick_files,
     )
- 
-    # Asignar los manejadores de eventos DESPUÉS de definirlos
+
     export_button.on_click = export_excel
+
     dropdown_files.on_select = on_dropdown_change
- 
+
+
     # ========================================================
     # UI
     # ========================================================
 
     page.add(
+
         ft.Row(
             controls=[
                 ft.Column(
@@ -1346,7 +1715,9 @@ def main(page: ft.Page):
                 ),
             ],
         ),
+
         ft.Divider(height=10),
+
         ft.Row(
             controls=[
                 ft.Text(
@@ -1354,7 +1725,9 @@ def main(page: ft.Page):
                     size=32,
                     weight=ft.FontWeight.BOLD,
                 ),
-                ft.Text("Versión 1.0.3"),
+                ft.Text(
+                    "Versión 1.0.3"
+                ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         ),
@@ -1378,7 +1751,23 @@ def main(page: ft.Page):
             weight=ft.FontWeight.BOLD,
         ),
 
-        dropdown_files,
+        # ====================================================
+        # TABLA + SELECTOR
+        # ====================================================
+
+        ft.Row(
+            controls=[
+                processing_summary_view,
+
+                ft.Container(
+                    content=dropdown_files,
+                    width=390,
+                    padding=10,
+                ),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            spacing=15,
+        ),
 
         auditoria_view,
 

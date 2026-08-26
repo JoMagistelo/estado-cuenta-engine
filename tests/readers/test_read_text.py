@@ -7,7 +7,7 @@ from readers.pdf_text_reader import PDFTextReader
 
 
 def test_spatial_extraction():
-    ruta_pdf = "data/edo_banamex.pdf"
+    ruta_pdf = "data/12.1_Nómina_Banorte_dic_23.pdf"
 
     print("\n========================================================")
     print(" 🛠️ TEST PDF WORD READER (RAW)")
@@ -32,7 +32,7 @@ def test_spatial_extraction():
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
-    ruta_json = output_dir / f"{pdf_path.stem}_raw_words.json"
+    ruta_json = output_dir / f"{pdf_path.stem}_raw_text.json"
 
     with open(ruta_json, "w", encoding="utf-8") as f:
         json.dump(

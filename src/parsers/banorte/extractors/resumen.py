@@ -1008,6 +1008,39 @@ def find_resumen_end(
 
 
 # ============================================================
+# CONSTRUCTOR DE RESULTADO VACÍO
+# ============================================================
+
+def _empty_resumen_financiero() -> ResumenFinanciero:
+    """
+    Devuelve un ResumenFinanciero vacío sin modificar la
+    estructura del modelo.
+
+    Se utiliza cuando el extractor no puede localizar la
+    sección esperada del resumen financiero.
+    """
+
+    return ResumenFinanciero(
+        saldo_promedio=None,
+        dias_periodo=None,
+        tasa_bruta_anual=None,
+        saldo_promedio_gravable=None,
+        intereses_a_favor=None,
+        isr_retenido=None,
+        cheques_pagados=None,
+        manejo_cuenta=None,
+        cargos_objetados=None,
+        abonos_objetados=None,
+        saldo_anterior=None,
+        depositos_abonos=None,
+        retiros_cargos=None,
+        saldo_final=None,
+        saldo_promedio_minimo_mensual=None,
+        saldo_global=None,
+    )
+
+
+# ============================================================
 # EXTRACTOR PRINCIPAL
 # ============================================================
 
@@ -1016,7 +1049,7 @@ def extract_resumen_financiero_words(
 ) -> ResumenFinanciero:
 
     if not words:
-        return ResumenFinanciero()
+        return _empty_resumen_financiero()
 
     # --------------------------------------------------------
     # 1. SOLO PRIMERA PÁGINA
@@ -1029,7 +1062,7 @@ def extract_resumen_financiero_words(
     ]
 
     if not page_one_words:
-        return ResumenFinanciero()
+        return _empty_resumen_financiero()
 
     # --------------------------------------------------------
     # 2. AGRUPAR LÍNEAS
@@ -1040,7 +1073,7 @@ def extract_resumen_financiero_words(
     )
 
     if not lines:
-        return ResumenFinanciero()
+        return _empty_resumen_financiero()
 
     # --------------------------------------------------------
     # 3. ENCABEZADO DEL PRODUCTO
@@ -1051,7 +1084,7 @@ def extract_resumen_financiero_words(
     )
 
     if header_index is None:
-        return ResumenFinanciero()
+        return _empty_resumen_financiero()
 
     # --------------------------------------------------------
     # 4. INICIO DEL RESUMEN
@@ -1063,7 +1096,7 @@ def extract_resumen_financiero_words(
     )
 
     if resumen_start is None:
-        return ResumenFinanciero()
+        return _empty_resumen_financiero()
 
     # --------------------------------------------------------
     # 5. FIN DEL RESUMEN

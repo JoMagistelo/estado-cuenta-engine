@@ -1,11 +1,29 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+
+PROJECT_ROOT = Path.cwd()
+
+TESSERACT_DIR = (
+    PROJECT_ROOT
+    / "vendor"
+    / "tesseract"
+)
+
 
 a = Analysis(
-    ['app/main_flet.py'],
-    pathex=[],
+    ["app/main_flet.py"],
+    pathex=[
+        str(PROJECT_ROOT / "src"),
+    ],
     binaries=[],
-    datas=[],
+    datas=[
+        (
+            str(TESSERACT_DIR),
+            "vendor/tesseract",
+        ),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -14,7 +32,10 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-pyz = PYZ(a.pure)
+
+pyz = PYZ(
+    a.pure
+)
 
 exe = EXE(
     pyz,
@@ -22,7 +43,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='EstadoCuentaEngine',
+    name="EstadoCuentaEngine",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -35,5 +56,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='C:/Users/motit/AppData/Local/Temp/bf754d02-952b-4ce7-86b0-39ecb9a278cd',
 )

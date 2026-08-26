@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from models.estado_cuenta import EstadoCuenta
 
@@ -20,6 +19,7 @@ class ProcessingResult:
     - textos originales
     - tablas detectadas
     - validaciones
+    - método utilizado para procesar el documento
     """
 
     file_name: str
@@ -32,9 +32,10 @@ class ProcessingResult:
 
     normalized_text: str
 
-
     validaciones: list[ResultadoValidacion] = field(
         default_factory=list
     )
+
+    processing_method: str = "Digital"
 
     debug: object | None = None
