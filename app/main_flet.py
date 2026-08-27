@@ -1,11 +1,12 @@
-#flet pack app\main_flet.py --name EstadoCuentaEngine
-#pyinstaller EstadoCuentaEngine.spec
+# flet pack app\main_flet.py --name EstadoCuentaEngine
+# pyinstaller EstadoCuentaEngine.spec
 
 from __future__ import annotations
 
 import os
-import sys
 import subprocess
+import sys
+import threading
 import traceback
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ sys.path.append(
     )
 )
 
+
 from engine.pipeline import (
     process_bank_statements_incremental,
 )
@@ -36,20 +38,9 @@ from exporters.excel import export_batch_excel
 # ============================================================
 # IDENTIDAD VISUAL
 # ============================================================
-#
-# Tonos institucionales inspirados en la identidad visual
-# contemporánea de Gobierno de México / Secretaría
-# Anticorrupción y Buen Gobierno.
-#
-# ============================================================
 
 GOB_GREEN = "#1F4D3A"
-GOB_GREEN_DARK = "#163A2C"
-GOB_GREEN_LIGHT = "#E8F0EC"
-
 GOB_GOLD = "#B08D57"
-GOB_GOLD_LIGHT = "#F4EEE5"
-
 GOB_CREAM = "#F7F4EE"
 
 BUTTON_TEXT = "#FFFFFF"
@@ -71,8 +62,9 @@ LOGO_PATH = (
 
 
 # ============================================================
-# UTILIDADES
+# UTILIDADES GENERALES
 # ============================================================
+
 
 def format_optional_float(
     value,
@@ -82,26 +74,78 @@ def format_optional_float(
     na_value: str = "N/A",
 ) -> str:
     """
-    Formatea un valor que puede ser:
-    - float/int
-    - None
-    - string numérico
-    - string como 'N/A'
+    Formatea un valor numérico opcional.
     """
+
     if value is None:
         return na_value
 
     if isinstance(value, str):
+
         try:
-            numeric_value = float(value.replace(",", ""))
-        except (ValueError, TypeError):
+
+            numeric_value = float(
+                value.replace(
+                    ",",
+                    "",
+                )
+            )
+
+        except (
+            ValueError,
+            TypeError,
+        ):
+
             return value
+
     else:
+
         numeric_value = value
 
-    formatted_value = format_str.format(numeric_value)
+    formatted_value = format_str.format(
+        numeric_value
+    )
 
-    return f"{prefix}{formatted_value}{suffix}"
+    return (
+        f"{prefix}"
+        f"{formatted_value}"
+        f"{suffix}"
+    )
+
+
+def safe_value(
+    value: Any,
+) -> str:
+    """
+    Convierte valores vacíos en N/A.
+    """
+
+    if value is None or value == "":
+        return "N/A"
+
+    return str(value)
+
+
+def format_money(
+    value: Any,
+) -> str:
+    """
+    Formatea valores monetarios.
+    """
+
+    if value is None:
+        return "N/A"
+
+    try:
+
+        return f"${float(value):,.2f}"
+
+    except (
+        ValueError,
+        TypeError,
+    ):
+
+        return str(value)
 
 
 def create_metric(
@@ -110,11 +154,7 @@ def create_metric(
     delta: str | None = None,
 ) -> ft.Container:
     """
-    Equivalente visual aproximado a st.metric().
-
-    Se redujo únicamente el tamaño visual de los textos
-    contenidos en las tarjetas para lograr una interfaz
-    más compacta y legible.
+    Crea una tarjeta métrica.
     """
 
     controls = [
@@ -132,11 +172,19 @@ def create_metric(
     ]
 
     if delta is not None:
+
         if delta.startswith("-"):
+
             delta_color = ft.Colors.ERROR
+
         elif delta.startswith("0.00"):
-            delta_color = ft.Colors.ON_SURFACE_VARIANT
+
+            delta_color = (
+                ft.Colors.ON_SURFACE_VARIANT
+            )
+
         else:
+
             delta_color = ft.Colors.GREEN
 
         controls.append(
@@ -167,6 +215,10 @@ def create_section_title(
     title: str,
     icon: str | None = None,
 ) -> ft.Text:
+    """
+    Crea título de sección.
+    """
+
     if icon:
         title = f"{icon} {title}"
 
@@ -177,84 +229,47 @@ def create_section_title(
     )
 
 
-def safe_value(value: Any) -> str:
-    """
-    Convierte None en N/A y deja los demás valores como texto.
-    """
-    if value is None or value == "":
-        return "N/A"
-
-    return str(value)
-
-
-def format_money(value: Any) -> str:
-    if value is None:
-        return "N/A"
-
-    try:
-        return f"${float(value):,.2f}"
-    except (ValueError, TypeError):
-        return str(value)
-
-
 # ============================================================
 # APP
 # ============================================================
 
-def main(page: ft.Page):
+
+def main(
+    page: ft.Page,
+):
 
     # ========================================================
     # CONFIGURACIÓN
     # ========================================================
 
-    page.title = "Extractor de Movimientos Financieros"
+    page.title = (
+        "Extractor de Movimientos Financieros"
+    )
+
     page.window.width = 1100
     page.window.height = 800
     page.padding = 18
     page.theme_mode = ft.ThemeMode.LIGHT
-
-    # ========================================================
-    # ESCALA GENERAL DE LA INTERFAZ
-    # ========================================================
-    #
-    # 1.00 = escala original
-    # 0.90 = 10 % más pequeña
-    #
-    # Se mantiene exactamente igual.
-    #
-    # ========================================================
+    page.scroll = ft.ScrollMode.AUTO
 
     UI_SCALE = 0.85
 
-    # Scroll global de la aplicación
-    page.scroll = ft.ScrollMode.AUTO
-
     # ========================================================
-    # ESTADO
+    # ESTADO DE LA APLICACIÓN
     # ========================================================
 
-    results = []
+    results: list[Any] = []
 
-    # ========================================================
-    # ESTADO DEL PROCESAMIENTO
-    # ========================================================
-    #
-    # Cada elemento corresponde a un archivo seleccionado.
-    #
-    # Estructura:
-    #
-    # {
-    #     "file_name": str,
-    #     "processing_method": str | None,
-    #     "status": "classifying" | "processing" |
-    #               "completed" | "error",
-    #     "result": ProcessingResult | None,
-    #     "error": str | None,
-    # }
-    #
-    # ========================================================
+    processing_items: list[
+        dict[str, Any]
+    ] = []
 
-    processing_items: list[dict[str, Any]] = []
+    # Índice del documento actualmente mostrado.
+    selected_result_index: int | None = None
+
+    # Protege las reconstrucciones de auditoria_view
+    # ante eventos concurrentes.
+    render_lock = threading.RLock()
 
     # ========================================================
     # CONTROLES DINÁMICOS
@@ -272,14 +287,13 @@ def main(page: ft.Page):
     )
 
     dropdown_files = ft.Dropdown(
-        label="Selecciona el estado de cuenta que deseas revisar",
+        label=(
+            "Selecciona el estado de cuenta "
+            "que deseas revisar"
+        ),
         width=390,
         visible=False,
     )
-
-    # ========================================================
-    # RESUMEN DE ARCHIVOS
-    # ========================================================
 
     processing_summary_view = ft.Container(
         width=650,
@@ -290,6 +304,22 @@ def main(page: ft.Page):
         spacing=20,
     )
 
+    # ========================================================
+    # FILE PICKERS
+    # ========================================================
+    #
+    # Se reutilizan los mismos objetos en lugar de crear
+    # un FilePicker nuevo en cada evento.
+    #
+    # ========================================================
+
+    file_picker_open = ft.FilePicker()
+    file_picker_save = ft.FilePicker()
+
+    # ========================================================
+    # BOTÓN EXPORTAR
+    # ========================================================
+
     export_button = ft.FilledButton(
         content="Generar Reporte Excel",
         icon=ft.Icons.DOWNLOAD,
@@ -299,13 +329,44 @@ def main(page: ft.Page):
     )
 
     # ========================================================
-    # CONTROL DE FEEDBACK
+    # FUNCIONES DE ACTUALIZACIÓN UI
     # ========================================================
 
-    def show_feedback(e=None):
+    def update_page(
+        reset_scroll: bool = False,
+    ) -> None:
         """
-        Muestra información general de uso, recomendaciones,
-        validaciones y bancos soportados.
+        Ejecuta una actualización única de la UI.
+
+        Las funciones de renderizado NO llaman page.update().
+        El llamador decide cuándo se actualiza la página.
+        """
+
+        page.update()
+
+        if reset_scroll:
+            reset_page_scroll()
+
+    async def reset_page_scroll_async():
+        await page.scroll_to(
+            offset=0,
+            duration=0,
+        )
+
+    def reset_page_scroll():
+        page.run_task(
+            reset_page_scroll_async
+        )
+
+    # ========================================================
+    # AYUDA
+    # ========================================================
+
+    def show_feedback(
+        e=None,
+    ):
+        """
+        Muestra información general de uso.
         """
 
         feedback_dialog = ft.AlertDialog(
@@ -338,20 +399,21 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Las validaciones son una parte fundamental de la "
-                        "revisión. En particular, las validaciones de "
-                        "\"Total depósitos / abonos\" y "
-                        "\"Total retiros / cargos\" permiten comprobar que "
-                        "los movimientos financieros extraídos mantienen "
-                        "la consistencia esperada con el estado de cuenta.",
+                        "Las validaciones son una parte "
+                        "fundamental de la revisión. En particular, "
+                        "las validaciones de \"Total depósitos / "
+                        "abonos\" y \"Total retiros / cargos\" "
+                        "permiten comprobar que los movimientos "
+                        "financieros extraídos mantienen la "
+                        "consistencia esperada con el estado "
+                        "de cuenta."
                     ),
 
                     ft.Text(
-                        "Cuando ambas validaciones pasan correctamente, "
-                        "esto significa que los abonos y cargos extraídos "
-                        "son consistentes con los totales financieros "
-                        "esperados y proporciona una señal de que los "
-                        "movimientos fueron extraídos correctamente.",
+                        "Cuando ambas validaciones pasan "
+                        "correctamente, esto proporciona una "
+                        "señal de que los movimientos fueron "
+                        "extraídos correctamente."
                     ),
 
                     ft.Text(
@@ -361,11 +423,12 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Se recomienda revisar visualmente los montos "
-                        "del estado de cuenta para identificar qué importe "
-                        "pudo haber sido extraído incorrectamente. "
-                        "Después de identificarlo, puede corregirse "
-                        "manualmente en el archivo Excel descargado.",
+                        "Se recomienda revisar visualmente los "
+                        "montos del estado de cuenta para "
+                        "identificar qué importe pudo haber sido "
+                        "extraído incorrectamente. Después de "
+                        "identificarlo, puede corregirse "
+                        "manualmente en el archivo Excel."
                     ),
 
                     ft.Divider(),
@@ -378,8 +441,8 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Actualmente se procesan estados de cuenta "
-                        "digitales de:",
+                        "Actualmente se procesan estados de "
+                        "cuenta digitales de:"
                     ),
 
                     ft.Text(
@@ -391,7 +454,7 @@ def main(page: ft.Page):
                     ft.Text(
                         "• Libretón Básico\n"
                         "• Libretón Nómina\n"
-                        "• Libretón Premium",
+                        "• Libretón Premium"
                     ),
 
                     ft.Text(
@@ -403,7 +466,7 @@ def main(page: ft.Page):
                     ft.Text(
                         "• Nómina Banorte\n"
                         "• Nómina Banorte sin chequera\n"
-                        "• Enlace Negocios",
+                        "• Enlace Negocios"
                     ),
 
                     ft.Text(
@@ -413,11 +476,11 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "• Mi Cuenta",
+                        "• Mi Cuenta"
                     ),
 
                     ft.Text(
-                        "Próximamente:",
+                        "En incorporación:",
                         size=13,
                         weight=ft.FontWeight.BOLD,
                         color=GOB_GOLD,
@@ -426,14 +489,14 @@ def main(page: ft.Page):
                     ft.Text(
                         "• CitiBanamex Cuenta Base\n"
                         "• Banamex Premium\n"
-                        "• HSBC digital y OCR",
+                        "• HSBC digital y OCR"
                     ),
 
                     ft.Divider(),
 
                     ft.Container(
                         content=ft.Text(
-                            "Nota: la lista de formatos habilitados "
+                            "La lista de formatos habilitados "
                             "se actualizará conforme se incorporen "
                             "nuevos modelos de estados de cuenta.",
                             size=12,
@@ -442,6 +505,7 @@ def main(page: ft.Page):
                         padding=12,
                         border_radius=8,
                     ),
+
                 ],
                 spacing=10,
                 tight=True,
@@ -453,10 +517,14 @@ def main(page: ft.Page):
                     icon=ft.Icons.CLOSE,
                     bgcolor=GOB_GREEN,
                     color=BUTTON_TEXT,
-                    on_click=lambda e: page.pop_dialog(),
+                    on_click=(
+                        lambda e: page.pop_dialog()
+                    ),
                 ),
             ],
-            actions_alignment=ft.MainAxisAlignment.END,
+            actions_alignment=(
+                ft.MainAxisAlignment.END
+            ),
         )
 
         page.show_dialog(
@@ -464,32 +532,7 @@ def main(page: ft.Page):
         )
 
     # ========================================================
-    # CORRECCIÓN DEL SCROLL GLOBAL
-    # ========================================================
-    #
-    # Cuando auditoria_view aumenta de tamaño después de un
-    # procesamiento, el contenido total de la página cambia.
-    #
-    # Se fuerza la posición superior después de renderizar el
-    # resultado para evitar que la ventana conserve una posición
-    # de desplazamiento anterior y aparezca espacio superior
-    # inesperado.
-    #
-    # ========================================================
-
-    async def reset_page_scroll_async():
-        await page.scroll_to(
-            offset=0,
-            duration=0,
-        )
-
-    def reset_page_scroll():
-        page.run_task(
-            reset_page_scroll_async
-        )
-
-    # ========================================================
-    # FUNCIONES: RESUMEN DE PROCESAMIENTO
+    # RESUMEN DE PROCESAMIENTO
     # ========================================================
 
     def get_validation_result(
@@ -497,15 +540,16 @@ def main(page: ft.Page):
         validation_name: str,
     ):
         """
-        Busca una validación concreta por nombre.
-
-        No depende de la posición de la validación dentro de
-        result.validaciones.
+        Busca una validación por nombre.
         """
 
         for validacion in result.validaciones:
 
-            if validacion.nombre == validation_name:
+            if (
+                validacion.nombre
+                == validation_name
+            ):
+
                 return validacion
 
         return None
@@ -513,9 +557,6 @@ def main(page: ft.Page):
     def create_validation_status(
         validacion,
     ) -> ft.Container:
-        """
-        Representa el resultado final de una validación.
-        """
 
         if validacion is None:
 
@@ -524,10 +565,14 @@ def main(page: ft.Page):
                     "—",
                     size=14,
                     weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    color=(
+                        ft.Colors.ON_SURFACE_VARIANT
+                    ),
                     text_align=ft.TextAlign.CENTER,
                 ),
-                bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
+                bgcolor=(
+                    ft.Colors.SURFACE_CONTAINER_LOW
+                ),
                 padding=8,
                 border_radius=6,
                 alignment=ft.Alignment.CENTER,
@@ -560,10 +605,6 @@ def main(page: ft.Page):
         )
 
     def create_pending_validation_status() -> ft.Container:
-        """
-        Representa una validación que todavía no puede mostrarse
-        porque el documento continúa procesándose.
-        """
 
         return ft.Container(
             content=ft.Text(
@@ -578,10 +619,6 @@ def main(page: ft.Page):
         )
 
     def create_error_validation_status() -> ft.Container:
-        """
-        Representa un archivo cuyo procesamiento terminó con
-        error.
-        """
 
         return ft.Container(
             content=ft.Text(
@@ -598,11 +635,11 @@ def main(page: ft.Page):
     def create_processing_method_status(
         processing_method: str,
     ) -> ft.Container:
-        """
-        Representa visualmente el método de procesamiento.
-        """
 
-        if processing_method.upper() == "OCR":
+        if (
+            processing_method.upper()
+            == "OCR"
+        ):
 
             return ft.Container(
                 content=ft.Text(
@@ -635,19 +672,19 @@ def main(page: ft.Page):
         )
 
     def create_processing_state_status() -> ft.Container:
-        """
-        Estado mostrado mientras todavía no se ha determinado
-        si el documento será Digital u OCR.
-        """
 
         return ft.Container(
             content=ft.Text(
                 "Detectando",
                 size=11,
                 weight=ft.FontWeight.BOLD,
-                color=ft.Colors.ON_SURFACE_VARIANT,
+                color=(
+                    ft.Colors.ON_SURFACE_VARIANT
+                ),
             ),
-            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
+            bgcolor=(
+                ft.Colors.SURFACE_CONTAINER_LOW
+            ),
             padding=ft.Padding.symmetric(
                 horizontal=8,
                 vertical=6,
@@ -659,24 +696,6 @@ def main(page: ft.Page):
     def create_processing_summary(
         items,
     ) -> ft.Container:
-        """
-        Construye la tabla resumen de todos los archivos
-        seleccionados.
-
-        Columnas:
-
-            Archivo
-            Proceso
-            Abonos
-            Cargos
-
-        Los archivos que todavía están procesándose permanecen
-        visibles en esta tabla, pero sus validaciones aparecen
-        como pendientes.
-
-        Solamente los resultados terminados se incorporan al
-        selector de documentos.
-        """
 
         rows = []
 
@@ -694,10 +713,6 @@ def main(page: ft.Page):
                 "processing_method"
             )
 
-            # ------------------------------------------------
-            # MÉTODO
-            # ------------------------------------------------
-
             if processing_method:
 
                 process_control = (
@@ -712,11 +727,10 @@ def main(page: ft.Page):
                     create_processing_state_status()
                 )
 
-            # ------------------------------------------------
-            # VALIDACIONES
-            # ------------------------------------------------
-
-            if status == "completed" and result:
+            if (
+                status == "completed"
+                and result
+            ):
 
                 validacion_abonos = (
                     get_validation_result(
@@ -785,7 +799,7 @@ def main(page: ft.Page):
                         ft.DataCell(
                             content=cargos_control
                         ),
-                    ]
+                    ],
                 )
             )
 
@@ -794,25 +808,33 @@ def main(page: ft.Page):
                 ft.DataColumn(
                     label=ft.Text(
                         "Archivo",
-                        weight=ft.FontWeight.BOLD,
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
                     )
                 ),
                 ft.DataColumn(
                     label=ft.Text(
                         "Proceso",
-                        weight=ft.FontWeight.BOLD,
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
                     )
                 ),
                 ft.DataColumn(
                     label=ft.Text(
                         "Abonos",
-                        weight=ft.FontWeight.BOLD,
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
                     )
                 ),
                 ft.DataColumn(
                     label=ft.Text(
                         "Cargos",
-                        weight=ft.FontWeight.BOLD,
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
                     )
                 ),
             ],
@@ -838,7 +860,9 @@ def main(page: ft.Page):
                     ft.Text(
                         "Archivos procesados",
                         size=18,
-                        weight=ft.FontWeight.BOLD,
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
                     ),
                     ft.Row(
                         controls=[
@@ -858,10 +882,6 @@ def main(page: ft.Page):
         )
 
     def update_processing_summary():
-        """
-        Reconstruye la tabla resumen utilizando el estado actual
-        de processing_items.
-        """
 
         if not processing_items:
 
@@ -879,10 +899,6 @@ def main(page: ft.Page):
         processing_summary_view.visible = True
 
     def update_dropdown():
-        """
-        Actualiza el selector exclusivamente con archivos que
-        ya terminaron correctamente.
-        """
 
         dropdown_files.options = [
             ft.DropdownOption(
@@ -897,20 +913,14 @@ def main(page: ft.Page):
         if results:
 
             dropdown_files.visible = True
-
             export_button.disabled = False
 
         else:
 
             dropdown_files.visible = False
-
             export_button.disabled = True
 
     def update_processing_status():
-        """
-        Actualiza el texto superior con el estado actual
-        del lote.
-        """
 
         total = len(
             processing_items
@@ -919,36 +929,48 @@ def main(page: ft.Page):
         completed = sum(
             1
             for item in processing_items
-            if item.get("status") == "completed"
+            if item.get("status")
+            == "completed"
         )
 
         errors = sum(
             1
             for item in processing_items
-            if item.get("status") == "error"
+            if item.get("status")
+            == "error"
         )
 
-        pending = total - completed - errors
+        pending = (
+            total
+            - completed
+            - errors
+        )
 
         ocr_pending = sum(
             1
             for item in processing_items
             if (
-                item.get("status") == "processing"
-                and item.get("processing_method") == "OCR"
+                item.get("status")
+                == "processing"
+                and item.get(
+                    "processing_method"
+                )
+                == "OCR"
             )
         )
 
         if pending > 0:
 
             status_text.value = (
-                f"Procesando {completed} de {total} archivos"
+                f"Procesando {completed} "
+                f"de {total} archivos"
             )
 
             if ocr_pending:
 
                 status_text.value += (
-                    f" · {ocr_pending} OCR en segundo plano"
+                    f" · {ocr_pending} "
+                    f"OCR en segundo plano"
                 )
 
             if errors:
@@ -963,59 +985,73 @@ def main(page: ft.Page):
 
             return
 
-        # ====================================================
-        # LOTE TERMINADO
-        # ====================================================
-
         if errors == 0:
 
             status_text.value = (
-                f"✅ {completed} estados de cuenta "
-                f"procesados correctamente."
+                f"✅ {completed} estados de "
+                f"cuenta procesados correctamente."
             )
 
-            status_text.color = ft.Colors.GREEN
+            status_text.color = (
+                ft.Colors.GREEN
+            )
 
         elif completed > 0:
 
             status_text.value = (
-                f"✅ {completed} estados de cuenta "
-                f"procesados correctamente."
+                f"✅ {completed} estados de "
+                f"cuenta procesados correctamente."
                 f" ⚠️ {errors} con error."
             )
 
-            status_text.color = ft.Colors.ERROR
+            status_text.color = (
+                ft.Colors.ERROR
+            )
 
         else:
 
             status_text.value = (
-                f"❌ No fue posible procesar los "
-                f"{errors} archivos seleccionados."
+                f"❌ No fue posible procesar "
+                f"los {errors} archivos seleccionados."
             )
 
-            status_text.color = ft.Colors.RED
+            status_text.color = (
+                ft.Colors.RED
+            )
 
     # ========================================================
-    # FUNCIÓN: RENDER IMAGEN
+    # RENDER DOCUMENTO IMAGEN / FALLBACK
     # ========================================================
 
-    def render_image_document(result):
+    def render_image_document(
+        result,
+    ):
 
         auditoria_view.controls.clear()
 
         auditoria_view.controls.extend(
             [
+
                 ft.Container(
                     content=ft.Column(
                         controls=[
                             ft.Text(
-                                "🖼️ Se detectó que este documento es una imagen o un PDF escaneado.",
-                                weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.ON_ERROR_CONTAINER,
+                                "🖼️ Se detectó que este "
+                                "documento es una imagen o "
+                                "un PDF escaneado.",
+                                weight=(
+                                    ft.FontWeight.BOLD
+                                ),
+                                color=(
+                                    ft.Colors
+                                    .ON_ERROR_CONTAINER
+                                ),
                             ),
                         ],
                     ),
-                    bgcolor=ft.Colors.ERROR_CONTAINER,
+                    bgcolor=(
+                        ft.Colors.ERROR_CONTAINER
+                    ),
                     padding=15,
                     border_radius=8,
                 ),
@@ -1024,16 +1060,20 @@ def main(page: ft.Page):
                     content=ft.Column(
                         controls=[
                             ft.Text(
-                                "🚧 El motor detectó correctamente que el archivo es un PDF basado en imagen.",
-                                color=ft.Colors.ON_SECONDARY_CONTAINER,
-                            ),
-                            ft.Text(
-                                "La extracción de datos mediante OCR está pendiente de implementación.",
-                                color=ft.Colors.ON_SECONDARY_CONTAINER,
+                                "El documento no pudo "
+                                "completar el flujo de "
+                                "procesamiento OCR.",
+                                color=(
+                                    ft.Colors
+                                    .ON_SECONDARY_CONTAINER
+                                ),
                             ),
                         ],
                     ),
-                    bgcolor=ft.Colors.SECONDARY_CONTAINER,
+                    bgcolor=(
+                        ft.Colors
+                        .SECONDARY_CONTAINER
+                    ),
                     padding=15,
                     border_radius=8,
                 ),
@@ -1043,27 +1083,37 @@ def main(page: ft.Page):
                         controls=[
                             ft.Text(
                                 "Estado del procesamiento",
-                                weight=ft.FontWeight.BOLD,
+                                weight=(
+                                    ft.FontWeight.BOLD
+                                ),
                             ),
-                            ft.Text("📄 Tipo: PDF basado en imagen"),
-                            ft.Text("🖼️ Detección: correcta"),
-                            ft.Text("🔎 OCR: pendiente de implementación"),
-                            ft.Text("🏦 Detección de banco: pendiente de OCR"),
-                            ft.Text("📊 Extracción financiera: pendiente de OCR"),
+                            ft.Text(
+                                "📄 Tipo: PDF basado en imagen"
+                            ),
+                            ft.Text(
+                                "🖼️ Detección: correcta"
+                            ),
+                            ft.Text(
+                                "🔎 OCR: no completado"
+                            ),
+                            ft.Text(
+                                "🏦 Banco: no determinado"
+                            ),
+                            ft.Text(
+                                "📊 Extracción financiera: "
+                                "no completada"
+                            ),
                         ],
                         spacing=5,
                     ),
                     padding=15,
                 ),
+
             ]
         )
 
-        page.update()
-
-        reset_page_scroll()
-
     # ========================================================
-    # FUNCIÓN: TABLA DE MOVIMIENTOS
+    # TABLA DE MOVIMIENTOS
     # ========================================================
 
     def create_movements_table(
@@ -1101,14 +1151,18 @@ def main(page: ft.Page):
 
             for columna in columnas_mostrar:
 
-                if columna == "numero_movimiento":
+                if (
+                    columna
+                    == "numero_movimiento"
+                ):
 
                     columnas_existentes.append(
                         columna
                     )
 
                 elif (
-                    columna == "fecha_corte"
+                    columna
+                    == "fecha_corte"
                     and fecha_corte_documento
                 ):
 
@@ -1117,7 +1171,8 @@ def main(page: ft.Page):
                     )
 
                 elif (
-                    columna == "numero_cuenta"
+                    columna
+                    == "numero_cuenta"
                     and numero_cuenta_documento
                 ):
 
@@ -1134,45 +1189,54 @@ def main(page: ft.Page):
                         columna
                     )
 
-        columns = []
+        nombres = {
+            "fecha_corte": "Fecha Corte",
+            "numero_cuenta": "Número de Cuenta",
+            "fecha_operacion": "Fecha Operación",
+            "fecha_liquidacion": (
+                "Fecha Liquidación"
+            ),
+            "concepto": "Concepto",
+            "numero_movimiento": (
+                "No. Movimiento"
+            ),
+            "cargo": "Cargo",
+            "abono": "Abono",
+            "saldo_operacion": (
+                "Saldo Operación"
+            ),
+            "saldo_liquidacion": (
+                "Saldo Liquidación"
+            ),
+            "tipo_operacion": "Tipo",
+            "beneficiario": "Beneficiario",
+            "cuenta_beneficiario": (
+                "Cuenta Benef."
+            ),
+            "clabe_beneficiario": "CLABE",
+            "rfc": "RFC",
+            "referencia": "Referencia",
+            "autorizacion": "Autorización",
+            "hora_operacion": "Hora",
+        }
 
-        for columna in columnas_existentes:
-
-            nombres = {
-                "fecha_corte": "Fecha Corte",
-                "numero_cuenta": "Número de Cuenta",
-                "fecha_operacion": "Fecha Operación",
-                "fecha_liquidacion": "Fecha Liquidación",
-                "concepto": "Concepto",
-                "numero_movimiento": "No. Movimiento",
-                "cargo": "Cargo",
-                "abono": "Abono",
-                "saldo_operacion": "Saldo Operación",
-                "saldo_liquidacion": "Saldo Liquidación",
-                "tipo_operacion": "Tipo",
-                "beneficiario": "Beneficiario",
-                "cuenta_beneficiario": "Cuenta Benef.",
-                "clabe_beneficiario": "CLABE",
-                "rfc": "RFC",
-                "referencia": "Referencia",
-                "autorizacion": "Autorización",
-                "hora_operacion": "Hora",
-            }
-
-            columns.append(
-                ft.DataColumn(
-                    label=ft.Text(
-                        nombres.get(
-                            columna,
-                            columna.replace(
-                                "_",
-                                " ",
-                            ).title(),
-                        ),
-                        weight=ft.FontWeight.BOLD,
-                    )
+        columns = [
+            ft.DataColumn(
+                label=ft.Text(
+                    nombres.get(
+                        columna,
+                        columna.replace(
+                            "_",
+                            " ",
+                        ).title(),
+                    ),
+                    weight=(
+                        ft.FontWeight.BOLD
+                    ),
                 )
             )
+            for columna in columnas_existentes
+        ]
 
         rows = []
 
@@ -1185,17 +1249,30 @@ def main(page: ft.Page):
 
             for columna in columnas_existentes:
 
-                if columna == "numero_movimiento":
+                if (
+                    columna
+                    == "numero_movimiento"
+                ):
 
                     value = index
 
-                elif columna == "fecha_corte":
+                elif (
+                    columna
+                    == "fecha_corte"
+                ):
 
-                    value = fecha_corte_documento
+                    value = (
+                        fecha_corte_documento
+                    )
 
-                elif columna == "numero_cuenta":
+                elif (
+                    columna
+                    == "numero_cuenta"
+                ):
 
-                    value = numero_cuenta_documento
+                    value = (
+                        numero_cuenta_documento
+                    )
 
                 else:
 
@@ -1212,8 +1289,10 @@ def main(page: ft.Page):
                     "saldo_liquidacion",
                 }:
 
-                    text_value = format_money(
-                        value
+                    text_value = (
+                        format_money(
+                            value
+                        )
                     )
 
                 else:
@@ -1258,7 +1337,9 @@ def main(page: ft.Page):
         return ft.Column(
             controls=[
                 ft.Row(
-                    controls=[table],
+                    controls=[
+                        table
+                    ],
                     scroll=ft.ScrollMode.ALWAYS,
                 )
             ],
@@ -1267,606 +1348,794 @@ def main(page: ft.Page):
         )
 
     # ========================================================
-    # FUNCIÓN: RENDER RESULTADO
+    # RENDER RESULTADO
     # ========================================================
 
-    def render_result(result):
-
-        auditoria_view.controls.clear()
+    def render_result(
+        result,
+    ):
 
         if result is None:
 
-            page.update()
+            with render_lock:
 
-            reset_page_scroll()
-
-            return
-
-        estado = result.estado_cuenta
-
-        # ====================================================
-        # DOCUMENTO IMAGEN
-        # ====================================================
-
-        if result.bank_key == "imagen_no_procesada":
-
-            render_image_document(
-                result
-            )
+                auditoria_view.controls.clear()
 
             return
 
-        # ====================================================
-        # DOCUMENTO DIGITAL
-        # ====================================================
+        with render_lock:
 
-        auditoria_view.controls.append(
-            ft.Text(
-                f"Banco Detectado: {result.bank_key.upper()}",
-                size=20,
-                weight=ft.FontWeight.BOLD,
-            )
-        )
+            # ------------------------------------------------
+            # IMPORTANTE:
+            #
+            # La vista se reconstruye completamente.
+            #
+            # Nunca se agrega contenido encima de una vista
+            # anterior.
+            # ------------------------------------------------
 
-        dc = (
-            estado.datos_cuenta
-            if estado is not None
-            else None
-        )
+            auditoria_view.controls.clear()
 
-        # ====================================================
-        # MÉTRICAS PRINCIPALES
-        # ====================================================
-
-        periodo = (
-            f"{dc.periodo_inicio} al {dc.periodo_fin}"
-            if dc
-            else "N/A"
-        )
-
-        cliente = (
-            dc.nombre_cliente or "N/A"
-            if dc
-            else "N/A"
-        )
-
-        cuenta = (
-            dc.numero_cuenta or "N/A"
-            if dc
-            else "N/A"
-        )
-
-        clabe = (
-            dc.clabe or "N/A"
-            if dc
-            else "N/A"
-        )
-
-        auditoria_view.controls.append(
-            ft.Row(
-                controls=[
-                    create_metric(
-                        "Periodo",
-                        periodo,
-                    ),
-                    create_metric(
-                        "Cliente",
-                        cliente,
-                    ),
-                    create_metric(
-                        "Cuenta",
-                        cuenta,
-                    ),
-                    create_metric(
-                        "CLABE",
-                        clabe,
-                    ),
-                ]
-            )
-        )
-
-        # ====================================================
-        # 1. DATOS DE LA CUENTA
-        # ====================================================
-
-        auditoria_view.controls.append(
-            create_section_title(
-                "1. Datos de la Cuenta",
-                "📌",
-            )
-        )
-
-        if dc:
-
-            rf = estado.resumen_financiero
-
-            dias_periodo = (
-                safe_value(rf.dias_periodo)
-                if rf
-                else "N/A"
+            estado = (
+                result.estado_cuenta
             )
 
-            tasa_bruta = (
-                f"{safe_value(rf.tasa_bruta_anual)}%"
-                if rf
-                else "N/A"
-            )
+            # ================================================
+            # DOCUMENTO IMAGEN / FALLBACK
+            # ================================================
 
-            datos_cuenta = ft.Container(
-                content=ft.Row(
-                    controls=[
-                        ft.Column(
-                            controls=[
-                                ft.Text(
-                                    f"Producto: {safe_value(dc.producto_principal)}"
-                                ),
-                                ft.Text(
-                                    f"No. Cliente: {safe_value(dc.numero_cliente)}"
-                                ),
-                            ],
-                            expand=True,
-                        ),
+            if (
+                result.bank_key
+                == "imagen_no_procesada"
+            ):
 
-                        ft.Column(
-                            controls=[
-                                ft.Text(
-                                    f"RFC: {safe_value(dc.rfc)}"
-                                ),
-                                ft.Text(
-                                    f"Fecha de Corte: {safe_value(dc.fecha_corte)}"
-                                ),
-                            ],
-                            expand=True,
-                        ),
+                render_image_document(
+                    result
+                )
 
-                        ft.Column(
-                            controls=[
-                                ft.Text(
-                                    f"Días del Periodo: {dias_periodo}"
-                                ),
-                                ft.Text(
-                                    f"Tasa Bruta Anual: {tasa_bruta}"
-                                ),
-                            ],
-                            expand=True,
-                        ),
-                    ]
-                ),
-                padding=15,
-                border=ft.Border.all(
-                    1,
-                    ft.Colors.OUTLINE_VARIANT,
-                ),
-                border_radius=8,
-            )
+                return
+
+            # ================================================
+            # BANCO
+            # ================================================
 
             auditoria_view.controls.append(
-                datos_cuenta
-            )
-
-        else:
-
-            auditoria_view.controls.append(
-                ft.Container(
-                    content=ft.Text(
-                        "⚠️ No se encontraron datos de la cuenta."
+                ft.Text(
+                    (
+                        "Banco Detectado: "
+                        f"{result.bank_key.upper()}"
                     ),
-                    bgcolor=ft.Colors.ERROR_CONTAINER,
-                    padding=15,
-                    border_radius=8,
+                    size=20,
+                    weight=(
+                        ft.FontWeight.BOLD
+                    ),
                 )
             )
 
-        # ====================================================
-        # 2. RESUMEN FINANCIERO
-        # ====================================================
-
-        auditoria_view.controls.append(
-            create_section_title(
-                "2. Resumen Financiero",
-                "📊",
+            dc = (
+                estado.datos_cuenta
+                if estado is not None
+                else None
             )
-        )
 
-        rf = estado.resumen_financiero
+            # ================================================
+            # MÉTRICAS
+            # ================================================
 
-        if rf:
+            periodo = (
+                (
+                    f"{dc.periodo_inicio} "
+                    f"al {dc.periodo_fin}"
+                )
+                if dc
+                else "N/A"
+            )
 
-            saldo_anterior = rf.saldo_anterior or 0
-            saldo_final = rf.saldo_final or 0
+            cliente = (
+                dc.nombre_cliente or "N/A"
+                if dc
+                else "N/A"
+            )
 
-            delta_val = (
-                saldo_final
-                - saldo_anterior
+            cuenta = (
+                dc.numero_cuenta or "N/A"
+                if dc
+                else "N/A"
+            )
+
+            clabe = (
+                dc.clabe or "N/A"
+                if dc
+                else "N/A"
             )
 
             auditoria_view.controls.append(
                 ft.Row(
                     controls=[
                         create_metric(
-                            "Saldo Anterior",
-                            format_money(
-                                rf.saldo_anterior
-                            ),
+                            "Periodo",
+                            periodo,
                         ),
                         create_metric(
-                            "Depósitos / Abonos",
-                            format_money(
-                                rf.depositos_abonos
-                            ),
+                            "Cliente",
+                            cliente,
                         ),
                         create_metric(
-                            "Retiros / Cargos",
-                            format_money(
-                                rf.retiros_cargos
-                            ),
+                            "Cuenta",
+                            cuenta,
                         ),
                         create_metric(
-                            "Saldo Final",
-                            format_money(
-                                rf.saldo_final
-                            ),
-                            f"{delta_val:,.2f}",
+                            "CLABE",
+                            clabe,
                         ),
                     ]
                 )
             )
 
+            # ================================================
+            # 1. DATOS DE LA CUENTA
+            # ================================================
+
             auditoria_view.controls.append(
-                ft.Row(
-                    controls=[
-                        create_metric(
-                            "Saldo Promedio",
-                            format_money(
-                                rf.saldo_promedio
-                            ),
-                        ),
-                        create_metric(
-                            "Intereses a Favor",
-                            format_money(
-                                rf.intereses_a_favor
-                            ),
-                        ),
-                        create_metric(
-                            "ISR Retenido",
-                            format_money(
-                                rf.isr_retenido
-                            ),
-                        ),
-                    ]
+                create_section_title(
+                    "1. Datos de la Cuenta",
+                    "📌",
                 )
             )
 
-            # -----------------------------------------------
-            # DETALLES ADICIONALES
-            # -----------------------------------------------
+            if dc:
 
-            auditoria_view.controls.append(
-                ft.ExpansionTile(
-                    title=ft.Text(
-                        "Ver más detalles del resumen financiero"
-                    ),
-                    controls=[
-                        ft.Container(
-                            content=ft.Column(
-                                controls=[
-                                    ft.Row(
-                                        controls=[
-                                            create_metric(
-                                                "Saldo Promedio Gravable",
-                                                format_money(
-                                                    rf.saldo_promedio_gravable
-                                                ),
-                                            ),
-                                            create_metric(
-                                                "Saldo Promedio Mínimo Mensual",
-                                                format_money(
-                                                    rf.saldo_promedio_minimo_mensual
-                                                ),
-                                            ),
-                                            create_metric(
-                                                "Saldo Global",
-                                                format_money(
-                                                    rf.saldo_global
-                                                ),
-                                            ),
-                                        ]
-                                    ),
-
-                                    ft.Row(
-                                        controls=[
-                                            create_metric(
-                                                "Cheques Pagados",
-                                                safe_value(
-                                                    rf.cheques_pagados
-                                                ),
-                                            ),
-                                            create_metric(
-                                                "Manejo de Cuenta",
-                                                format_money(
-                                                    rf.manejo_cuenta
-                                                ),
-                                            ),
-                                            create_metric(
-                                                "Cargos Objetados",
-                                                format_money(
-                                                    rf.cargos_objetados
-                                                ),
-                                            ),
-                                            create_metric(
-                                                "Abonos Objetados",
-                                                format_money(
-                                                    rf.abonos_objetados
-                                                ),
-                                            ),
-                                        ]
-                                    ),
-                                ],
-                                spacing=15,
-                            ),
-                            padding=10,
-                        )
-                    ],
+                rf = (
+                    estado.resumen_financiero
                 )
-            )
 
-        else:
-
-            auditoria_view.controls.append(
-                ft.Container(
-                    content=ft.Text(
-                        "⚠️ No se encontró el resumen financiero."
-                    ),
-                    bgcolor=ft.Colors.ERROR_CONTAINER,
-                    padding=15,
-                    border_radius=8,
+                dias_periodo = (
+                    safe_value(
+                        rf.dias_periodo
+                    )
+                    if rf
+                    else "N/A"
                 )
-            )
 
-        # ====================================================
-        # 3. OTROS PRODUCTOS
-        # ====================================================
+                tasa_bruta = (
+                    f"{safe_value(
+                        rf.tasa_bruta_anual
+                    )}%"
+                    if rf
+                    else "N/A"
+                )
 
-        auditoria_view.controls.append(
-            create_section_title(
-                "3. Otros Productos y Comisiones",
-                "💰",
-            )
-        )
-
-        op = estado.otros_productos
-
-        if op:
-
-            otros_productos = ft.Container(
-                content=ft.Column(
-                    controls=[
-                        ft.Text(
-                            f"Producto de Inversión: "
-                            f"{safe_value(op.producto)} "
-                            f"(Contrato: {safe_value(op.contrato)})",
-                            weight=ft.FontWeight.BOLD,
-                        ),
-
-                        ft.Row(
+                datos_cuenta = (
+                    ft.Container(
+                        content=ft.Row(
                             controls=[
-                                create_metric(
-                                    "Tasa Interés Anual",
-                                    format_optional_float(
-                                        op.tasa_interes_anual,
-                                        suffix="%",
-                                    ),
+
+                                ft.Column(
+                                    controls=[
+                                        ft.Text(
+                                            (
+                                                "Producto: "
+                                                f"{safe_value(
+                                                    dc.producto_principal
+                                                )}"
+                                            )
+                                        ),
+                                        ft.Text(
+                                            (
+                                                "No. Cliente: "
+                                                f"{safe_value(
+                                                    dc.numero_cliente
+                                                )}"
+                                            )
+                                        ),
+                                    ],
+                                    expand=True,
                                 ),
 
-                                create_metric(
-                                    "GAT Nominal",
-                                    format_optional_float(
-                                        op.gat_nominal_anual,
-                                        suffix="%",
-                                    ),
+                                ft.Column(
+                                    controls=[
+                                        ft.Text(
+                                            (
+                                                "RFC: "
+                                                f"{safe_value(
+                                                    dc.rfc
+                                                )}"
+                                            )
+                                        ),
+                                        ft.Text(
+                                            (
+                                                "Fecha de Corte: "
+                                                f"{safe_value(
+                                                    dc.fecha_corte
+                                                )}"
+                                            )
+                                        ),
+                                    ],
+                                    expand=True,
                                 ),
 
-                                create_metric(
-                                    "GAT Real",
-                                    format_optional_float(
-                                        op.gat_real_anual,
-                                        suffix="%",
-                                    ),
+                                ft.Column(
+                                    controls=[
+                                        ft.Text(
+                                            (
+                                                "Días del Periodo: "
+                                                f"{dias_periodo}"
+                                            )
+                                        ),
+                                        ft.Text(
+                                            (
+                                                "Tasa Bruta Anual: "
+                                                f"{tasa_bruta}"
+                                            )
+                                        ),
+                                    ],
+                                    expand=True,
                                 ),
 
-                                create_metric(
-                                    "Total Comisiones",
-                                    format_optional_float(
-                                        op.total_comisiones,
-                                        prefix="$",
-                                    ),
-                                ),
                             ]
                         ),
-                    ],
-                    spacing=15,
-                ),
-                padding=15,
-                border=ft.Border.all(
-                    1,
-                    ft.Colors.OUTLINE_VARIANT,
-                ),
-                border_radius=8,
-            )
+                        padding=15,
+                        border=ft.Border.all(
+                            1,
+                            ft.Colors.OUTLINE_VARIANT,
+                        ),
+                        border_radius=8,
+                    )
+                )
+
+                auditoria_view.controls.append(
+                    datos_cuenta
+                )
+
+            else:
+
+                auditoria_view.controls.append(
+                    ft.Container(
+                        content=ft.Text(
+                            (
+                                "⚠️ No se encontraron "
+                                "datos de la cuenta."
+                            )
+                        ),
+                        bgcolor=(
+                            ft.Colors
+                            .ERROR_CONTAINER
+                        ),
+                        padding=15,
+                        border_radius=8,
+                    )
+                )
+
+            # ================================================
+            # 2. RESUMEN FINANCIERO
+            # ================================================
 
             auditoria_view.controls.append(
-                otros_productos
-            )
-
-        else:
-
-            auditoria_view.controls.append(
-                ft.Container(
-                    content=ft.Text(
-                        "No se encontraron otros productos "
-                        "o comisiones en este estado de cuenta."
-                    ),
-                    bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
-                    padding=15,
-                    border_radius=8,
+                create_section_title(
+                    "2. Resumen Financiero",
+                    "📊",
                 )
             )
 
-        # ====================================================
-        # 4. VALIDACIONES FINANCIERAS
-        # ====================================================
-
-        if result.validaciones:
-
-            correctas = sum(
-                1
-                for validacion in result.validaciones
-                if validacion.correcto
+            rf = (
+                estado.resumen_financiero
             )
 
-            total = len(
-                result.validaciones
-            )
+            if rf:
 
-            validaciones_controls = [
-                ft.Text(
-                    f"Integridad financiera: "
-                    f"{correctas}/{total} validaciones correctas",
-                    size=16,
-                    weight=ft.FontWeight.BOLD,
-                )
-            ]
-
-            for validacion in result.validaciones:
-
-                if validacion.correcto:
-
-                    icono = "✅"
-                    color = ft.Colors.GREEN
-
-                else:
-
-                    icono = "❌"
-                    color = ft.Colors.RED
-
-                esperado = format_money(
-                    validacion.esperado
+                saldo_anterior = (
+                    rf.saldo_anterior or 0
                 )
 
-                obtenido = format_money(
-                    validacion.obtenido
+                saldo_final = (
+                    rf.saldo_final or 0
                 )
 
-                diferencia = format_money(
-                    validacion.diferencia
+                delta_val = (
+                    saldo_final
+                    - saldo_anterior
                 )
 
-                validaciones_controls.append(
+                auditoria_view.controls.append(
+                    ft.Row(
+                        controls=[
+                            create_metric(
+                                "Saldo Anterior",
+                                format_money(
+                                    rf.saldo_anterior
+                                ),
+                            ),
+                            create_metric(
+                                (
+                                    "Depósitos / "
+                                    "Abonos"
+                                ),
+                                format_money(
+                                    rf.depositos_abonos
+                                ),
+                            ),
+                            create_metric(
+                                (
+                                    "Retiros / "
+                                    "Cargos"
+                                ),
+                                format_money(
+                                    rf.retiros_cargos
+                                ),
+                            ),
+                            create_metric(
+                                "Saldo Final",
+                                format_money(
+                                    rf.saldo_final
+                                ),
+                                f"{delta_val:,.2f}",
+                            ),
+                        ]
+                    )
+                )
+
+                auditoria_view.controls.append(
+                    ft.Row(
+                        controls=[
+                            create_metric(
+                                "Saldo Promedio",
+                                format_money(
+                                    rf.saldo_promedio
+                                ),
+                            ),
+                            create_metric(
+                                (
+                                    "Intereses "
+                                    "a Favor"
+                                ),
+                                format_money(
+                                    rf.intereses_a_favor
+                                ),
+                            ),
+                            create_metric(
+                                "ISR Retenido",
+                                format_money(
+                                    rf.isr_retenido
+                                ),
+                            ),
+                        ]
+                    )
+                )
+
+                auditoria_view.controls.append(
                     ft.ExpansionTile(
                         title=ft.Text(
-                            f"{icono} {validacion.nombre}",
-                            color=color,
+                            (
+                                "Ver más detalles "
+                                "del resumen financiero"
+                            )
                         ),
                         controls=[
                             ft.Container(
-                                content=ft.Column(
-                                    controls=[
-                                        ft.Text(
-                                            f"Esperado: {esperado}"
-                                        ),
-                                        ft.Text(
-                                            f"Obtenido: {obtenido}"
-                                        ),
-                                        ft.Text(
-                                            f"Diferencia: {diferencia}"
-                                        ),
-                                        ft.Text(
-                                            safe_value(
-                                                validacion.mensaje
+                                content=(
+                                    ft.Column(
+                                        controls=[
+                                            ft.Row(
+                                                controls=[
+                                                    create_metric(
+                                                        (
+                                                            "Saldo Promedio "
+                                                            "Gravable"
+                                                        ),
+                                                        format_money(
+                                                            rf.saldo_promedio_gravable
+                                                        ),
+                                                    ),
+                                                    create_metric(
+                                                        (
+                                                            "Saldo Promedio "
+                                                            "Mínimo Mensual"
+                                                        ),
+                                                        format_money(
+                                                            rf.saldo_promedio_minimo_mensual
+                                                        ),
+                                                    ),
+                                                    create_metric(
+                                                        "Saldo Global",
+                                                        format_money(
+                                                            rf.saldo_global
+                                                        ),
+                                                    ),
+                                                ]
                                             ),
-                                            italic=True,
-                                            color=ft.Colors.ON_SURFACE_VARIANT,
-                                        ),
-                                    ]
+
+                                            ft.Row(
+                                                controls=[
+                                                    create_metric(
+                                                        "Cheques Pagados",
+                                                        safe_value(
+                                                            rf.cheques_pagados
+                                                        ),
+                                                    ),
+                                                    create_metric(
+                                                        "Manejo de Cuenta",
+                                                        format_money(
+                                                            rf.manejo_cuenta
+                                                        ),
+                                                    ),
+                                                    create_metric(
+                                                        "Cargos Objetados",
+                                                        format_money(
+                                                            rf.cargos_objetados
+                                                        ),
+                                                    ),
+                                                    create_metric(
+                                                        "Abonos Objetados",
+                                                        format_money(
+                                                            rf.abonos_objetados
+                                                        ),
+                                                    ),
+                                                ]
+                                            ),
+                                        ],
+                                        spacing=15,
+                                    )
                                 ),
-                                padding=ft.Padding.only(
-                                    left=30,
-                                    bottom=10,
-                                ),
+                                padding=10,
                             )
                         ],
                     )
                 )
 
+            else:
+
+                auditoria_view.controls.append(
+                    ft.Container(
+                        content=ft.Text(
+                            (
+                                "⚠️ No se encontró "
+                                "el resumen financiero."
+                            )
+                        ),
+                        bgcolor=(
+                            ft.Colors
+                            .ERROR_CONTAINER
+                        ),
+                        padding=15,
+                        border_radius=8,
+                    )
+                )
+
+            # ================================================
+            # 3. OTROS PRODUCTOS
+            # ================================================
+
             auditoria_view.controls.append(
-                ft.ExpansionTile(
-                    title=ft.Text(
-                        "✓ Validaciones Financieras",
-                        weight=ft.FontWeight.BOLD,
+                create_section_title(
+                    (
+                        "3. Otros Productos "
+                        "y Comisiones"
                     ),
-                    expanded=False,
-                    controls=validaciones_controls,
+                    "💰",
                 )
             )
 
-        # ====================================================
-        # 5. MOVIMIENTOS
-        # ====================================================
-
-        movimientos = estado.movimientos or []
-
-        auditoria_view.controls.append(
-            create_section_title(
-                f"5. Movimientos ({len(movimientos)})",
-                "📑",
+            op = (
+                estado.otros_productos
             )
+
+            if op:
+
+                otros_productos = (
+                    ft.Container(
+                        content=ft.Column(
+                            controls=[
+
+                                ft.Text(
+                                    (
+                                        "Producto de "
+                                        f"Inversión: "
+                                        f"{safe_value(
+                                            op.producto
+                                        )} "
+                                        f"(Contrato: "
+                                        f"{safe_value(
+                                            op.contrato
+                                        )})"
+                                    ),
+                                    weight=(
+                                        ft.FontWeight.BOLD
+                                    ),
+                                ),
+
+                                ft.Row(
+                                    controls=[
+                                        create_metric(
+                                            (
+                                                "Tasa Interés "
+                                                "Anual"
+                                            ),
+                                            format_optional_float(
+                                                op.tasa_interes_anual,
+                                                suffix="%",
+                                            ),
+                                        ),
+                                        create_metric(
+                                            "GAT Nominal",
+                                            format_optional_float(
+                                                op.gat_nominal_anual,
+                                                suffix="%",
+                                            ),
+                                        ),
+                                        create_metric(
+                                            "GAT Real",
+                                            format_optional_float(
+                                                op.gat_real_anual,
+                                                suffix="%",
+                                            ),
+                                        ),
+                                        create_metric(
+                                            (
+                                                "Total "
+                                                "Comisiones"
+                                            ),
+                                            format_optional_float(
+                                                op.total_comisiones,
+                                                prefix="$",
+                                            ),
+                                        ),
+                                    ]
+                                ),
+                            ],
+                            spacing=15,
+                        ),
+                        padding=15,
+                        border=ft.Border.all(
+                            1,
+                            ft.Colors.OUTLINE_VARIANT,
+                        ),
+                        border_radius=8,
+                    )
+                )
+
+                auditoria_view.controls.append(
+                    otros_productos
+                )
+
+            else:
+
+                auditoria_view.controls.append(
+                    ft.Container(
+                        content=ft.Text(
+                            (
+                                "No se encontraron "
+                                "otros productos o "
+                                "comisiones en este "
+                                "estado de cuenta."
+                            )
+                        ),
+                        bgcolor=(
+                            ft.Colors
+                            .SURFACE_CONTAINER_LOW
+                        ),
+                        padding=15,
+                        border_radius=8,
+                    )
+                )
+
+            # ================================================
+            # 4. VALIDACIONES FINANCIERAS
+            # ================================================
+
+            if result.validaciones:
+
+                correctas = sum(
+                    1
+                    for validacion
+                    in result.validaciones
+                    if validacion.correcto
+                )
+
+                total = len(
+                    result.validaciones
+                )
+
+                validaciones_controls = [
+                    ft.Text(
+                        (
+                            "Integridad financiera: "
+                            f"{correctas}/{total} "
+                            "validaciones correctas"
+                        ),
+                        size=16,
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
+                    )
+                ]
+
+                for validacion in (
+                    result.validaciones
+                ):
+
+                    if validacion.correcto:
+
+                        icono = "✅"
+                        color = (
+                            ft.Colors.GREEN
+                        )
+
+                    else:
+
+                        icono = "❌"
+                        color = (
+                            ft.Colors.RED
+                        )
+
+                    esperado = format_money(
+                        validacion.esperado
+                    )
+
+                    obtenido = format_money(
+                        validacion.obtenido
+                    )
+
+                    diferencia = format_money(
+                        validacion.diferencia
+                    )
+
+                    validaciones_controls.append(
+                        ft.ExpansionTile(
+                            title=ft.Text(
+                                (
+                                    f"{icono} "
+                                    f"{validacion.nombre}"
+                                ),
+                                color=color,
+                            ),
+                            controls=[
+                                ft.Container(
+                                    content=(
+                                        ft.Column(
+                                            controls=[
+                                                ft.Text(
+                                                    (
+                                                        "Esperado: "
+                                                        f"{esperado}"
+                                                    )
+                                                ),
+                                                ft.Text(
+                                                    (
+                                                        "Obtenido: "
+                                                        f"{obtenido}"
+                                                    )
+                                                ),
+                                                ft.Text(
+                                                    (
+                                                        "Diferencia: "
+                                                        f"{diferencia}"
+                                                    )
+                                                ),
+                                                ft.Text(
+                                                    safe_value(
+                                                        validacion.mensaje
+                                                    ),
+                                                    italic=True,
+                                                    color=(
+                                                        ft.Colors
+                                                        .ON_SURFACE_VARIANT
+                                                    ),
+                                                ),
+                                            ]
+                                        )
+                                    ),
+                                    padding=ft.Padding.only(
+                                        left=30,
+                                        bottom=10,
+                                    ),
+                                )
+                            ],
+                        )
+                    )
+
+                auditoria_view.controls.append(
+                    ft.ExpansionTile(
+                        title=ft.Text(
+                            (
+                                "✓ Validaciones "
+                                "Financieras"
+                            ),
+                            weight=(
+                                ft.FontWeight.BOLD
+                            ),
+                        ),
+                        expanded=False,
+                        controls=(
+                            validaciones_controls
+                        ),
+                    )
+                )
+
+            # ================================================
+            # 5. MOVIMIENTOS
+            # ================================================
+
+            movimientos = (
+                estado.movimientos or []
+            )
+
+            auditoria_view.controls.append(
+                create_section_title(
+                    (
+                        "5. Movimientos "
+                        f"({len(movimientos)})"
+                    ),
+                    "📑",
+                )
+            )
+
+            if movimientos:
+
+                auditoria_view.controls.append(
+                    create_movements_table(
+                        movimientos,
+                        fecha_corte_documento=(
+                            dc.fecha_corte
+                            if dc
+                            else None
+                        ),
+                        numero_cuenta_documento=(
+                            dc.numero_cuenta
+                            if dc
+                            else None
+                        ),
+                    )
+                )
+
+            else:
+
+                auditoria_view.controls.append(
+                    ft.Container(
+                        content=ft.Text(
+                            (
+                                "⚠️ No se encontraron "
+                                "movimientos en este "
+                                "documento."
+                            )
+                        ),
+                        bgcolor=(
+                            ft.Colors
+                            .ERROR_CONTAINER
+                        ),
+                        padding=15,
+                        border_radius=8,
+                    )
+                )
+
+    # ========================================================
+    # RENDER DEL DOCUMENTO SELECCIONADO
+    # ========================================================
+
+    def render_selected_result(
+        reset_scroll: bool = True,
+    ):
+
+        if selected_result_index is None:
+
+            return
+
+        index = (
+            selected_result_index
         )
 
-        if movimientos:
+        if not (
+            0 <= index < len(results)
+        ):
 
-            auditoria_view.controls.append(
-                create_movements_table(
-                    movimientos,
-                    fecha_corte_documento=(
-                        dc.fecha_corte
-                        if dc
-                        else None
-                    ),
-                    numero_cuenta_documento=(
-                        dc.numero_cuenta
-                        if dc
-                        else None
-                    ),
-                )
-            )
+            return
 
-        else:
+        render_result(
+            results[index]
+        )
 
-            auditoria_view.controls.append(
-                ft.Container(
-                    content=ft.Text(
-                        "⚠️ No se encontraron movimientos "
-                        "en este documento."
-                    ),
-                    bgcolor=ft.Colors.ERROR_CONTAINER,
-                    padding=15,
-                    border_radius=8,
-                )
-            )
-
-        page.update()
-
-        # ====================================================
-        # IMPORTANTE:
-        # Después de reconstruir auditoria_view, se vuelve a
-        # llevar el scroll al inicio.
-        #
-        # Esto evita que el crecimiento dinámico de la página
-        # conserve una posición vertical anterior y genere
-        # espacio visual inesperado antes del encabezado.
-        # ====================================================
-
-        reset_page_scroll()
+        update_page(
+            reset_scroll=reset_scroll
+        )
 
     # ========================================================
     # PROCESAMIENTO INCREMENTAL
@@ -1877,12 +2146,16 @@ def main(page: ft.Page):
         names: list[str],
     ):
 
+        nonlocal selected_result_index
+
         # ====================================================
         # REINICIAR ESTADO
         # ====================================================
 
         results.clear()
         processing_items.clear()
+
+        selected_result_index = None
 
         for file_name in names:
 
@@ -1897,15 +2170,12 @@ def main(page: ft.Page):
             )
 
         # ====================================================
-        # UI INICIAL
+        # ESTADO INICIAL
         # ====================================================
 
         loading_ring.visible = True
-
         upload_button.disabled = True
-
         export_button.disabled = True
-
         dropdown_files.visible = False
 
         auditoria_view.controls.clear()
@@ -1913,95 +2183,101 @@ def main(page: ft.Page):
         update_processing_summary()
         update_processing_status()
 
-        page.update()
+        update_page()
 
         # ====================================================
-        # PROCESAMIENTO CONCURRENTE
+        # PROCESAMIENTO
         # ====================================================
 
         try:
 
-            for event in process_bank_statements_incremental(
-                paths,
-                names,
+            for event in (
+                process_bank_statements_incremental(
+                    paths,
+                    names,
+                )
             ):
-
-                # =========================================
-                # ELEMENTO ASOCIADO
-                # =========================================
 
                 item = processing_items[
                     event.index
                 ]
 
-                # =========================================
-                # MÉTODO DETERMINADO
-                # =========================================
+                # ============================================
+                # EVENTO STARTED
+                # ============================================
 
                 if event.kind == "started":
 
-                    item["processing_method"] = (
-                        event.processing_method
-                    )
+                    item[
+                        "processing_method"
+                    ] = event.processing_method
 
-                    item["status"] = "processing"
+                    item["status"] = (
+                        "processing"
+                    )
 
                     item["error"] = None
 
-                # =========================================
-                # PROCESAMIENTO TERMINADO
-                # =========================================
+                # ============================================
+                # EVENTO COMPLETED
+                # ============================================
 
                 elif event.kind == "completed":
 
-                    item["processing_method"] = (
-                        event.processing_method
+                    item[
+                        "processing_method"
+                    ] = event.processing_method
+
+                    item["status"] = (
+                        "completed"
                     )
 
-                    item["status"] = "completed"
-
-                    item["result"] = event.result
+                    item["result"] = (
+                        event.result
+                    )
 
                     item["error"] = None
-
-                    # -------------------------------------
-                    # AGREGAR AL CONJUNTO DISPONIBLE
-                    # -------------------------------------
 
                     result = event.result
 
                     if result is not None:
 
-                        was_empty = not results
-
                         results.append(
                             result
                         )
 
-                        update_dropdown()
+                        # ------------------------------------
+                        # PRIMER RESULTADO
+                        # ------------------------------------
 
-                        # ---------------------------------
-                        # SOLO EL PRIMER RESULTADO SE
-                        # MUESTRA AUTOMÁTICAMENTE
-                        # ---------------------------------
+                        if (
+                            selected_result_index
+                            is None
+                        ):
 
-                        if was_empty:
+                            selected_result_index = (
+                                len(results) - 1
+                            )
 
-                            dropdown_files.value = "0"
+                            dropdown_files.value = (
+                                str(
+                                    selected_result_index
+                                )
+                            )
 
                             render_result(
                                 result
                             )
 
-                # =========================================
-                # ERROR INDIVIDUAL
-                # =========================================
+                # ============================================
+                # EVENTO ERROR
+                # ============================================
 
                 elif event.kind == "error":
 
-                    item["processing_method"] = (
-                        event.processing_method
-                    )
+                    item[
+                        "processing_method"
+                    ] = event.processing_method
 
                     item["status"] = "error"
 
@@ -2013,23 +2289,35 @@ def main(page: ft.Page):
                         else "Error desconocido."
                     )
 
-                # =========================================
-                # ACTUALIZAR INTERFAZ
-                # =========================================
+                # ============================================
+                # ACTUALIZACIÓN ÚNICA DE UI
+                # ============================================
 
                 update_processing_summary()
-
                 update_processing_status()
+                update_dropdown()
 
-                page.update()
+                # --------------------------------------------
+                # IMPORTANTE:
+                #
+                # Solo se renderiza el documento seleccionado.
+                #
+                # No se reconstruye la tabla de movimientos
+                # cada vez que termina otro PDF.
+                # --------------------------------------------
+
+                update_page()
 
         except Exception as ex:
 
             status_text.value = (
-                f"❌ Error durante el procesamiento: {ex}"
+                "❌ Error durante el procesamiento: "
+                f"{ex}"
             )
 
-            status_text.color = ft.Colors.RED
+            status_text.color = (
+                ft.Colors.RED
+            )
 
             auditoria_view.controls.clear()
 
@@ -2037,46 +2325,53 @@ def main(page: ft.Page):
                 ft.Container(
                     content=ft.Column(
                         controls=[
+
                             ft.Text(
-                                "Error durante el procesamiento",
-                                weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.ERROR,
+                                (
+                                    "Error durante "
+                                    "el procesamiento"
+                                ),
+                                weight=(
+                                    ft.FontWeight.BOLD
+                                ),
+                                color=(
+                                    ft.Colors.ERROR
+                                ),
                             ),
+
                             ft.Text(
                                 str(ex)
                             ),
+
                             ft.Text(
                                 traceback.format_exc(),
                                 selectable=True,
                                 size=12,
                             ),
+
                         ]
                     ),
-                    bgcolor=ft.Colors.ERROR_CONTAINER,
+                    bgcolor=(
+                        ft.Colors
+                        .ERROR_CONTAINER
+                    ),
                     padding=15,
                     border_radius=8,
                 )
             )
 
+            update_page()
+
         finally:
 
-            # =================================================
-            # FINALIZACIÓN DEL LOTE
-            # =================================================
-
             loading_ring.visible = False
-
             upload_button.disabled = False
 
             update_processing_summary()
-
             update_processing_status()
+            update_dropdown()
 
-            page.update()
-
-            # =================================================
-            # RESTABLECER POSICIÓN SUPERIOR
-            # =================================================
+            update_page()
 
             reset_page_scroll()
 
@@ -2084,15 +2379,26 @@ def main(page: ft.Page):
     # SELECCIÓN DE ARCHIVOS
     # ========================================================
 
-    async def pick_files(e):
+    async def pick_files(
+        e,
+    ):
 
         try:
 
-            files = await ft.FilePicker().pick_files(
-                dialog_title="Selecciona estados de cuenta PDF",
-                allow_multiple=True,
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["pdf"],
+            files = (
+                await file_picker_open.pick_files(
+                    dialog_title=(
+                        "Selecciona estados "
+                        "de cuenta PDF"
+                    ),
+                    allow_multiple=True,
+                    file_type=(
+                        ft.FilePickerFileType.CUSTOM
+                    ),
+                    allowed_extensions=[
+                        "pdf"
+                    ],
+                )
             )
 
             if not files:
@@ -2114,19 +2420,21 @@ def main(page: ft.Page):
             if not paths:
 
                 status_text.value = (
-                    "❌ No fue posible obtener las rutas "
-                    "de los archivos seleccionados."
+                    "❌ No fue posible obtener "
+                    "las rutas de los archivos."
                 )
 
-                status_text.color = ft.Colors.RED
+                status_text.color = (
+                    ft.Colors.RED
+                )
 
-                page.update()
+                update_page()
 
                 return
 
-            # =================================================
-            # MOSTRAR SECCIONES DE RESULTADOS
-            # =================================================
+            # ================================================
+            # MOSTRAR RESULTADOS
+            # ================================================
 
             auditoria_section.visible = True
             export_section.visible = True
@@ -2143,7 +2451,7 @@ def main(page: ft.Page):
 
             upload_button.disabled = True
 
-            page.update()
+            update_page()
 
             page.run_thread(
                 process_selected_files,
@@ -2154,30 +2462,31 @@ def main(page: ft.Page):
         except Exception as ex:
 
             status_text.value = (
-                f"❌ Error al seleccionar archivos: {ex}"
+                "❌ Error al seleccionar "
+                f"archivos: {ex}"
             )
 
-            status_text.color = ft.Colors.RED
+            status_text.color = (
+                ft.Colors.RED
+            )
 
-            page.update()
+            update_page()
 
     # ========================================================
     # CAMBIO DE ESTADO DE CUENTA
     # ========================================================
 
-    def on_dropdown_change(e):
+    def on_dropdown_change(
+        e,
+    ):
+
+        nonlocal selected_result_index
 
         try:
 
             index = int(
                 e.control.value
             )
-
-            if 0 <= index < len(results):
-
-                render_result(
-                    results[index]
-                )
 
         except (
             TypeError,
@@ -2186,15 +2495,37 @@ def main(page: ft.Page):
 
             return
 
-        page.update()
+        if not (
+            0 <= index < len(results)
+        ):
 
-        reset_page_scroll()
+            return
+
+        # ================================================
+        # ACTUALIZAR DOCUMENTO SELECCIONADO
+        # ================================================
+
+        selected_result_index = index
+
+        # ================================================
+        # RECONSTRUIR SOLAMENTE LA AUDITORÍA DEL DOCUMENTO
+        # ================================================
+
+        render_result(
+            results[index]
+        )
+
+        update_page(
+            reset_scroll=True
+        )
 
     # ========================================================
-    # EXPORTACIÓN
+    # EXPORTACIÓN EXCEL
     # ========================================================
 
-    async def export_excel(e):
+    async def export_excel(
+        e,
+    ):
 
         if not results:
 
@@ -2202,23 +2533,35 @@ def main(page: ft.Page):
 
         try:
 
-            path = await ft.FilePicker().save_file(
-                dialog_title="Guardar reporte Excel",
-                file_name="reporte_estados_de_cuenta.xlsx",
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["xlsx"],
+            path = (
+                await file_picker_save.save_file(
+                    dialog_title=(
+                        "Guardar reporte Excel"
+                    ),
+                    file_name=(
+                        "reporte_estados_de_cuenta.xlsx"
+                    ),
+                    file_type=(
+                        ft.FilePickerFileType.CUSTOM
+                    ),
+                    allowed_extensions=[
+                        "xlsx"
+                    ],
+                )
             )
 
             if not path:
 
                 return
 
-            if not path.lower().endswith(".xlsx"):
+            if not path.lower().endswith(
+                ".xlsx"
+            ):
 
                 path += ".xlsx"
 
             # =================================================
-            # TOMAR SNAPSHOT DE LOS RESULTADOS DISPONIBLES
+            # SNAPSHOT
             # =================================================
 
             results_snapshot = list(
@@ -2235,7 +2578,7 @@ def main(page: ft.Page):
                 ft.Colors.ON_SURFACE
             )
 
-            page.update()
+            update_page()
 
             def export_worker():
 
@@ -2247,7 +2590,8 @@ def main(page: ft.Page):
                     )
 
                     status_text.value = (
-                        "✅ Archivo Excel exportado correctamente."
+                        "✅ Archivo Excel "
+                        "exportado correctamente."
                     )
 
                     status_text.color = (
@@ -2256,7 +2600,9 @@ def main(page: ft.Page):
 
                     try:
 
-                        if sys.platform == "win32":
+                        if sys.platform == (
+                            "win32"
+                        ):
 
                             subprocess.run(
                                 [
@@ -2266,7 +2612,9 @@ def main(page: ft.Page):
                                 ]
                             )
 
-                        elif sys.platform == "darwin":
+                        elif sys.platform == (
+                            "darwin"
+                        ):
 
                             subprocess.run(
                                 [
@@ -2278,8 +2626,10 @@ def main(page: ft.Page):
 
                         else:
 
-                            directory = os.path.dirname(
-                                path
+                            directory = (
+                                os.path.dirname(
+                                    path
+                                )
                             )
 
                             subprocess.run(
@@ -2292,23 +2642,27 @@ def main(page: ft.Page):
                     except Exception as folder_ex:
 
                         print(
-                            "No se pudo abrir la carpeta: "
+                            "No se pudo abrir "
+                            "la carpeta: "
                             f"{folder_ex}"
                         )
 
                 except Exception as ex:
 
                     status_text.value = (
-                        f"❌ Error al exportar Excel: {ex}"
+                        "❌ Error al exportar "
+                        f"Excel: {ex}"
                     )
 
-                    status_text.color = ft.Colors.RED
+                    status_text.color = (
+                        ft.Colors.RED
+                    )
 
                 finally:
 
                     export_button.disabled = False
 
-                    page.update()
+                    update_page()
 
             page.run_thread(
                 export_worker
@@ -2317,21 +2671,27 @@ def main(page: ft.Page):
         except Exception as ex:
 
             status_text.value = (
-                f"❌ Error al guardar el archivo: {ex}"
+                "❌ Error al guardar "
+                f"el archivo: {ex}"
             )
 
-            status_text.color = ft.Colors.RED
+            status_text.color = (
+                ft.Colors.RED
+            )
 
             export_button.disabled = False
 
-            page.update()
+            update_page()
 
     # ========================================================
     # CONTROLES ESTÁTICOS
     # ========================================================
 
     upload_button = ft.FilledButton(
-        content="Seleccionar estados de cuenta PDF",
+        content=(
+            "Seleccionar estados "
+            "de cuenta PDF"
+        ),
         icon=ft.Icons.UPLOAD_FILE,
         on_click=pick_files,
         bgcolor=GOB_GREEN,
@@ -2346,12 +2706,16 @@ def main(page: ft.Page):
         color=BUTTON_TEXT,
     )
 
-    export_button.on_click = export_excel
+    export_button.on_click = (
+        export_excel
+    )
 
-    dropdown_files.on_select = on_dropdown_change
+    dropdown_files.on_select = (
+        on_dropdown_change
+    )
 
     # ========================================================
-    # LOGO INSTITUCIONAL
+    # LOGO
     # ========================================================
 
     header_controls = []
@@ -2361,7 +2725,9 @@ def main(page: ft.Page):
         header_controls.append(
             ft.Container(
                 content=ft.Image(
-                    src=str(LOGO_PATH),
+                    src=str(
+                        LOGO_PATH
+                    ),
                     width=180,
                     height=120,
                     fit=ft.BoxFit.CONTAIN,
@@ -2376,19 +2742,36 @@ def main(page: ft.Page):
         ft.Column(
             controls=[
                 ft.Text(
-                    "Secretaría Anticorrupción y Buen Gobierno",
+                    (
+                        "Secretaría Anticorrupción "
+                        "y Buen Gobierno"
+                    ),
                     size=13,
-                    weight=ft.FontWeight.W_500,
+                    weight=(
+                        ft.FontWeight.W_500
+                    ),
                 ),
+
                 ft.Text(
-                    "Dirección General de Evaluación de Confianza",
+                    (
+                        "Dirección General de "
+                        "Evaluación de Confianza"
+                    ),
                     size=11,
-                    weight=ft.FontWeight.W_500,
+                    weight=(
+                        ft.FontWeight.W_500
+                    ),
                 ),
+
                 ft.Text(
-                    "Departamento de Investigación de Antecedentes",
+                    (
+                        "Departamento de Investigación "
+                        "de Antecedentes"
+                    ),
                     size=10,
-                    weight=ft.FontWeight.W_500,
+                    weight=(
+                        ft.FontWeight.W_500
+                    ),
                 ),
             ],
             spacing=2,
@@ -2397,12 +2780,7 @@ def main(page: ft.Page):
     )
 
     # ========================================================
-    # SECCIÓN DE AUDITORÍA
-    # ========================================================
-    #
-    # Se mantiene oculta hasta que el usuario seleccione
-    # al menos un archivo PDF.
-    #
+    # SECCIÓN AUDITORÍA
     # ========================================================
 
     auditoria_section = ft.Column(
@@ -2411,12 +2789,10 @@ def main(page: ft.Page):
             ft.Text(
                 "🔍 Auditoría de Resultados",
                 size=24,
-                weight=ft.FontWeight.BOLD,
+                weight=(
+                    ft.FontWeight.BOLD
+                ),
             ),
-
-            # =================================================
-            # TABLA + SELECTOR
-            # =================================================
 
             ft.Row(
                 controls=[
@@ -2428,7 +2804,9 @@ def main(page: ft.Page):
                         padding=10,
                     ),
                 ],
-                vertical_alignment=ft.CrossAxisAlignment.START,
+                vertical_alignment=(
+                    ft.CrossAxisAlignment.START
+                ),
                 spacing=15,
             ),
 
@@ -2440,12 +2818,7 @@ def main(page: ft.Page):
     )
 
     # ========================================================
-    # SECCIÓN DE EXPORTACIÓN
-    # ========================================================
-    #
-    # Se mantiene oculta hasta que el usuario seleccione
-    # al menos un archivo PDF.
-    #
+    # SECCIÓN EXPORTACIÓN
     # ========================================================
 
     export_section = ft.Column(
@@ -2454,16 +2827,24 @@ def main(page: ft.Page):
             ft.Divider(),
 
             ft.Text(
-                "📤 Exportar Todos los Resultados a Excel",
+                (
+                    "📤 Exportar Todos los "
+                    "Resultados a Excel"
+                ),
                 size=24,
-                weight=ft.FontWeight.BOLD,
+                weight=(
+                    ft.FontWeight.BOLD
+                ),
             ),
 
             ft.Container(
                 content=ft.Text(
-                    "Haz clic en el botón para generar un único archivo "
-                    "Excel con los datos de todos los estados de cuenta "
-                    "procesados."
+                    (
+                        "Haz clic en el botón para generar "
+                        "un único archivo Excel con los datos "
+                        "de todos los estados de cuenta "
+                        "procesados."
+                    )
                 ),
                 padding=ft.Padding.only(
                     bottom=10,
@@ -2484,61 +2865,58 @@ def main(page: ft.Page):
     # ========================================================
     # CONTENIDO PRINCIPAL
     # ========================================================
-    #
-    # Todo el contenido existente se agrupa en un único
-    # contenedor raíz para poder aplicar la escala global
-    # sin modificar individualmente los controles.
-    #
-    # ========================================================
 
     app_content = ft.Column(
         controls=[
 
-            # =================================================
-            # ENCABEZADO INSTITUCIONAL
-            # =================================================
-
             ft.Row(
                 controls=header_controls,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                vertical_alignment=(
+                    ft.CrossAxisAlignment.CENTER
+                ),
             ),
 
             ft.Divider(
                 height=10
             ),
 
-            # =================================================
-            # TÍTULO PRINCIPAL
-            # =================================================
-
             ft.Row(
                 controls=[
+
                     ft.Text(
-                        "📄 Extractor de Movimientos Financieros",
+                        (
+                            "📄 Extractor de "
+                            "Movimientos Financieros"
+                        ),
                         size=32,
-                        weight=ft.FontWeight.BOLD,
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
                     ),
 
                     ft.Row(
                         controls=[
                             ft.Text(
                                 "Versión 1.0",
-                                weight=ft.FontWeight.BOLD,
+                                weight=(
+                                    ft.FontWeight.BOLD
+                                ),
                             ),
                             feedback_button,
                         ],
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        vertical_alignment=(
+                            ft.CrossAxisAlignment.CENTER
+                        ),
                         spacing=10,
                     ),
+
                 ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                alignment=(
+                    ft.MainAxisAlignment.SPACE_BETWEEN
+                ),
             ),
 
             ft.Divider(),
-
-            # =================================================
-            # CONTROLES DE PROCESAMIENTO
-            # =================================================
 
             ft.Row(
                 controls=[
@@ -2546,19 +2924,13 @@ def main(page: ft.Page):
                     loading_ring,
                     status_text,
                 ],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                vertical_alignment=(
+                    ft.CrossAxisAlignment.CENTER
+                ),
                 spacing=10,
             ),
 
-            # =================================================
-            # AUDITORÍA
-            # =================================================
-
             auditoria_section,
-
-            # =================================================
-            # EXPORTACIÓN
-            # =================================================
 
             export_section,
 
@@ -2585,5 +2957,4 @@ def main(page: ft.Page):
 # ============================================================
 
 if __name__ == "__main__":
-    #ft.app(target=main)
     ft.run(main)
