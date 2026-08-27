@@ -7,6 +7,8 @@ from utils.text_normalizer import normalize_text
 from parsers.bbva import parse_bbva
 from parsers.banamex import parse_banamex
 from parsers.banorte import parse_banorte
+from parsers.hsbc import parse_hsbc
+
 
 # ============================================================
 # REGISTRO DE PARSERS
@@ -18,6 +20,8 @@ PARSER_REGISTRY = {
     "bbva": parse_bbva,
     "banamex": parse_banamex,
     "banorte": parse_banorte,
+    "hsbc": parse_hsbc,
+
 
 }
 

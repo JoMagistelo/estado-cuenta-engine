@@ -1,0 +1,167 @@
+from pathlib import Path
+
+from readers.reader_manager import ReaderManager
+from parsers.hsbc.extractors.resumen import (
+    extract_resumen_financiero_words,
+)
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+PDF_PATH = ROOT / "data" / "edo_hsbc.pdf"
+
+
+def main():
+
+    print()
+    print("=" * 60)
+    print("PRUEBA PARSER RESUMEN FINANCIERO HSBC (OCR)")
+    print("=" * 60)
+
+    print()
+    print("PDF:")
+    print(PDF_PATH)
+
+    if not PDF_PATH.exists():
+
+        raise FileNotFoundError(
+            f"No existe el PDF: {PDF_PATH}"
+        )
+
+    # ========================================================
+    # 1. LEER PDF MEDIANTE TESSERACT OCR
+    # ========================================================
+    #
+    # HSBC utiliza Tesseract como fuente de palabras
+    # espaciales.
+    #
+    # ReaderManager.read_ocr() devuelve un DocumentData
+    # cuyo spatial_words proviene de TesseractPDFReader.
+    # ========================================================
+
+    document = ReaderManager.read_ocr(
+        PDF_PATH
+    )
+
+    spatial_words = document.spatial_words
+
+    print()
+    print("PALABRAS OCR CON COORDENADAS EXTRAÍDAS:")
+    print(len(spatial_words))
+
+    if not spatial_words:
+
+        raise ValueError(
+            "Tesseract no extrajo palabras con coordenadas del PDF."
+        )
+
+    # ========================================================
+    # 2. EJECUTAR EXTRACTOR
+    # ========================================================
+
+    resumen_financiero = (
+        extract_resumen_financiero_words(
+            spatial_words
+        )
+    )
+
+    # ========================================================
+    # 3. RESULTADOS
+    # ========================================================
+
+    print()
+    print("=" * 60)
+    print("RESUMEN FINANCIERO EXTRAÍDO")
+    print("=" * 60)
+
+    print()
+    print("-" * 60)
+
+    print(
+        "Saldo promedio:",
+        resumen_financiero.saldo_promedio
+    )
+
+    print(
+        "Días del periodo:",
+        resumen_financiero.dias_periodo
+    )
+
+    print(
+        "Tasa bruta anual:",
+        resumen_financiero.tasa_bruta_anual
+    )
+
+    print(
+        "Saldo promedio gravable:",
+        resumen_financiero.saldo_promedio_gravable
+    )
+
+    print(
+        "Intereses a favor:",
+        resumen_financiero.intereses_a_favor
+    )
+
+    print(
+        "ISR retenido:",
+        resumen_financiero.isr_retenido
+    )
+
+    print(
+        "Cheques pagados:",
+        resumen_financiero.cheques_pagados
+    )
+
+    print(
+        "Manejo de cuenta:",
+        resumen_financiero.manejo_cuenta
+    )
+
+    print(
+        "Cargos objetados:",
+        resumen_financiero.cargos_objetados
+    )
+
+    print(
+        "Abonos objetados:",
+        resumen_financiero.abonos_objetados
+    )
+
+    print(
+        "Saldo anterior:",
+        resumen_financiero.saldo_anterior
+    )
+
+    print(
+        "Depósitos / Abonos:",
+        resumen_financiero.depositos_abonos
+    )
+
+    print(
+        "Retiros / Cargos:",
+        resumen_financiero.retiros_cargos
+    )
+
+    print(
+        "Saldo final:",
+        resumen_financiero.saldo_final
+    )
+
+    print(
+        "Saldo promedio mínimo mensual:",
+        resumen_financiero.saldo_promedio_minimo_mensual
+    )
+
+    print(
+        "Saldo global:",
+        resumen_financiero.saldo_global
+    )
+
+    print()
+    print("=" * 60)
+    print("PRUEBA FINALIZADA")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
