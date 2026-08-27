@@ -1,5 +1,6 @@
 #flet pack app\main_flet.py --name EstadoCuentaEngine
 #pyinstaller EstadoCuentaEngine.spec
+
 from __future__ import annotations
 
 import os
@@ -30,6 +31,43 @@ from engine.pipeline import (
     process_bank_statements_incremental,
 )
 from exporters.excel import export_batch_excel
+
+
+# ============================================================
+# IDENTIDAD VISUAL
+# ============================================================
+#
+# Tonos institucionales inspirados en la identidad visual
+# contemporánea de Gobierno de México / Secretaría
+# Anticorrupción y Buen Gobierno.
+#
+# ============================================================
+
+GOB_GREEN = "#1F4D3A"
+GOB_GREEN_DARK = "#163A2C"
+GOB_GREEN_LIGHT = "#E8F0EC"
+
+GOB_GOLD = "#B08D57"
+GOB_GOLD_LIGHT = "#F4EEE5"
+
+GOB_CREAM = "#F7F4EE"
+
+BUTTON_TEXT = "#FFFFFF"
+
+
+# ============================================================
+# ASSETS
+# ============================================================
+
+PROJECT_ROOT = (
+    Path(__file__).resolve().parent.parent
+)
+
+LOGO_PATH = (
+    PROJECT_ROOT
+    / "assets"
+    / "logo_gobierno_mexico.png"
+)
 
 
 # ============================================================
@@ -73,18 +111,22 @@ def create_metric(
 ) -> ft.Container:
     """
     Equivalente visual aproximado a st.metric().
+
+    Se redujo únicamente el tamaño visual de los textos
+    contenidos en las tarjetas para lograr una interfaz
+    más compacta y legible.
     """
 
     controls = [
         ft.Text(
             title,
-            size=13,
+            size=12,
             color=ft.Colors.ON_SURFACE_VARIANT,
             weight=ft.FontWeight.W_500,
         ),
         ft.Text(
             value,
-            size=20,
+            size=16,
             weight=ft.FontWeight.BOLD,
         ),
     ]
@@ -100,7 +142,7 @@ def create_metric(
         controls.append(
             ft.Text(
                 delta,
-                size=13,
+                size=12,
                 color=delta_color,
                 weight=ft.FontWeight.W_500,
             )
@@ -165,7 +207,7 @@ def main(page: ft.Page):
     # CONFIGURACIÓN
     # ========================================================
 
-    page.title = "Motor de Estados de Cuenta"
+    page.title = "Extractor de Movimientos Financieros"
     page.window.width = 1100
     page.window.height = 800
     page.padding = 18
@@ -178,9 +220,7 @@ def main(page: ft.Page):
     # 1.00 = escala original
     # 0.90 = 10 % más pequeña
     #
-    # Se aplica al contenido completo de la aplicación para
-    # conservar intactos los tamaños relativos, la lógica y
-    # el comportamiento actual de todos los controles.
+    # Se mantiene exactamente igual.
     #
     # ========================================================
 
@@ -254,7 +294,222 @@ def main(page: ft.Page):
         content="Generar Reporte Excel",
         icon=ft.Icons.DOWNLOAD,
         disabled=True,
+        bgcolor=GOB_GOLD,
+        color=BUTTON_TEXT,
     )
+
+    # ========================================================
+    # CONTROL DE FEEDBACK
+    # ========================================================
+
+    def show_feedback(e=None):
+        """
+        Muestra información general de uso, recomendaciones,
+        validaciones y bancos soportados.
+        """
+
+        feedback_dialog = ft.AlertDialog(
+            modal=False,
+            title=ft.Row(
+                controls=[
+                    ft.Icon(
+                        ft.Icons.INFO_OUTLINE,
+                        color=GOB_GREEN,
+                        size=26,
+                    ),
+                    ft.Text(
+                        "Ayuda y recomendaciones",
+                        weight=ft.FontWeight.BOLD,
+                        size=20,
+                    ),
+                ],
+                spacing=10,
+            ),
+            content=ft.Column(
+                controls=[
+
+                    ft.Text(
+                        "Recomendación importante",
+                        size=16,
+                        weight=ft.FontWeight.BOLD,
+                        color=GOB_GOLD,
+                    ),
+
+                    ft.Text(
+                        "Se recomienda eliminar de los estados de cuenta "
+                        "las páginas que no contengan información relevante "
+                        "antes de procesarlos. Esto ayuda a mantener el "
+                        "documento limpio y facilita la revisión de los "
+                        "resultados extraídos.",
+                    ),
+
+                    ft.Divider(),
+
+                    ft.Text(
+                        "Validaciones financieras",
+                        size=16,
+                        weight=ft.FontWeight.BOLD,
+                        color=GOB_GREEN,
+                    ),
+
+                    ft.Text(
+                        "Las validaciones son una parte fundamental de la "
+                        "revisión. En particular, las validaciones de "
+                        "\"Total depósitos / abonos\" y "
+                        "\"Total retiros / cargos\" permiten comprobar que "
+                        "los movimientos financieros extraídos mantienen "
+                        "la consistencia esperada con el estado de cuenta.",
+                    ),
+
+                    ft.Text(
+                        "Cuando ambas validaciones pasan correctamente, "
+                        "esto significa que los abonos y cargos extraídos "
+                        "son consistentes con los totales financieros "
+                        "esperados y proporciona una señal de que los "
+                        "movimientos fueron extraídos correctamente.",
+                    ),
+
+                    ft.Text(
+                        "¿Qué hacer cuando una validación falla?",
+                        size=15,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "Se recomienda revisar visualmente los montos "
+                        "del estado de cuenta para identificar qué importe "
+                        "pudo haber sido extraído incorrectamente. "
+                        "Después de identificarlo, puede corregirse "
+                        "manualmente en el archivo Excel descargado.",
+                    ),
+
+                    ft.Divider(),
+
+                    ft.Text(
+                        "Bancos y estados de cuenta habilitados",
+                        size=16,
+                        weight=ft.FontWeight.BOLD,
+                        color=GOB_GREEN,
+                    ),
+
+                    ft.Text(
+                        "BBVA",
+                        size=14,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "Actualmente se procesan estados de cuenta "
+                        "digitales de:",
+                    ),
+
+                    ft.Text(
+                        "• Libretón Básico\n"
+                        "• Básico\n"
+                        "• Nómina\n"
+                        "• Premium",
+                    ),
+
+                    ft.Text(
+                        "Banorte",
+                        size=14,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "Actualmente se procesan:",
+                    ),
+
+                    ft.Text(
+                        "• Nómina Banorte\n"
+                        "• Nómina Banorte sin chequera\n"
+                        "• ENLACE NEGOCIOS",
+                    ),
+
+                    ft.Text(
+                        "Banamex",
+                        size=14,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "Actualmente se encuentra habilitado:",
+                    ),
+
+                    ft.Text(
+                        "• Mi Cuenta",
+                    ),
+
+                    ft.Text(
+                        "Próximamente:",
+                        size=13,
+                        weight=ft.FontWeight.BOLD,
+                        color=GOB_GOLD,
+                    ),
+
+                    ft.Text(
+                        "• Banamex Premium\n"
+                        "• HSBC digital",
+                    ),
+
+                    ft.Divider(),
+
+                    ft.Container(
+                        content=ft.Text(
+                            "Nota: la lista de formatos habilitados "
+                            "se actualizará conforme se incorporen "
+                            "nuevos modelos de estados de cuenta.",
+                            size=12,
+                        ),
+                        bgcolor=GOB_CREAM,
+                        padding=12,
+                        border_radius=8,
+                    ),
+                ],
+                spacing=10,
+                tight=True,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            actions=[
+                ft.FilledButton(
+                    content="Cerrar",
+                    icon=ft.Icons.CLOSE,
+                    bgcolor=GOB_GREEN,
+                    color=BUTTON_TEXT,
+                    on_click=lambda e: page.pop_dialog(),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        page.show_dialog(
+            feedback_dialog
+        )
+
+    # ========================================================
+    # CORRECCIÓN DEL SCROLL GLOBAL
+    # ========================================================
+    #
+    # Cuando auditoria_view aumenta de tamaño después de un
+    # procesamiento, el contenido total de la página cambia.
+    #
+    # Se fuerza la posición superior después de renderizar el
+    # resultado para evitar que la ventana conserve una posición
+    # de desplazamiento anterior y aparezca espacio superior
+    # inesperado.
+    #
+    # ========================================================
+
+    async def reset_page_scroll_async():
+        await page.scroll_to(
+            offset=0,
+            duration=0,
+        )
+
+    def reset_page_scroll():
+        page.run_task(
+            reset_page_scroll_async
+        )
 
     # ========================================================
     # FUNCIONES: RESUMEN DE PROCESAMIENTO
@@ -277,7 +532,6 @@ def main(page: ft.Page):
                 return validacion
 
         return None
-
 
     def create_validation_status(
         validacion,
@@ -328,7 +582,6 @@ def main(page: ft.Page):
             alignment=ft.Alignment.CENTER,
         )
 
-
     def create_pending_validation_status() -> ft.Container:
         """
         Representa una validación que todavía no puede mostrarse
@@ -347,7 +600,6 @@ def main(page: ft.Page):
             alignment=ft.Alignment.CENTER,
         )
 
-
     def create_error_validation_status() -> ft.Container:
         """
         Representa un archivo cuyo procesamiento terminó con
@@ -365,7 +617,6 @@ def main(page: ft.Page):
             border_radius=6,
             alignment=ft.Alignment.CENTER,
         )
-
 
     def create_processing_method_status(
         processing_method: str,
@@ -406,7 +657,6 @@ def main(page: ft.Page):
             alignment=ft.Alignment.CENTER,
         )
 
-
     def create_processing_state_status() -> ft.Container:
         """
         Estado mostrado mientras todavía no se ha determinado
@@ -428,7 +678,6 @@ def main(page: ft.Page):
             border_radius=6,
             alignment=ft.Alignment.CENTER,
         )
-
 
     def create_processing_summary(
         items,
@@ -631,7 +880,6 @@ def main(page: ft.Page):
             border_radius=8,
         )
 
-
     def update_processing_summary():
         """
         Reconstruye la tabla resumen utilizando el estado actual
@@ -652,7 +900,6 @@ def main(page: ft.Page):
         )
 
         processing_summary_view.visible = True
-
 
     def update_dropdown():
         """
@@ -681,7 +928,6 @@ def main(page: ft.Page):
             dropdown_files.visible = False
 
             export_button.disabled = True
-
 
     def update_processing_status():
         """
@@ -772,7 +1018,6 @@ def main(page: ft.Page):
 
             status_text.color = ft.Colors.RED
 
-
     # ========================================================
     # FUNCIÓN: RENDER IMAGEN
     # ========================================================
@@ -836,6 +1081,9 @@ def main(page: ft.Page):
             ]
         )
 
+        page.update()
+
+        reset_page_scroll()
 
     # ========================================================
     # FUNCIÓN: TABLA DE MOVIMIENTOS
@@ -1001,7 +1249,7 @@ def main(page: ft.Page):
                     ft.DataCell(
                         content=ft.Text(
                             text_value,
-                            size=13,
+                            size=11,
                         )
                     )
                 )
@@ -1027,7 +1275,7 @@ def main(page: ft.Page):
                 1,
                 ft.Colors.OUTLINE_VARIANT,
             ),
-            column_spacing=20,
+            column_spacing=14,
         )
 
         return ft.Column(
@@ -1038,9 +1286,8 @@ def main(page: ft.Page):
                 )
             ],
             scroll=ft.ScrollMode.ALWAYS,
-            height=500,
+            height=350,
         )
-
 
     # ========================================================
     # FUNCIÓN: RENDER RESULTADO
@@ -1053,6 +1300,8 @@ def main(page: ft.Page):
         if result is None:
 
             page.update()
+
+            reset_page_scroll()
 
             return
 
@@ -1067,8 +1316,6 @@ def main(page: ft.Page):
             render_image_document(
                 result
             )
-
-            page.update()
 
             return
 
@@ -1250,6 +1497,7 @@ def main(page: ft.Page):
 
             saldo_anterior = rf.saldo_anterior or 0
             saldo_final = rf.saldo_final or 0
+
             delta_val = (
                 saldo_final
                 - saldo_anterior
@@ -1515,9 +1763,12 @@ def main(page: ft.Page):
             for validacion in result.validaciones:
 
                 if validacion.correcto:
+
                     icono = "✅"
                     color = ft.Colors.GREEN
+
                 else:
+
                     icono = "❌"
                     color = ft.Colors.RED
 
@@ -1626,6 +1877,19 @@ def main(page: ft.Page):
                 )
             )
 
+        page.update()
+
+        # ====================================================
+        # IMPORTANTE:
+        # Después de reconstruir auditoria_view, se vuelve a
+        # llevar el scroll al inicio.
+        #
+        # Esto evita que el crecimiento dinámico de la página
+        # conserve una posición vertical anterior y genere
+        # espacio visual inesperado antes del encabezado.
+        # ====================================================
+
+        reset_page_scroll()
 
     # ========================================================
     # PROCESAMIENTO INCREMENTAL
@@ -1828,10 +2092,16 @@ def main(page: ft.Page):
             upload_button.disabled = False
 
             update_processing_summary()
+
             update_processing_status()
 
             page.update()
 
+            # =================================================
+            # RESTABLECER POSICIÓN SUPERIOR
+            # =================================================
+
+            reset_page_scroll()
 
     # ========================================================
     # SELECCIÓN DE ARCHIVOS
@@ -1907,7 +2177,6 @@ def main(page: ft.Page):
 
             page.update()
 
-
     # ========================================================
     # CAMBIO DE ESTADO DE CUENTA
     # ========================================================
@@ -1935,6 +2204,7 @@ def main(page: ft.Page):
 
         page.update()
 
+        reset_page_scroll()
 
     # ========================================================
     # EXPORTACIÓN
@@ -2048,9 +2318,7 @@ def main(page: ft.Page):
                         f"❌ Error al exportar Excel: {ex}"
                     )
 
-                    status_text.color = (
-                        ft.Colors.RED
-                    )
+                    status_text.color = ft.Colors.RED
 
                 finally:
 
@@ -2068,14 +2336,11 @@ def main(page: ft.Page):
                 f"❌ Error al guardar el archivo: {ex}"
             )
 
-            status_text.color = (
-                ft.Colors.RED
-            )
+            status_text.color = ft.Colors.RED
 
             export_button.disabled = False
 
             page.update()
-
 
     # ========================================================
     # CONTROLES ESTÁTICOS
@@ -2085,12 +2350,67 @@ def main(page: ft.Page):
         content="Seleccionar estados de cuenta PDF",
         icon=ft.Icons.UPLOAD_FILE,
         on_click=pick_files,
+        bgcolor=GOB_GREEN,
+        color=BUTTON_TEXT,
+    )
+
+    feedback_button = ft.FilledButton(
+        content="Ayuda",
+        icon=ft.Icons.HELP_OUTLINE,
+        on_click=show_feedback,
+        bgcolor=GOB_GOLD,
+        color=BUTTON_TEXT,
     )
 
     export_button.on_click = export_excel
 
     dropdown_files.on_select = on_dropdown_change
 
+    # ========================================================
+    # LOGO INSTITUCIONAL
+    # ========================================================
+
+    header_controls = []
+
+    if LOGO_PATH.exists():
+
+        header_controls.append(
+            ft.Container(
+                content=ft.Image(
+                    src=str(LOGO_PATH),
+                    width=105,
+                    height=70,
+                    fit=ft.BoxFit.CONTAIN,
+                ),
+                width=115,
+                height=70,
+                alignment=ft.Alignment.CENTER,
+            )
+        )
+
+    header_controls.append(
+        ft.Column(
+            controls=[
+                ft.Text(
+                    "Secretaría Anticorrupción y Buen Gobierno",
+                    size=15,
+                    weight=ft.FontWeight.W_500,
+                ),
+                ft.Text(
+                    "Dirección General de Evaluación de Confianza",
+                    size=13,
+                    weight=ft.FontWeight.W_500,
+                ),
+                ft.Text(
+                    "Departamento de Investigación de Antecedentes",
+                    size=13,
+                    weight=ft.FontWeight.W_500,
+                ),
+            ],
+            spacing=2,
+            expand=True,
+        )
+    )
 
     # ========================================================
     # CONTENIDO PRINCIPAL
@@ -2105,55 +2425,52 @@ def main(page: ft.Page):
     app_content = ft.Column(
         controls=[
 
+            # =================================================
+            # ENCABEZADO INSTITUCIONAL
+            # =================================================
+
             ft.Row(
-                controls=[
-                    ft.Column(
-                        controls=[
-                            ft.Text(
-                                "Secretaría Anticorrupción y Buen Gobierno",
-                                size=15,
-                                weight=ft.FontWeight.W_500,
-                            ),
-                            ft.Text(
-                                "Dirección General de Evaluación de Confianza",
-                                size=13,
-                                weight=ft.FontWeight.W_500,
-                            ),
-                            ft.Text(
-                                "Departamento de Investigación de Antecedentes",
-                                size=13,
-                                weight=ft.FontWeight.W_500,
-                            ),
-                            ft.Text(
-                                "Bancos habilitados (v1.0.3): BBVA, Banorte y Banamex Próximamente (v1.2.0): Estados de cuenta escaneados de: BBVA, Banamex, HSBC.",
-                                size=10,
-                                weight=ft.FontWeight.W_500,
-                            ),
-                        ],
-                        spacing=2,
-                    ),
-                ],
+                controls=header_controls,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
 
             ft.Divider(
                 height=10
             ),
 
+            # =================================================
+            # TÍTULO PRINCIPAL
+            # =================================================
+
             ft.Row(
                 controls=[
                     ft.Text(
-                        "📄 Motor de Estados de Cuenta",
+                        "📄 Extractor de Movimientos Financieros",
                         size=32,
                         weight=ft.FontWeight.BOLD,
                     ),
-                    ft.Text(
-                        "Versión 1.0.3"
+
+                    ft.Row(
+                        controls=[
+                            ft.Text(
+                                "Versión 1.0",
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            feedback_button,
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=10,
                     ),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
 
+
             ft.Divider(),
+
+            # =================================================
+            # CONTROLES DE PROCESAMIENTO
+            # =================================================
 
             ft.Row(
                 controls=[
@@ -2162,9 +2479,14 @@ def main(page: ft.Page):
                     status_text,
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=10,
             ),
 
             ft.Divider(),
+
+            # =================================================
+            # AUDITORÍA
+            # =================================================
 
             ft.Text(
                 "🔍 Auditoría de Resultados",
@@ -2172,9 +2494,9 @@ def main(page: ft.Page):
                 weight=ft.FontWeight.BOLD,
             ),
 
-            # ====================================================
+            # =================================================
             # TABLA + SELECTOR
-            # ====================================================
+            # =================================================
 
             ft.Row(
                 controls=[
@@ -2193,6 +2515,10 @@ def main(page: ft.Page):
             auditoria_view,
 
             ft.Divider(),
+
+            # =================================================
+            # EXPORTACIÓN
+            # =================================================
 
             ft.Text(
                 "📤 Exportar Todos los Resultados a Excel",
@@ -2220,18 +2546,14 @@ def main(page: ft.Page):
         spacing=0,
     )
 
+    # ========================================================
+    # ESCALA GLOBAL
+    # ========================================================
 
-    # ========================================================
-    # CONTENEDOR RAÍZ CON ESCALA GLOBAL
-    # ========================================================
+    app_content.scale = UI_SCALE
 
     page.add(
-        ft.Container(
-            content=app_content,
-            width=1100,
-            scale=UI_SCALE,
-            alignment=ft.Alignment.TOP_LEFT,
-        )
+        app_content
     )
 
 
