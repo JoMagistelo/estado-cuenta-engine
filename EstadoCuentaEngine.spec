@@ -43,7 +43,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="EstadoCuentaEngine",
+    name="Extractor_de_Movimientos_Financieros",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
