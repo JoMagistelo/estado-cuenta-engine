@@ -424,6 +424,7 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
+                        "• CitiBanamex Cuenta Base\n"
                         "• Banamex Premium\n"
                         "• HSBC digital y OCR",
                     ),
