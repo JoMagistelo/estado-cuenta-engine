@@ -1,196 +1,307 @@
-from typing import List, Dict, Any
+from __future__ import annotations
+
+from typing import Any, Dict, List, Sequence
 
 
 # ============================================================
-# CONFIGURACION FOOTER BBVA
+# CONFIGURACIÓN
 # ============================================================
 
-FOOTER_MIN_Y = 750
+FOOTER_TOP_RATIO = 0.88
 
-FOOTER_START_WORDS = {
-    "BBVA",
-    "MEXICO,",
-    "MEXICO",
-    "R.F.C.",
-    "RFC",
-    "BBA830831LJ2",
-    "GAT",
-}
+FOOTER_MIN_TOP = 700.0
+
+FOOTER_MARKERS = (
+    "EMITIDO",
+    "HSBC MEXICO",
+    "HSBC.",
+    "RFC:",
+    "PAG.",
+    "PASEO DE LA REFORMA",
+)
 
 
 # ============================================================
-# DETECTAR INICIO FOOTER EN UNA PAGINA
+# UTILIDADES
 # ============================================================
 
 
-def find_footer_start(
-    words: List[Dict[str, Any]]
-) -> Dict[int, float]:
+def safe_page(
+    word: Dict[str, Any],
+) -> int:
     """
-    Detecta la coordenada top donde inicia
-    el footer por página.
-
-    Retorna:
-
-    {
-        pagina: top_inicio_footer
-    }
-
-    Ejemplo:
-
-    {
-        1: 752.36,
-        8: 764.24
-    }
-
+    Devuelve la página de una word.
     """
 
-    footer_pages = {}
-
-
-    # Agrupar por página
-
-    pages = {}
-
-    for word in words:
-
-        page = word.get(
-            "page",
-            1
+    try:
+        return int(
+            word.get(
+                "page",
+                1,
+            )
         )
-
-        pages.setdefault(
-            page,
-            []
-        ).append(word)
-
-
-
-    for page, page_words in pages.items():
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 1
 
 
-        # Solo revisamos zona inferior
+def safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+    """
+    Convierte un valor a float de forma segura.
+    """
 
-        candidates = [
-            w
-            for w in page_words
-            if w.get("top", 0) >= FOOTER_MIN_Y
+    try:
+        return float(
+            value
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
+
+
+def normalize_text(
+    value: Any,
+) -> str:
+    """
+    Normalización básica para detectar marcadores.
+    """
+
+    if value is None:
+        return ""
+
+    return str(
+        value
+    ).strip().upper()
+
+
+def page_words(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Dict[
+    int,
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Agrupa words por página.
+    """
+
+    result: Dict[
+        int,
+        List[
+            Dict[str, Any]
         ]
-
-
-        if not candidates:
-            continue
-
-
-
-        # Orden vertical
-
-        candidates.sort(
-            key=lambda w: (
-                w.get("top",0),
-                w.get("x0",0)
-            )
-        )
-
-
-        # Buscar patrón:
-        # alguna palabra característica
-        # en la zona inferior izquierda
-
-        for word in candidates:
-
-            text = (
-                word.get("text","")
-                .strip()
-                .upper()
-            )
-
-            x0 = word.get(
-                "x0",
-                0
-            )
-
-            top = word.get(
-                "top",
-                0
-            )
-
-
-            if (
-                text in FOOTER_START_WORDS
-                and x0 < 50
-            ):
-
-                footer_pages[page] = top
-                break
-
-
-
-    return footer_pages
-
-
-
-# ============================================================
-# REMOVER FOOTER
-# ============================================================
-
-
-def remove_bbva_footer(
-    words: List[Dict[str,Any]]
-) -> List[Dict[str,Any]]:
-    """
-    Elimina únicamente el footer BBVA.
-
-    Regla:
-    - detecta inicio del footer por coordenadas
-    - elimina desde esa línea hasta abajo
-    - conserva todo lo anterior intacto
-    """
-
-
-    footer_starts = find_footer_start(
-        words
-    )
-
-
-    if not footer_starts:
-        return words
-
-
-
-    cleaned = []
-
+    ] = {}
 
     for word in words:
 
-
-        page = word.get(
-            "page",
-            1
-        )
-
-        top = word.get(
-            "top",
-            0
-        )
-
-
-        if page in footer_starts:
-
-
-            footer_top = footer_starts[page]
-
-
-            # cortar todo desde inicio footer
-
-            if top >= footer_top:
-                continue
-
-
-
-        cleaned.append(
+        page = safe_page(
             word
         )
 
+        result.setdefault(
+            page,
+            []
+        ).append(
+            word
+        )
 
-    return cleaned
+    return result
+
+
+# ============================================================
+# DETECCIÓN DE FOOTER
+# ============================================================
+
+
+def find_footer_start_index(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> int | None:
+    """
+    Localiza el inicio del footer de una página.
+
+    La detección combina:
+
+        - posición vertical inferior;
+        - marcadores textuales conocidos.
+
+    No depende de una coordenada Y exacta.
+    """
+
+    if not words:
+        return None
+
+    max_top = max(
+        safe_float(
+            word.get(
+                "top",
+                0.0,
+            )
+        )
+        for word in words
+    )
+
+    dynamic_threshold = max(
+        FOOTER_MIN_TOP,
+        max_top * FOOTER_TOP_RATIO,
+    )
+
+    candidates = []
+
+    for index, word in enumerate(
+        words
+    ):
+
+        text = normalize_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        top = safe_float(
+            word.get(
+                "top",
+                0.0,
+            )
+        )
+
+        if top < dynamic_threshold:
+            continue
+
+        if any(
+            marker in text
+            for marker in FOOTER_MARKERS
+        ):
+            candidates.append(
+                index
+            )
+
+    if not candidates:
+        return None
+
+    return min(
+        candidates
+    )
+
+
+# ============================================================
+# FILTRO POR PÁGINA
+# ============================================================
+
+
+def filter_page_footer(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Elimina el footer de una página.
+    """
+
+    if not words:
+        return []
+
+    ordered = sorted(
+        words,
+        key=lambda word: (
+            safe_float(
+                word.get(
+                    "top",
+                    0.0,
+                )
+            ),
+            safe_float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            ),
+        )
+    )
+
+    footer_start = find_footer_start_index(
+        ordered
+    )
+
+    if footer_start is None:
+        return ordered
+
+    return ordered[
+        :footer_start
+    ]
+
+
+# ============================================================
+# FILTRO PÚBLICO
+# ============================================================
+
+
+def filter_hsbc_footer_words(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Elimina los footers de todas las páginas HSBC.
+
+    Conserva intacta la información de encabezados y
+    movimientos.
+
+    La página se procesa individualmente para evitar que
+    las coordenadas de una página afecten a otra.
+    """
+
+    if not words:
+        return []
+
+    grouped = page_words(
+        words
+    )
+
+    result = []
+
+    for page in sorted(
+        grouped
+    ):
+
+        result.extend(
+            filter_page_footer(
+                grouped[page]
+            )
+        )
+
+    result.sort(
+        key=lambda word: (
+            safe_page(word),
+            safe_float(
+                word.get(
+                    "top",
+                    0.0,
+                )
+            ),
+            safe_float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            ),
+        )
+    )
+
+    return result

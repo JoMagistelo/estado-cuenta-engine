@@ -1,1003 +1,1943 @@
+from __future__ import annotations
 
-from typing import List, Dict, Any
 import re
+import unicodedata
+from dataclasses import dataclass
+from datetime import date
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
 from models.movimiento import Movimiento
-from parsers.hsbc.utils.words_footer_filter import remove_bbva_footer
-from parsers.hsbc.utils.words_resume_filter import remove_after_movimientos
-from parsers.hsbc.utils.words_header_filter import remove_duplicate_premium_headers
 
-# ============================================================
-# CONFIGURACION DE COLUMNAS BBVA
-# ============================================================
-
-# --- Coordenadas Layout NORMAL ---
-COLS_NORMAL = {
-    "FECHA_OPERACION": (10, 55),
-    "FECHA_LIQUIDACION": (55, 100),
-    "CONCEPTO": (100, 315),
-    "CARGO": (380, 422),
-    "ABONO": (422, 463),
-    "SALDO_OPERACION": (463, 535),
-    "SALDO_LIQUIDACION": (535, 610),
-    "REFERENCIA_LABEL": (315, 365),
-    "REFERENCIA_VALUE": (365, 445),
-}
-
-# --- Coordenadas Layout PREMIUM ---
-# Ajustadas según el header del layout premium.
-# La columna de concepto es más estrecha y la de referencia se desplaza.
-COLS_PREMIUM = {
-    "FECHA_OPERACION": (10, 55),
-    "FECHA_LIQUIDACION": (55, 85), # Ligeramente más estrecha
-    "CONCEPTO": (85, 360), # Similar
-    "CARGO": (370, 422),
-    "ABONO": (422, 470),
-    "SALDO_OPERACION": (470, 540),
-    "SALDO_LIQUIDACION": (540, 610),
-    "REFERENCIA_LABEL": (218, 272), # Coordenada clave de detección
-    "REFERENCIA_VALUE": (272, 370), # Valor de referencia
-}
-
-
-def get_column_config(
-    words: List[Dict[str, Any]]
-) -> Dict[str, tuple[float, float]]:
-    """
-    Detecta si el estado de cuenta usa el layout de movimientos
-    "Normal" o "Premium" y devuelve la configuración de columnas
-    apropiada.
-
-    La detección se basa en la posición horizontal (x0) de la
-    palabra "REFERENCIA" en el encabezado de la tabla de movimientos.
-    """
-    # Buscamos la palabra "REFERENCIA" en la primera página,
-    # que es donde suele estar el primer header de movimientos.
-    for word in words:
-        if word.get("page", 1) != 1:
-            continue
-
-        text = word.get("text", "").strip().upper()
-        if text != "REFERENCIA":
-            continue
-
-        x0 = word.get("x0", 0)
-
-        # Layout Premium: "REFERENCIA" tiene x0 ≈ 218.9
-        # Usamos un rango para dar tolerancia.
-        if 215 <= x0 <= 225:
-            return COLS_PREMIUM
-
-        # Layout Normal: "REFERENCIA" tiene x0 ≈ 321.1
-        # Usamos un rango para dar tolerancia.
-        if 318 <= x0 <= 325:
-            return COLS_NORMAL
-
-    # Si no se encuentra una coincidencia clara, se asume el layout normal
-    # por defecto para mantener la compatibilidad con el comportamiento anterior.
-    return COLS_NORMAL
+from parsers.hsbc.utils.words_footer_filter import (
+    filter_hsbc_footer_words,
+)
 
 
 # ============================================================
-# UTILIDADES ESPACIALES
+# CONFIGURACIÓN ESPACIAL — MOVIMIENTOS HSBC
+# ============================================================
+#
+# Layout observado:
+#
+# Día
+#     x ≈ 42 ... 55
+#
+# Descripción
+#     x ≈ 60 ... 190
+#
+# Referencia / Serial
+#     región ≈ 280 ... 340
+#
+# Retiro / Cargo
+#     x ≈ 350 ... 405
+#
+# Depósito / Abono
+#     x ≈ 420 ... 505
+#
+# Saldo
+#     x ≈ 520 ... 570
+#
+# IMPORTANTE:
+#
+# Las cajas son referencias espaciales.
+#
+# No se consideran posiciones absolutas rígidas.
+#
 # ============================================================
 
 
-def group_words_into_lines(
-    words: List[Dict[str, Any]],
-    tolerance: float = 3.0
-) -> List[List[Dict[str, Any]]]:
+BOX_DAY = (
+    35.0,
+    60.0,
+    0.0,
+    900.0,
+)
+
+
+BOX_CONCEPTO = (
+    55.0,
+    190.0,
+    0.0,
+    900.0,
+)
+
+
+# ------------------------------------------------------------
+# REFERENCIA / SERIAL
+#
+# Esta es una zona estructural, no simplemente una columna.
+#
+# En el layout observado aparecen dos datos verticales:
+#
+#     dato superior
+#     dato inferior
+#
+# El dato que nos interesa como referencia es el SEGUNDO
+# renglón lógico.
+# ------------------------------------------------------------
+
+BOX_REFERENCIA_SERIAL = (
+    280.0,
+    345.0,
+    0.0,
+    900.0,
+)
+
+
+BOX_SERIAL = (
+    290.0,
+    345.0,
+    0.0,
+    900.0,
+)
+
+
+BOX_REFERENCIA = (
+    280.0,
+    345.0,
+    0.0,
+    900.0,
+)
+
+
+BOX_CARGO = (
+    345.0,
+    415.0,
+    0.0,
+    900.0,
+)
+
+
+BOX_ABONO = (
+    420.0,
+    505.0,
+    0.0,
+    900.0,
+)
+
+
+BOX_SALDO = (
+    515.0,
+    575.0,
+    0.0,
+    900.0,
+)
+
+
+# ============================================================
+# TOLERANCIAS
+# ============================================================
+
+
+LINE_Y_TOLERANCE = 5.0
+
+MOVEMENT_ROW_MAX_GAP = 22.0
+
+REFERENCE_LINE_MIN_GAP = 3.0
+
+REFERENCE_LINE_MAX_GAP = 20.0
+
+COLUMN_PADDING_X = 8.0
+
+COLUMN_PADDING_Y = 4.0
+
+DAY_MIN = 1
+
+DAY_MAX = 31
+
+
+# ============================================================
+# PATRONES
+# ============================================================
+
+
+DAY_PATTERN = re.compile(
+    r"^(?:0?[1-9]|[12]\d|3[01])$"
+)
+
+
+DATE_PATTERN = re.compile(
+    r"\b(\d{2})[/-](\d{2})[/-](\d{4})\b"
+)
+
+
+MONEY_PATTERN = re.compile(
+    r"^\$?\s*[\d,]+(?:\.\d{1,2})?$"
+)
+
+
+REFERENCE_PATTERN = re.compile(
+    r"^[A-Z0-9Ñ&./_-]+$",
+    re.IGNORECASE,
+)
+
+
+# ============================================================
+# UTILIDADES GENERALES
+# ============================================================
+
+
+def safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
     """
-    Agrupa palabras por coordenada vertical.
-    Mantiene las palabras originales con coordenadas.
+    Conversión segura a float.
     """
 
-    if not words:
-        return []
+    try:
+        return float(
+            value
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
 
 
-    words = sorted(
-        words,
-        key=lambda w: (
-            w.get("page", 1),
-            w.get("top", 0),
-            w.get("x0", 0)
+def safe_page(
+    word: Dict[str, Any],
+) -> int:
+    """
+    Devuelve la página de una word.
+    """
+
+    try:
+        return int(
+            word.get(
+                "page",
+                1,
+            )
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 1
+
+
+def normalize_text(
+    value: Any,
+) -> str:
+    """
+    Normaliza texto para comparación semántica.
+    """
+
+    if value is None:
+        return ""
+
+    text = str(
+        value
+    ).strip()
+
+    if not text:
+        return ""
+
+    text = unicodedata.normalize(
+        "NFD",
+        text,
+    )
+
+    text = "".join(
+        char
+        for char in text
+        if unicodedata.category(char)
+        != "Mn"
+    )
+
+    text = text.upper()
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
+
+def clean_word_text(
+    value: Any,
+) -> str:
+    """
+    Limpia una word.
+    """
+
+    if value is None:
+        return ""
+
+    return str(
+        value
+    ).strip()
+
+
+# ============================================================
+# GEOMETRÍA
+# ============================================================
+
+
+def word_center(
+    word: Dict[str, Any],
+) -> Tuple[
+    float,
+    float,
+]:
+    """
+    Centro geométrico de una word.
+    """
+
+    x0 = safe_float(
+        word.get(
+            "x0",
+            0.0,
         )
     )
 
+    x1 = safe_float(
+        word.get(
+            "x1",
+            x0,
+        )
+    )
 
-    lines = []
+    top = safe_float(
+        word.get(
+            "top",
+            0.0,
+        )
+    )
 
-    current = []
+    bottom = safe_float(
+        word.get(
+            "bottom",
+            top,
+        )
+    )
 
-    current_page = None
-    current_top = None
-
-
-    for word in words:
-
-        page = word.get("page", 1)
-        top = word.get("top", 0)
-
-
-        if current_top is None:
-
-            current.append(word)
-            current_top = top
-            current_page = page
-
-
-        elif (
-            page == current_page
-            and abs(top - current_top) <= tolerance
-        ):
-
-            current.append(word)
+    return (
+        (x0 + x1) / 2.0,
+        (top + bottom) / 2.0,
+    )
 
 
-        else:
+def word_inside_box(
+    word: Dict[str, Any],
+    box: Tuple[
+        float,
+        float,
+        float,
+        float,
+    ],
+    padding_x: float = 0.0,
+    padding_y: float = 0.0,
+) -> bool:
+    """
+    Determina si una word pertenece a una caja espacial.
+    """
 
-            current.sort(
-                key=lambda w: w.get("x0", 0)
-            )
+    xmin, xmax, ymin, ymax = box
 
-            lines.append(current)
+    center_x, center_y = word_center(
+        word
+    )
+
+    return (
+        xmin - padding_x
+        <= center_x
+        <= xmax + padding_x
+        and
+        ymin - padding_y
+        <= center_y
+        <= ymax + padding_y
+    )
 
 
-            current = [word]
-            current_top = top
-            current_page = page
+# ============================================================
+# RENGLONES
+# ============================================================
 
 
+def line_bounds(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> Tuple[
+    float,
+    float,
+    float,
+    float,
+]:
+    """
+    Caja envolvente del renglón.
+    """
 
-    if current:
-
-        current.sort(
-            key=lambda w: w.get("x0", 0)
+    if not line:
+        return (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         )
 
-        lines.append(current)
+    return (
+        min(
+            safe_float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            )
+            for word in line
+        ),
+        max(
+            safe_float(
+                word.get(
+                    "x1",
+                    0.0,
+                )
+            )
+            for word in line
+        ),
+        min(
+            safe_float(
+                word.get(
+                    "top",
+                    0.0,
+                )
+            )
+            for word in line
+        ),
+        max(
+            safe_float(
+                word.get(
+                    "bottom",
+                    0.0,
+                )
+            )
+            for word in line
+        ),
+    )
 
 
-    return lines
-
-
-
-def words_in_column(
-    line: List[Dict[str, Any]],
-    xmin: float,
-    xmax: float
-) -> List[str]:
+def line_center_y(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> float:
     """
-    Obtiene palabras dentro de una columna X.
+    Centro vertical del renglón.
     """
 
-    result = []
+    _, _, ymin, ymax = line_bounds(
+        line
+    )
+
+    return (
+        ymin + ymax
+    ) / 2.0
+
+
+def line_text(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> str:
+    """
+    Concatena las words del renglón.
+    """
+
+    parts = []
 
     for word in line:
 
-        x0 = word.get("x0", 0)
-        x1 = word.get("x1", 0)
-        # Usamos el centro de la palabra para decidir si pertenece a la columna.
-        # Esto evita que números grandes se desborden a la columna siguiente.
-        word_center = (x0 + x1) / 2
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
 
-        if xmin <= word_center <= xmax:
-            result.append(word["text"])
+        if text:
+            parts.append(
+                text
+            )
 
+    return " ".join(
+        parts
+    ).strip()
+
+
+def group_words_into_lines(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+    y_tolerance: float = LINE_Y_TOLERANCE,
+) -> List[
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Agrupa words por renglones lógicos.
+
+    Nunca mezcla páginas.
+    """
+
+    valid_words = [
+        word
+        for word in words
+        if clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+    ]
+
+    valid_words.sort(
+        key=lambda word: (
+            safe_page(word),
+            safe_float(
+                word.get(
+                    "top",
+                    0.0,
+                )
+            ),
+            safe_float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            ),
+        )
+    )
+
+    lines_by_page: Dict[
+        int,
+        List[
+            List[
+                Dict[str, Any]
+            ]
+        ]
+    ] = {}
+
+    for word in valid_words:
+
+        page = safe_page(
+            word
+        )
+
+        center_y = word_center(
+            word
+        )[1]
+
+        page_lines = (
+            lines_by_page.setdefault(
+                page,
+                [],
+            )
+        )
+
+        best_line = None
+
+        best_distance = float(
+            "inf"
+        )
+
+        for line in reversed(
+            page_lines
+        ):
+
+            distance = abs(
+                center_y
+                -
+                line_center_y(
+                    line
+                )
+            )
+
+            if (
+                distance
+                <=
+                y_tolerance
+                and
+                distance
+                <
+                best_distance
+            ):
+
+                best_distance = distance
+
+                best_line = line
+
+            if (
+                line_center_y(line)
+                <
+                center_y
+                -
+                y_tolerance
+            ):
+                break
+
+        if best_line is None:
+
+            page_lines.append(
+                [word]
+            )
+
+        else:
+
+            best_line.append(
+                word
+            )
+
+    result = []
+
+    for page in sorted(
+        lines_by_page
+    ):
+
+        for line in lines_by_page[
+            page
+        ]:
+
+            line.sort(
+                key=lambda word:
+                    safe_float(
+                        word.get(
+                            "x0",
+                            0.0,
+                        )
+                    )
+            )
+
+            result.append(
+                line
+            )
 
     return result
 
 
-
-def column_text(
-    line: List[Dict[str,Any]],
-    column: tuple[float, float]
-) -> str:
-
-    words = words_in_column(
-        line,
-        column[0], # xmin
-        column[1]  # xmax
-    )
-
-    return " ".join(words).strip()
-
-
-
-def parse_amount(value:str)->float:
-
-    if not value:
-        return 0.0
-
-
-    value = (
-        value
-        .replace(",","")
-        .strip()
-    )
-
-
-    try:
-        return float(value)
-
-    except:
-
-        return 0.0
-
-
-
-def is_start_movement(line, cols):
-
-    fecha = column_text(
-        line,
-        cols["FECHA_OPERACION"]
-    )
-
-
-    return (
-        len(fecha)==6
-        and "/" in fecha
-    )
-
-
-
 # ============================================================
-# EXTRACCION DE CAMPOS PRINCIPALES
+# PERIODO
 # ============================================================
 
 
-def extract_fecha_operacion(line, cols):
-
-    return column_text(
-        line,
-        cols["FECHA_OPERACION"]
-    )
-
-
-
-def extract_fecha_liquidacion(line, cols):
-
-    return column_text(
-        line,
-        cols["FECHA_LIQUIDACION"]
-    )
-
-
-
-def extract_concepto(lines, cols):
-
-    contenido=[]
-
-    for line in lines:
-
-        texto = column_text(
-            line,
-            cols["CONCEPTO"]
-        )
-
-        if texto:
-
-            contenido.append(texto)
-
-    return "\n".join(contenido).strip()
-
-
-def extract_cargo(line, cols):
-
-    texto = column_text(
-        line,
-        cols["CARGO"]
-    )
-
-    return parse_amount(texto)
-
-
-
-def extract_abono(line, cols):
-
-    texto = column_text(
-        line,
-        cols["ABONO"]
-    )
-
-    return parse_amount(texto)
-
-
-
-def extract_saldo_operacion(line, cols):
-
-    texto = column_text(
-        line,
-        cols["SALDO_OPERACION"]
-    )
-
-    return parse_amount(texto)
-
-
-
-def extract_saldo_liquidacion(line, cols):
-
-    texto = column_text(
-        line,
-        cols["SALDO_LIQUIDACION"]
-    )
-
-    return parse_amount(texto)
-
-
-
-def extract_referencia(lines: List[List[Dict[str, Any]]], cols) -> str | None:
+def extract_period_from_words(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Tuple[
+    Optional[date],
+    Optional[date],
+]:
     """
-    Busca la referencia en las líneas de un movimiento.
-    BBVA la coloca en una línea debajo del concepto principal,
-    alineada a una columna específica.
+    Busca el periodo completo del estado de cuenta.
     """
-    for line in lines:
-        # Buscamos la etiqueta "Referencia" para confirmar que estamos en la línea correcta.
-        label = column_text(line, cols["REFERENCIA_LABEL"]).lower()
-        if "referencia" in label:
-            # Si encontramos la etiqueta, extraemos el valor de la columna de al lado.
-            ref_value = column_text(line, cols["REFERENCIA_VALUE"])
-            if ref_value:
-                return ref_value
-
-    # --- Fallback para Layout Premium ---
-    # Si no se encontró la etiqueta "Referencia", se busca un patrón que
-    # comience con asteriscos dentro de la columna de CONCEPTO.
-    # Ejemplo: ******3855
-    # El patrón busca una palabra que comience con uno o más asteriscos.
-    asterisk_pattern = re.compile(r"(\*+\S+)")
-
-    for line in lines:
-        # Buscamos en la columna de concepto, que es donde aparece en el layout premium.
-        concepto_text = column_text(line, cols["CONCEPTO"])
-        if concepto_text:
-            match = asterisk_pattern.search(concepto_text)
-            if match:
-                return match.group(1)
-
-    return None
-
-
-
-# ============================================================
-# CAMPOS EXTRAIDOS DESDE CONCEPTO
-# ============================================================
-
-
-# ============================================================
-# CAMPOS EXTRAIDOS DESDE CONCEPTO
-# ============================================================
-
-def get_concepto_lines(concepto: str) -> List[str]:
-    """
-    Convierte el concepto completo en una lista de líneas limpias.
-
-    Se centraliza aquí para evitar repetir en cada extractor la misma
-    lógica de split/strip/filtrado.
-    """
-    if not concepto:
-        return []
-
-    return [
-        line.strip()
-        for line in concepto.splitlines()
-        if line.strip()
-    ]
-
-
-def get_first_concepto_line(concepto: str) -> str | None:
-    """
-    Devuelve la primera línea no vacía del concepto.
-    """
-    lines = get_concepto_lines(concepto)
-    return lines[0] if lines else None
-
-
-# ============================================================
-# SPEI
-# ============================================================
-
-def is_spei_movement(concepto: str) -> bool:
-    """
-    Determina si el movimiento corresponde a un SPEI.
-
-    BBVA puede presentar la primera línea de estas formas:
-
-        SPEI ENVIADO INBURSA
-        SPEI RECIBIDO AZTECA
-        SPEI RECIBIDOAZTECA
-        SPEI RECIBIDONVIO
-        SPEI RECIBIDOSTP
-
-    Por eso no se exige un límite de palabra después de
-    RECIBIDO o ENVIADO.
-    """
-    first_line = get_first_concepto_line(concepto)
-
-    if not first_line:
-        return False
-
-    return bool(
-        re.match(
-            r"^SPEI\s+(RECIBIDO|ENVIADO)",
-            first_line,
-            re.IGNORECASE,
-        )
-    )
-
-
-def extract_beneficiario_from_spei(
-    concepto: str
-) -> str | None:
-    """
-    Extrae el beneficiario de un SPEI.
-
-    Estructura BBVA:
-
-        línea 1 -> SPEI RECIBIDO / SPEI ENVIADO
-        línea 2 -> concepto
-        línea 3 -> CLABE
-        línea 4 -> código
-        línea 5 -> beneficiario
-
-    El beneficiario corresponde exactamente a la quinta línea.
-    """
-    lines = get_concepto_lines(concepto)
-
-    if len(lines) < 5:
-        return None
-
-    if not is_spei_movement(concepto):
-        return None
-
-    beneficiario = lines[4].strip()
-
-    return beneficiario or None
-
-
-def extract_clabe_beneficiario_from_spei(
-    concepto: str
-) -> str | None:
-    """
-    Extrae la CLABE de un SPEI.
-
-    La CLABE se encuentra en la tercera línea del bloque SPEI.
-
-    BBVA puede incluir dígitos adicionales junto con la CLABE.
-    La CLABE real corresponde a los últimos 18 dígitos.
-    """
-    lines = get_concepto_lines(concepto)
-
-    if len(lines) < 3:
-        return None
-
-    if not is_spei_movement(concepto):
-        return None
-
-    linea_clabe = lines[2]
-
-    digits = re.sub(
-        r"\D",
-        "",
-        linea_clabe,
-    )
-
-    if len(digits) < 18:
-        return None
-
-    return digits[-18:]
-
-
-def extract_concepto_original_from_spei(
-    concepto: str
-) -> str | None:
-    """
-    Extrae el concepto real del pago de un SPEI.
-
-    Estructura BBVA:
-
-        línea 1 -> SPEI RECIBIDO / SPEI ENVIADO
-        línea 2 -> código + concepto real
-        línea 3 -> CLABE
-        línea 4 -> código
-        línea 5 -> beneficiario
-
-    Ejemplos:
-
-        1234567A loan
-        -> loan
-
-        1234567A Pago renta
-        -> Pago renta
-
-        0054303388 036 0811250Gerardo Cruz Rosas
-        -> Gerardo Cruz Rosas
-    """
-    lines = get_concepto_lines(concepto)
-
-    if len(lines) < 2:
-        return None
-
-    if not is_spei_movement(concepto):
-        return None
-
-    segunda_linea = lines[1]
-
-    # --------------------------------------------------------
-    # CASO:
-    #
-    # 1234567A loan
-    #
-    # El código termina antes del espacio y el texto comienza
-    # después de él. Aunque a veces viene junto por lo que simplemente
-    # extraemos todo el renglon.
-    # --------------------------------------------------------
-
-    segunda_linea = lines[1].strip()
-
-    return segunda_linea or None
-
-
-    # --------------------------------------------------------
-    # CASO:
-    #
-    # 0054303388 036 0811250Gerardo Cruz Rosas
-    #
-    # Hay varios bloques numéricos y el texto comienza
-    # inmediatamente después del último bloque numérico.
-    # --------------------------------------------------------
-
-    match = re.match(
-        r"^(?:\d+\s+)\d+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ].*)$",
-        segunda_linea,
-    )
-
-    if match:
-        texto = match.group(1).strip()
-
-        if texto:
-            return texto
-
-    return None
-
-
-# ============================================================
-# PAGO CUENTA DE TERCERO
-# ============================================================
-
-def is_pago_cuenta_tercero_movement(concepto: str) -> bool:
-    """
-    Determina si el movimiento corresponde a:
-
-        PAGO CUENTA DE TERCERO
-
-    La identificación se realiza sobre la primera línea no vacía
-    del concepto.
-    """
-    first_line = get_first_concepto_line(concepto)
-
-    if not first_line:
-        return False
-
-    return bool(
-        re.match(
-            r"^PAGO\s+CUENTA\s+DE\s+TERCERO$",
-            first_line,
-            re.IGNORECASE,
-        )
-    )
-
-
-def extract_cuenta_beneficiario_from_pago_cuenta_tercero(
-    concepto: str
-) -> str | None:
-    """
-    Extrae la cuenta del beneficiario de un movimiento
-    PAGO CUENTA DE TERCERO.
-
-    Estructura esperada:
-
-        línea 1 -> PAGO CUENTA DE TERCERO
-        línea 2 -> BNET 0459455663 Transf a Ma. Guada
-
-    Resultado:
-
-        0459455663
-    """
-    lines = get_concepto_lines(concepto)
-
-    if len(lines) < 2:
-        return None
-
-    if not is_pago_cuenta_tercero_movement(concepto):
-        return None
-
-    segunda_linea = lines[1]
-
-    match = re.match(
-        r"^BNET\s+(\d+)(?:\s|$)",
-        segunda_linea,
-        re.IGNORECASE,
-    )
-
-    if not match:
-        return None
-
-    return match.group(1)
-
-
-def extract_beneficiario_from_pago_cuenta_tercero(
-    concepto: str
-) -> str | None:
-    """
-    Para PAGO CUENTA DE TERCERO, el beneficiario se representa
-    mediante la propia cuenta beneficiaria.
-
-    Ejemplo:
-
-        BNET 0459455663 Transf a Ma. Guada
-
-    Resultado:
-
-        0459455663
-    """
-    return extract_cuenta_beneficiario_from_pago_cuenta_tercero(
-        concepto
-    )
-
-
-def extract_concepto_original_from_pago_cuenta_tercero(
-    concepto: str
-) -> str | None:
-    """
-    Extrae el concepto original de un movimiento
-    PAGO CUENTA DE TERCERO.
-
-    Estructura:
-
-        BNET 0459455663 Transf a Ma. Guada
-
-    Resultado:
-
-        Transf a Ma. Guada
-
-    Es decir:
-        - se elimina BNET
-        - se elimina la cuenta
-        - se conserva exactamente el texto posterior.
-    """
-    lines = get_concepto_lines(concepto)
-
-    if len(lines) < 2:
-        return None
-
-    if not is_pago_cuenta_tercero_movement(concepto):
-        return None
-
-    segunda_linea = lines[1]
-
-    match = re.match(
-        r"^BNET\s+\d+\s*(.*)$",
-        segunda_linea,
-        re.IGNORECASE,
-    )
-
-    if not match:
-        return None
-
-    texto = match.group(1).strip()
-
-    return texto or None
-
-
-# ============================================================
-# DISPATCHERS DE CAMPOS EXTRAIDOS DESDE CONCEPTO
-# ============================================================
-
-def extract_beneficiario_from_concepto(
-    concepto: str
-) -> str | None:
-    """
-    Extrae el beneficiario de acuerdo con el tipo de movimiento.
-
-    SPEI:
-        usa el beneficiario propio del bloque SPEI.
-
-    PAGO CUENTA DE TERCERO:
-        el beneficiario se representa mediante la cuenta.
-    """
-    if is_spei_movement(concepto):
-        return extract_beneficiario_from_spei(concepto)
-
-    if is_pago_cuenta_tercero_movement(concepto):
-        return extract_beneficiario_from_pago_cuenta_tercero(concepto)
-
-    return None
-
-
-def extract_clabe_beneficiario_from_concepto(
-    concepto: str
-) -> str | None:
-    """
-    Extrae la CLABE del beneficiario según el tipo de movimiento.
-    """
-    if is_spei_movement(concepto):
-        return extract_clabe_beneficiario_from_spei(concepto)
-
-    return None
-
-
-def extract_cuenta_beneficiario_from_concepto(
-    concepto: str
-) -> str | None:
-    """
-    Extrae la cuenta del beneficiario según el tipo de movimiento.
-    """
-    if is_pago_cuenta_tercero_movement(concepto):
-        return extract_cuenta_beneficiario_from_pago_cuenta_tercero(
-            concepto
-        )
-
-    return None
-
-
-def extract_concepto_original_from_concepto(
-    concepto: str
-) -> str | None:
-    """
-    Extrae el concepto original según el tipo de movimiento.
-    """
-    if is_spei_movement(concepto):
-        return extract_concepto_original_from_spei(concepto)
-
-    if is_pago_cuenta_tercero_movement(concepto):
-        return extract_concepto_original_from_pago_cuenta_tercero(
-            concepto
-        )
-
-    return None
-
-
-# ============================================================
-# OTROS CAMPOS EXTRAIDOS DESDE CONCEPTO
-# ============================================================
-
-def extract_rfc_from_concepto(concepto: str) -> str | None:
-    """
-    Extrae el RFC del texto del concepto.
-
-    Maneja RFCs que pueden tener espacios en medio.
-    Ej: "RFC: PPL 961114GZ1" -> "PPL961114GZ1"
-    """
-    match = re.search(
-        r"RFC:\s*([A-Z&Ñ]{3,4}\s?\d{6}[A-Z0-9]{3})",
-        concepto,
-        re.IGNORECASE
-    )
-
-    if match:
-        return match.group(1).replace(" ", "")
-
-    return None
-
-
-def extract_auth_from_concepto(concepto: str) -> str | None:
-    """
-    Extrae el número de autorización (AUT) del concepto.
-    Busca "AUT:" seguido de un código alfanumérico.
-    """
-    match = re.search(
-        r"AUT:\s*([A-Z0-9]+)",
-        concepto,
-        re.IGNORECASE
-    )
-
-    if match:
-        return match.group(1)
-
-    return None
-
-
-def extract_hora_from_concepto(concepto: str) -> str | None:
-    """
-    Extrae la hora de la operación del concepto.
-    Busca un formato HH:MM.
-    """
-    match = re.search(r"(\d{1,2}:\d{2})", concepto)
-
-    if match:
-        return match.group(1)
-
-    return None
-
-
-# ============================================================
-# CONSTRUCTOR MOVIMIENTO
-# ============================================================
-
-def build_movimiento(block, cols):
-    primera_linea = block[0]
-
-    concepto = extract_concepto(
-        block,
-        cols
-    )
-
-    cargo = extract_cargo(
-        primera_linea,
-        cols
-    )
-
-    abono = extract_abono(
-        primera_linea,
-        cols
-    )
-
-    tipo = None
-
-    if cargo > 0:
-        tipo = "CARGO"
-    elif abono > 0:
-        tipo = "ABONO"
-
-    referencia = extract_referencia(
-        block,
-        cols
-    )
-
-    beneficiario = extract_beneficiario_from_concepto(
-        concepto
-    )
-
-    cuenta_beneficiario = extract_cuenta_beneficiario_from_concepto(
-        concepto
-    )
-
-    clabe_beneficiario = extract_clabe_beneficiario_from_concepto(
-        concepto
-    )
-
-    concepto_original = extract_concepto_original_from_concepto(
-        concepto
-    )
-
-    return Movimiento(
-        fecha_operacion=
-            extract_fecha_operacion(
-                primera_linea,
-                cols
-            ),
-
-        fecha_liquidacion=
-            extract_fecha_liquidacion(
-                primera_linea,
-                cols
-            ),
-
-        concepto=concepto,
-
-        tipo_operacion=tipo,
-
-        cargo=cargo,
-
-        abono=abono,
-
-        saldo_operacion=
-            extract_saldo_operacion(
-                primera_linea,
-                cols
-            ),
-
-        saldo_liquidacion=
-            extract_saldo_liquidacion(
-                primera_linea,
-                cols
-            ),
-
-        referencia=referencia,
-
-        autorizacion=
-            extract_auth_from_concepto(
-                concepto
-            ),
-
-        beneficiario=beneficiario,
-
-        cuenta_beneficiario=cuenta_beneficiario,
-
-        clabe_beneficiario=clabe_beneficiario,
-
-        rfc=
-            extract_rfc_from_concepto(
-                concepto
-            ),
-
-        sucursal=None,
-
-        caja=None,
-
-        hora_operacion=
-            extract_hora_from_concepto(
-                concepto
-            ),
-
-        concepto_original=concepto_original
-    )
-
-# ============================================================
-# FUNCION PRINCIPAL PUBLICA
-# ============================================================
-
-
-def extract_movimientos_words(
-    words: List[Dict[str,Any]]
-) -> List[Movimiento]:
-
-    """
-    Parser espacial BBVA.
-
-    Usa coordenadas X/Y del PDF.
-    """
-
-    # 1. Detectar layout y obtener configuración de columnas
-    cols = get_column_config(words)
-
-    #Se elimina el pie de página
-    words = remove_bbva_footer(words)
-
-    # Se eliminan encabezados repetidos únicamente en layout Premium
-    words = remove_duplicate_premium_headers(words)
-
-    #Se elimina todo lo que viene despues del ultimo movimiento
-    words = remove_after_movimientos(words)
 
     lines = group_words_into_lines(
         words
     )
 
-
-    movimientos=[]
-
-
-    current=[]
-
+    candidates = []
 
     for line in lines:
 
+        normalized = normalize_text(
+            line_text(line)
+        )
 
-        if is_start_movement(line, cols):
+        if "PERIODO" not in normalized:
+            continue
 
+        text = line_text(
+            line
+        )
 
-            if current:
+        matches = DATE_PATTERN.findall(
+            text
+        )
 
-                movimientos.append(
-                    build_movimiento(
-                        current, cols
-                    )
-                )
+        if len(matches) < 2:
+            continue
 
+        try:
 
-            current=[line]
+            first = date(
+                int(matches[0][2]),
+                int(matches[0][1]),
+                int(matches[0][0]),
+            )
 
+            second = date(
+                int(matches[1][2]),
+                int(matches[1][1]),
+                int(matches[1][0]),
+            )
 
-        else:
+        except ValueError:
 
+            continue
 
-            if current:
-
-                current.append(line)
-
-
-
-    if current:
-
-        movimientos.append(
-            build_movimiento(
-                current, cols
+        candidates.append(
+            (
+                first,
+                second,
+                line_center_y(line),
             )
         )
 
+    if not candidates:
+
+        return (
+            None,
+            None,
+        )
+
+    candidates.sort(
+        key=lambda item: item[2]
+    )
+
+    return (
+        candidates[0][0],
+        candidates[0][1],
+    )
 
 
-    return movimientos
+# ============================================================
+# ENCABEZADOS
+# ============================================================
+
+
+def is_movement_header_line(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Detecta encabezado principal de movimientos.
+    """
+
+    normalized = normalize_text(
+        line_text(line)
+    )
+
+    return (
+        "DETALLE" in normalized
+        and
+        "MOVIMIENTOS" in normalized
+    )
+
+
+def is_column_header_line(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Detecta encabezado de las columnas.
+    """
+
+    normalized = normalize_text(
+        line_text(line)
+    )
+
+    score = 0
+
+    if "DIA" in normalized:
+        score += 1
+
+    if "DESCRIPCION" in normalized:
+        score += 1
+
+    if "RETIRO/CARGO" in normalized:
+        score += 1
+
+    if "DEPOSITO/ABONO" in normalized:
+        score += 1
+
+    if "SALDO" in normalized:
+        score += 1
+
+    return score >= 3
+
+
+# ============================================================
+# FILA LÓGICA DE MOVIMIENTO
+# ============================================================
+
+
+@dataclass
+class MovementRow:
+    """
+    Fila temporal de movimiento.
+
+    Puede contener una o varias líneas físicas.
+    """
+
+    page: int
+
+    lines: List[
+        List[
+            Dict[str, Any]
+        ]
+    ]
+
+
+# ============================================================
+# DÍA
+# ============================================================
+
+
+def extract_day_from_line(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[int]:
+    """
+    Extrae día exclusivamente de la columna Día.
+    """
+
+    for word in line:
+
+        if not word_inside_box(
+            word,
+            BOX_DAY,
+            padding_x=7.0,
+            padding_y=3.0,
+        ):
+            continue
+
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if not DAY_PATTERN.fullmatch(
+            text
+        ):
+            continue
+
+        try:
+            day = int(
+                text
+            )
+        except ValueError:
+            continue
+
+        if (
+            DAY_MIN
+            <=
+            day
+            <=
+            DAY_MAX
+        ):
+            return day
+
+    return None
+
+
+def line_starts_movement(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Determina si un renglón inicia un movimiento.
+    """
+
+    return (
+        extract_day_from_line(
+            line
+        )
+        is not None
+    )
+
+
+# ============================================================
+# PIE DE TABLA / BREAKERS
+# ============================================================
+
+
+def is_footer_like_line(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Protección adicional contra footer.
+    """
+
+    normalized = normalize_text(
+        line_text(line)
+    )
+
+    if "EMITIDO POR" in normalized:
+        return True
+
+    if "PASEO DE LA REFORMA" in normalized:
+        return True
+
+    if "RFC:" in normalized:
+        return True
+
+    return False
+
+
+def is_table_breaker_line(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Detecta texto posterior a la tabla de movimientos.
+    """
+
+    normalized = normalize_text(
+        line_text(line)
+    )
+
+    if not normalized:
+        return False
+
+    if normalized.startswith(
+        "CODI"
+    ):
+        return True
+
+    if (
+        "OPERACION PROCESADA POR CODI"
+        in normalized
+    ):
+        return True
+
+    if normalized.startswith(
+        "CIFRAS EXPRESADAS"
+    ):
+        return True
+
+    return False
+
+
+# ============================================================
+# RECONSTRUCCIÓN DE FILAS
+# ============================================================
+
+
+def split_page_into_movement_rows(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> List[
+    MovementRow
+]:
+    """
+    Reconstruye las filas lógicas de una página.
+
+    Soporta:
+
+        - encabezado;
+        - movimiento;
+        - líneas de continuación;
+        - siguiente movimiento;
+        - fin de tabla.
+    """
+
+    if not words:
+        return []
+
+    lines = group_words_into_lines(
+        words
+    )
+
+    rows: List[
+        MovementRow
+    ] = []
+
+    current_row: Optional[
+        MovementRow
+    ] = None
+
+    table_started = False
+
+    for line in lines:
+
+        if not line:
+            continue
+
+        page = safe_page(
+            line[0]
+        )
+
+        # ----------------------------------------------------
+        # Encabezados
+        # ----------------------------------------------------
+
+        if is_movement_header_line(
+            line
+        ):
+
+            table_started = True
+
+            continue
+
+        if is_column_header_line(
+            line
+        ):
+
+            table_started = True
+
+            continue
+
+        # ----------------------------------------------------
+        # Footer
+        # ----------------------------------------------------
+
+        if is_footer_like_line(
+            line
+        ):
+
+            if current_row is not None:
+
+                rows.append(
+                    current_row
+                )
+
+                current_row = None
+
+            break
+
+        # ----------------------------------------------------
+        # Fin de tabla
+        # ----------------------------------------------------
+
+        if (
+            table_started
+            and
+            is_table_breaker_line(
+                line
+            )
+        ):
+
+            if current_row is not None:
+
+                rows.append(
+                    current_row
+                )
+
+                current_row = None
+
+            break
+
+        # ----------------------------------------------------
+        # Nuevo movimiento
+        # ----------------------------------------------------
+
+        if line_starts_movement(
+            line
+        ):
+
+            if current_row is not None:
+
+                rows.append(
+                    current_row
+                )
+
+            current_row = MovementRow(
+                page=page,
+                lines=[
+                    list(line)
+                ],
+            )
+
+            table_started = True
+
+            continue
+
+        # ----------------------------------------------------
+        # Antes de la tabla
+        # ----------------------------------------------------
+
+        if not table_started:
+            continue
+
+        # ----------------------------------------------------
+        # Continuación del movimiento actual
+        # ----------------------------------------------------
+
+        if current_row is not None:
+
+            previous_line = (
+                current_row.lines[-1]
+            )
+
+            gap = (
+                line_center_y(line)
+                -
+                line_center_y(previous_line)
+            )
+
+            if (
+                0.0
+                <=
+                gap
+                <=
+                MOVEMENT_ROW_MAX_GAP
+            ):
+
+                current_row.lines.append(
+                    list(line)
+                )
+
+    if current_row is not None:
+
+        rows.append(
+            current_row
+        )
+
+    return rows
+
+
+# ============================================================
+# WORDS DE COLUMNA
+# ============================================================
+
+
+def words_from_rows_in_box(
+    row: MovementRow,
+    box: Tuple[
+        float,
+        float,
+        float,
+        float,
+    ],
+    padding_x: float = COLUMN_PADDING_X,
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Obtiene words pertenecientes a una región espacial.
+    """
+
+    selected = []
+
+    for line in row.lines:
+
+        for word in line:
+
+            if word_inside_box(
+                word,
+                box,
+                padding_x=padding_x,
+                padding_y=COLUMN_PADDING_Y,
+            ):
+
+                selected.append(
+                    word
+                )
+
+    selected.sort(
+        key=lambda word: (
+            safe_float(
+                word.get(
+                    "top",
+                    0.0,
+                )
+            ),
+            safe_float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            ),
+        )
+    )
+
+    return selected
+
+
+def text_from_box(
+    row: MovementRow,
+    box: Tuple[
+        float,
+        float,
+        float,
+        float,
+    ],
+    padding_x: float = COLUMN_PADDING_X,
+) -> str:
+    """
+    Concatena texto de una columna.
+    """
+
+    words = words_from_rows_in_box(
+        row,
+        box,
+        padding_x=padding_x,
+    )
+
+    parts = []
+
+    for word in words:
+
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if text:
+            parts.append(
+                text
+            )
+
+    return " ".join(
+        parts
+    ).strip()
+
+
+# ============================================================
+# CONCEPTO
+# ============================================================
+
+
+def extract_concepto(
+    row: MovementRow,
+) -> str:
+    """
+    Extrae exclusivamente la columna Descripción.
+
+    El límite horizontal impide capturar Referencia/Serial.
+    """
+
+    words = words_from_rows_in_box(
+        row,
+        BOX_CONCEPTO,
+        padding_x=8.0,
+    )
+
+    parts = []
+
+    for word in words:
+
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if text:
+            parts.append(
+                text
+            )
+
+    return " ".join(
+        parts
+    ).strip()
+
+
+# ============================================================
+# REFERENCIA / SERIAL
+# ============================================================
+#
+# ESTE ES EL CAMBIO PRINCIPAL DE LA V2.
+#
+# La región Referencia/Serial puede contener dos niveles:
+#
+#   línea 1 -> dato superior
+#   línea 2 -> dato inferior
+#
+# El dato inferior es el que se devuelve como referencia.
+#
+# No se utiliza una longitud fija.
+# No se utiliza un número concreto.
+# No se asume que el valor sea siempre numérico.
+# ============================================================
+
+
+def reference_serial_words(
+    row: MovementRow,
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Obtiene las words de la región Referencia/Serial.
+    """
+
+    return words_from_rows_in_box(
+        row,
+        BOX_REFERENCIA_SERIAL,
+        padding_x=8.0,
+    )
+
+
+def reference_serial_lines(
+    row: MovementRow,
+) -> List[
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Reconstruye los renglones lógicos exclusivamente dentro
+    de la región Referencia/Serial.
+
+    Esto permite separar:
+
+        13611089
+        6618
+
+    aunque el resto del movimiento tenga varias líneas.
+    """
+
+    words = reference_serial_words(
+        row
+    )
+
+    if not words:
+        return []
+
+    lines = group_words_into_lines(
+        words,
+        y_tolerance=LINE_Y_TOLERANCE,
+    )
+
+    lines.sort(
+        key=line_center_y
+    )
+
+    return lines
+
+
+def valid_reference_line(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> bool:
+    """
+    Determina si una línea contiene un dato de referencia.
+
+    Se excluyen símbolos aislados y palabras vacías.
+
+    No se exige una longitud fija.
+    """
+
+    text = line_text(
+        line
+    )
+
+    if not text:
+        return False
+
+    compact = re.sub(
+        r"\s+",
+        "",
+        text,
+    )
+
+    if not compact:
+        return False
+
+    if compact in (
+        "$",
+        "-",
+    ):
+        return False
+
+    return bool(
+        REFERENCE_PATTERN.fullmatch(
+            compact
+        )
+    )
+
+
+def compact_reference_line(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[str]:
+    """
+    Convierte una línea de Referencia/Serial a un valor
+    compacto.
+
+    Ejemplo:
+
+        66
+        18
+
+    ->
+
+        6618
+    """
+
+    if not valid_reference_line(
+        line
+    ):
+        return None
+
+    parts = []
+
+    for word in line:
+
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if not text:
+            continue
+
+        cleaned = re.sub(
+            r"[^A-Z0-9Ñ&./_-]",
+            "",
+            text.upper(),
+        )
+
+        if cleaned:
+            parts.append(
+                cleaned
+            )
+
+    value = "".join(
+        parts
+    )
+
+    if not value:
+        return None
+
+    return value
+
+
+def extract_referencia(
+    row: MovementRow,
+) -> Optional[str]:
+    """
+    Extrae la REFERENCIA REAL del movimiento.
+
+    Regla estructural:
+
+        Referencia/Serial superior
+                ↓
+        NO se utiliza
+
+        Referencia/Serial inferior
+                ↓
+        ESTE es el valor de referencia.
+
+    Esto permite resolver correctamente layouts como:
+
+        13611089
+        6618
+
+    y:
+
+        132??323
+        8721
+
+    sin depender de esos valores concretos.
+    """
+
+    lines = reference_serial_lines(
+        row
+    )
+
+    if len(lines) < 2:
+        return None
+
+    # --------------------------------------------------------
+    # El primer renglón corresponde al dato superior.
+    # --------------------------------------------------------
+
+    first_y = line_center_y(
+        lines[0]
+    )
+
+    # --------------------------------------------------------
+    # Buscar el siguiente renglón lógico por debajo.
+    #
+    # No tomamos simplemente lines[-1] porque en OCR una
+    # fila puede ocasionalmente contener ruido adicional.
+    # --------------------------------------------------------
+
+    for line in lines[1:]:
+
+        current_y = line_center_y(
+            line
+        )
+
+        gap = (
+            current_y
+            -
+            first_y
+        )
+
+        if gap < REFERENCE_LINE_MIN_GAP:
+            continue
+
+        if gap > REFERENCE_LINE_MAX_GAP:
+            continue
+
+        value = compact_reference_line(
+            line
+        )
+
+        if value:
+            return value
+
+    return None
+
+
+# ============================================================
+# IMPORTE
+# ============================================================
+
+
+def parse_money_words(
+    row: MovementRow,
+    box: Tuple[
+        float,
+        float,
+        float,
+        float,
+    ],
+) -> float:
+    """
+    Extrae importe monetario.
+
+    Si no existe importe en la columna devuelve 0.0.
+    """
+
+    words = words_from_rows_in_box(
+        row,
+        box,
+        padding_x=8.0,
+    )
+
+    if not words:
+        return 0.0
+
+    parts = []
+
+    for word in words:
+
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if not text:
+            continue
+
+        if text == "$":
+            continue
+
+        normalized = (
+            text
+            .replace(
+                ",",
+                "",
+            )
+            .replace(
+                "$",
+                "",
+            )
+            .strip()
+        )
+
+        if re.fullmatch(
+            r"\d+(?:\.\d{1,2})?",
+            normalized,
+        ):
+
+            parts.append(
+                normalized
+            )
+
+    if not parts:
+        return 0.0
+
+    value = "".join(
+        parts
+    )
+
+    if not re.fullmatch(
+        r"\d+(?:\.\d{1,2})?",
+        value,
+    ):
+        return 0.0
+
+    try:
+        return float(
+            value
+        )
+    except ValueError:
+        return 0.0
+
+
+# ============================================================
+# FECHA DE OPERACIÓN
+# ============================================================
+
+
+def extract_day_from_row(
+    row: MovementRow,
+) -> Optional[int]:
+    """
+    Obtiene el día de la fila.
+    """
+
+    if not row.lines:
+        return None
+
+    return extract_day_from_line(
+        row.lines[0]
+    )
+
+
+def build_operation_date(
+    day: Optional[int],
+    periodo_inicio: Optional[date],
+) -> str:
+    """
+    Construye DD/MM/YYYY utilizando el periodo.
+
+    Si no existe periodo, conserva DD.
+    """
+
+    if day is None:
+        return ""
+
+    if periodo_inicio is None:
+
+        return f"{day:02d}"
+
+    try:
+
+        return date(
+            periodo_inicio.year,
+            periodo_inicio.month,
+            day,
+        ).strftime(
+            "%d/%m/%Y"
+        )
+
+    except ValueError:
+
+        return f"{day:02d}"
+
+
+# ============================================================
+# TIPO DE OPERACIÓN
+# ============================================================
+
+
+def extract_tipo_operacion(
+    concepto: str,
+) -> Optional[str]:
+    """
+    Clasificación inicial preparada para futuras extensiones.
+    """
+
+    normalized = normalize_text(
+        concepto
+    )
+
+    if normalized.startswith(
+        "RETIRO"
+    ):
+        return "Retiro"
+
+    if normalized.startswith(
+        "DEPOSITO"
+    ):
+        return "Depósito"
+
+    if normalized.startswith(
+        "ABONO"
+    ):
+        return "Abono"
+
+    return None
+
+
+# ============================================================
+# FILA → MODELO
+# ============================================================
+
+
+def movement_row_to_model(
+    row: MovementRow,
+    periodo_inicio: Optional[date],
+) -> Movimiento:
+    """
+    Convierte una fila lógica a Movimiento.
+    """
+
+    day = extract_day_from_row(
+        row
+    )
+
+    fecha_operacion = (
+        build_operation_date(
+            day,
+            periodo_inicio,
+        )
+    )
+
+    concepto = extract_concepto(
+        row
+    )
+
+    cargo = parse_money_words(
+        row,
+        BOX_CARGO,
+    )
+
+    abono = parse_money_words(
+        row,
+        BOX_ABONO,
+    )
+
+    saldo_operacion = parse_money_words(
+        row,
+        BOX_SALDO,
+    )
+
+    referencia = extract_referencia(
+        row
+    )
+
+    return Movimiento(
+        fecha_operacion=fecha_operacion,
+
+        fecha_liquidacion=None,
+
+        concepto=concepto,
+
+        tipo_operacion=None,
+
+        cargo=cargo,
+
+        abono=abono,
+
+        referencia=referencia,
+
+        autorizacion=None,
+
+        beneficiario=None,
+
+        cuenta_beneficiario=None,
+
+        clabe_beneficiario=None,
+
+        rfc=None,
+
+        sucursal=None,
+
+        caja=None,
+
+        hora_operacion=None,
+
+        saldo_operacion=saldo_operacion,
+
+        saldo_liquidacion=0.0,
+
+        concepto_original=concepto,
+    )
+
+
+# ============================================================
+# VALIDACIÓN
+# ============================================================
+
+
+def is_valid_movement(
+    movement: Movimiento,
+) -> bool:
+    """
+    Validación estructural mínima.
+    """
+
+    if not movement.fecha_operacion:
+        return False
+
+    if not movement.concepto:
+        return False
+
+    if (
+        movement.cargo == 0.0
+        and
+        movement.abono == 0.0
+    ):
+        return False
+
+    return True
+
+
+# ============================================================
+# FUNCIÓN PRINCIPAL PÚBLICA
+# ============================================================
+
+
+def extract_movimientos_words(
+    words: List[
+        Dict[str, Any]
+    ],
+) -> List[
+    Movimiento
+]:
+    """
+    Extractor V2 robusto de movimientos HSBC.
+
+    Variables principales:
+
+        - fecha_operacion
+        - concepto
+        - cargo
+        - abono
+        - referencia
+        - saldo_operacion
+
+    Variables preparadas:
+
+        - fecha_liquidacion
+        - tipo_operacion
+        - autorizacion
+        - beneficiario
+        - cuenta_beneficiario
+        - clabe_beneficiario
+        - rfc
+        - sucursal
+        - caja
+        - hora_operacion
+        - saldo_liquidacion
+
+    Arquitectura:
+
+        WORDS
+          ↓
+        FILTRO FOOTER
+          ↓
+        PÁGINAS
+          ↓
+        ENCABEZADOS
+          ↓
+        FILAS LÓGICAS
+          ↓
+        COLUMNAS ESPACIALES
+          ↓
+        REFERENCIA/SERIAL COMO SUBESTRUCTURA
+          ↓
+        NORMALIZACIÓN
+          ↓
+        VALIDACIÓN
+          ↓
+        Movimiento
+    """
+
+    if not words:
+        return []
+
+    # ========================================================
+    # 1. ELIMINAR FOOTERS
+    # ========================================================
+
+    filtered_words = (
+        filter_hsbc_footer_words(
+            words
+        )
+    )
+
+    if not filtered_words:
+        return []
+
+    # ========================================================
+    # 2. OBTENER PERIODO
+    # ========================================================
+
+    periodo_inicio, _ = (
+        extract_period_from_words(
+            filtered_words
+        )
+    )
+
+    # ========================================================
+    # 3. AGRUPAR POR PÁGINA
+    # ========================================================
+
+    pages: Dict[
+        int,
+        List[
+            Dict[str, Any]
+        ]
+    ] = {}
+
+    for word in filtered_words:
+
+        pages.setdefault(
+            safe_page(word),
+            []
+        ).append(
+            word
+        )
+
+    # ========================================================
+    # 4. RECONSTRUIR FILAS DE MOVIMIENTOS
+    # ========================================================
+
+    movement_rows: List[
+        MovementRow
+    ] = []
+
+    for page in sorted(
+        pages
+    ):
+
+        page_rows = (
+            split_page_into_movement_rows(
+                pages[page]
+            )
+        )
+
+        movement_rows.extend(
+            page_rows
+        )
+
+    if not movement_rows:
+        return []
+
+    # ========================================================
+    # 5. CONVERTIR FILAS A MODELO
+    # ========================================================
+
+    movements = []
+
+    for row in movement_rows:
+
+        movement = movement_row_to_model(
+            row,
+            periodo_inicio,
+        )
+
+        if is_valid_movement(
+            movement
+        ):
+
+            movements.append(
+                movement
+            )
+
+    # ========================================================
+    # 6. CONSERVAR ORDEN DOCUMENTAL
+    # ========================================================
+
+    return movements

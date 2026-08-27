@@ -1,786 +1,2081 @@
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+
 import re
+import unicodedata
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from models.resumen_financiero import ResumenFinanciero
 
 
 # ============================================================
-# REFERENCIAS DE LAYOUT
-# ============================================================
-
-# Caso NORMAL:
-# "Saldo" / "Promedio" aparecen en este top.
-SALDO_PROMEDIO_NORMAL_TOP = 259.197338
-
-# Caso PREMIUM:
-# "Saldo" / "Promedio" aparecen en este top.
-SALDO_PROMEDIO_PREMIUM_TOP = 246.123783
-
-
-# ============================================================
-# CONFIGURACIÓN ESPACIAL — RESUMEN FINANCIERO BBVA
+# CONFIGURACIÓN ESPACIAL — RESUMEN FINANCIERO HSBC
 # ============================================================
 #
-# Estas coordenadas corresponden directamente a los valores
-# observados en el PDF BBVA proporcionado, dentro del bloque
-# "Información Financiera" (Rendimiento, Comisiones y
-# Comportamiento del periodo).
+# Las coordenadas corresponden al layout HSBC observado.
 #
-# NO se utilizan etiquetas para localizar los datos.
-# El extractor únicamente lee lo que exista dentro de
-# cada región espacial.
+# IMPORTANTE:
 #
-# El bloque se organiza en dos columnas sobre el mismo
-# renglón (mismo "top"):
+# Las coordenadas NO se utilizan como posiciones absolutas
+# rígidas.
 #
-#   Columna izquierda -> Rendimiento / Comisiones
-#   Columna derecha   -> Comportamiento
+# Se utilizan como referencia espacial para:
+#
+#   - localizar la región financiera;
+#   - distinguir columna de conceptos y valores;
+#   - resolver campos repetidos;
+#   - seleccionar el valor correcto;
+#   - tolerar desplazamientos moderados de OCR.
+#
+# El texto continúa siendo el ancla semántica principal.
+#
 # ============================================================
 
 
 # ------------------------------------------------------------
-# RENDIMIENTO — SALDO PROMEDIO
-BOX_SALDO_PROMEDIO = (
-    260.0,  # x0
-    296.0,  # x1
-    259.0,  # top
-    270.0,  # bottom
+# REGIÓN GENERAL DE LA TABLA FINANCIERA
+#
+# La tabla continúa hasta los renglones de ISR.
+# ------------------------------------------------------------
+
+BOX_RESUMEN_FINANCIERO = (
+    350.0,
+    565.0,
+    130.0,
+    480.0,
 )
 
 
 # ------------------------------------------------------------
-# RENDIMIENTO — DÍAS DEL PERIODO
-BOX_DIAS_PERIODO = (
-    285.0,  # x0
-    296.0,  # x1
-    273.0,  # top
-    284.0,  # bottom
+# COLUMNA DE CONCEPTOS
+# ------------------------------------------------------------
+
+BOX_FINANCIAL_LABEL = (
+    350.0,
+    500.0,
+    130.0,
+    480.0,
 )
 
 
 # ------------------------------------------------------------
-# RENDIMIENTO — TASA BRUTA ANUAL
-# Nota: el símbolo "%" se imprime aparte, en x0 ≈ 184.67,
-# dentro del mismo renglón. No forma parte del valor
-# numérico y por lo tanto se deja fuera de la caja de forma
-# deliberada.
-BOX_TASA_BRUTA_ANUAL = (
-    273.0,  # x0
-    296.0,  # x1
-    287.0,  # top
-    298.0,  # bottom
-)
-
-
+# COLUMNA DE VALORES
+#
+# Valores observados:
+#
+#   x ≈ 509 ... 564
+#
 # ------------------------------------------------------------
-# RENDIMIENTO — SALDO PROMEDIO GRAVABLE
-BOX_SALDO_PROMEDIO_GRAVABLE = (
-    278.0,  # x0
-    296.0,  # x1
-    301.0,  # top
-    312.0,  # bottom
+
+BOX_FINANCIAL_VALUE = (
+    500.0,
+    570.0,
+    130.0,
+    480.0,
 )
 
-
-# ------------------------------------------------------------
-# RENDIMIENTO — INTERESES A FAVOR (+)
-BOX_INTERESES_A_FAVOR = (
-    278.0,  # x0
-    296.0,  # x1
-    315.0,  # top
-    326.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# RENDIMIENTO — ISR RETENIDO (-)
-BOX_ISR_RETENIDO = (
-    278.0,  # x0
-    296.0,  # x1
-    330.0,  # top
-    341.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMISIONES — CHEQUES PAGADOS (conteo)
-# Nota: en el mismo renglón existe además un importe
-# ("0.00" en x0 ≈ 277.85) que no forma parte del modelo,
-# ya que cheques_pagados es un conteo (int), no un importe.
-# Se deja fuera de la caja de forma deliberada.
-BOX_CHEQUES_PAGADOS = (
-    184.0,  # x0
-    190.0,  # x1
-    358.0,  # top
-    369.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMISIONES — MANEJO DE CUENTA (importe)
-BOX_MANEJO_CUENTA = (
-    277.0,  # x0
-    296.0,  # x1
-    372.0,  # top
-    383.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# TOTAL COMISIONES — CARGOS OBJETADOS (importe)
-# Nota: en el mismo renglón existe además un conteo
-# ("0" en x0 ≈ 184.55) que no se usa aquí: el modelo define
-# cargos_objetados como float (importe), no como conteo.
-BOX_CARGOS_OBJETADOS = (
-    278.0,  # x0
-    296.0,  # x1
-    400.0,  # top
-    411.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# TOTAL COMISIONES — ABONOS OBJETADOS (importe)
-# Nota: igual que en cargos_objetados, se ignora el conteo
-# ("0" en x0 ≈ 184.55) y se toma el importe.
-BOX_ABONOS_OBJETADOS = (
-    278.0,  # x0
-    296.0,  # x1
-    415.0,  # top
-    426.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMPORTAMIENTO — SALDO ANTERIOR
-BOX_SALDO_ANTERIOR = (
-    547.0,  # x0
-    583.0,  # x1
-    259.0,  # top
-    270.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMPORTAMIENTO — DEPÓSITOS / ABONOS (+) (importe)
-# Nota: en el mismo renglón existe además un conteo de
-# movimientos ("215" en x0 ≈ 460.11) que no se usa aquí:
-# el modelo define depositos_abonos como float (importe),
-# no como conteo.
-BOX_DEPOSITOS_ABONOS = (
-    542.0,  # x0
-    583.0,  # x1
-    273.0,  # top
-    284.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMPORTAMIENTO — RETIROS / CARGOS (-) (importe)
-# Nota: igual que en depósitos_abonos, se ignora el conteo
-# ("68" en x0 ≈ 465.24) y se toma el importe.
-BOX_RETIROS_CARGOS = (
-    542.0,  # x0
-    583.0,  # x1
-    287.0,  # top
-    298.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMPORTAMIENTO — SALDO FINAL
-BOX_SALDO_FINAL = (
-    547.0,  # x0
-    583.0,  # x1
-    298.0,  # top
-    309.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMPORTAMIENTO — SALDO PROMEDIO MÍNIMO MENSUAL
-BOX_SALDO_PROMEDIO_MINIMO_MENSUAL = (
-    564.0,  # x0
-    583.0,  # x1
-    312.0,  # top
-    323.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# COMPORTAMIENTO — SALDO GLOBAL
-# La etiqueta "Saldo Global" se encuentra a la izquierda
-# (x0 ≈ 319), pero el valor numérico está alineado a la
-# derecha con el resto de los importes de la sección
-# "Comportamiento".
-# La caja se define para capturar únicamente el valor numérico
-# y su posible signo de moneda ($), que es lo que nos interesa.
-BOX_SALDO_GLOBAL = (
-    510.0,  # x0 (Desde el signo '$' para incluirlo)
-    583.0,  # x1 (Alineado con el resto de la columna)
-    456.0,  # top (Ajustado para ser más preciso)
-    467.0,  # bottom (Con margen de tolerancia)
-)
 
 # ============================================================
-# UTILIDADES ESPACIALES
+# REFERENCIAS ESPACIALES DE LOS VALORES
+# ============================================================
+#
+# Estas coordenadas corresponden al CENTRO aproximado de la
+# word / importe del valor, no al centro de la etiqueta.
+#
+# Esto es fundamental para etiquetas de una o varias líneas.
 # ============================================================
 
 
-def get_delta_y(
-    words: List[Dict[str, Any]],
+EXPECTED_Y_SALDO_ANTERIOR = 140.5
+
+EXPECTED_Y_DEPOSITOS_ABONOS = 159.8
+
+EXPECTED_Y_RETIROS_CARGOS = 177.8
+
+EXPECTED_Y_INTERESES_NETOS = 203.5
+
+EXPECTED_Y_SALDO_FINAL = 230.5
+
+EXPECTED_Y_DIAS_PERIODO = 270.7
+
+EXPECTED_Y_COMISIONES_COBRADAS = 380.8
+
+EXPECTED_Y_SALDO_PROMEDIO_MINIMO = 399.6
+
+EXPECTED_Y_SALDO_PROMEDIO = 409.0
+
+EXPECTED_Y_TASA_PROMEDIO_NOMINAL = 420.4
+
+EXPECTED_Y_PAGO_INTERES_MES = 429.5
+
+EXPECTED_Y_ISR_RETENIDO_MES = 457.9
+
+
+# ============================================================
+# TOLERANCIAS
+# ============================================================
+
+
+LINE_Y_TOLERANCE = 5.0
+
+VALUE_Y_TOLERANCE = 24.0
+
+BOX_PADDING_X = 10.0
+
+BOX_PADDING_Y = 10.0
+
+
+# ============================================================
+# PATRONES
+# ============================================================
+
+
+INTEGER_PATTERN = re.compile(
+    r"^\d+$"
+)
+
+
+MONEY_PATTERN = re.compile(
+    r"^\$?\s*[\d,]+(?:\.\d{1,2})?$"
+)
+
+
+PERCENTAGE_PATTERN = re.compile(
+    r"^\d+(?:[.,]\d+)?%?$"
+)
+
+
+# ============================================================
+# UTILIDADES DE TEXTO
+# ============================================================
+
+
+def normalize_text(
+    value: Any,
+) -> str:
+    """
+    Normaliza texto para comparación semántica.
+    """
+
+    if value is None:
+        return ""
+
+    text = str(
+        value
+    ).strip()
+
+    if not text:
+        return ""
+
+    text = unicodedata.normalize(
+        "NFD",
+        text,
+    )
+
+    text = "".join(
+        char
+        for char in text
+        if unicodedata.category(char)
+        != "Mn"
+    )
+
+    text = text.upper()
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
+
+def clean_word_text(
+    value: Any,
+) -> str:
+    """
+    Limpia el texto de una word.
+    """
+
+    if value is None:
+        return ""
+
+    return str(
+        value
+    ).strip()
+
+
+def normalized_word_text(
+    word: Dict[str, Any],
+) -> str:
+    """
+    Devuelve el texto normalizado de una word.
+    """
+
+    return normalize_text(
+        word.get(
+            "text",
+            "",
+        )
+    )
+
+
+# ============================================================
+# UTILIDADES NUMÉRICAS SEGURAS
+# ============================================================
+
+
+def safe_float(
+    value: Any,
+    default: float = 0.0,
 ) -> float:
     """
-    Detecta si el documento utiliza el layout normal
-    o el layout premium y devuelve el desplazamiento vertical.
-
-    Normal:
-        delta_y = 0
-
-    Premium:
-        delta_y = PREMIUM_TOP - NORMAL_TOP
+    Convierte de forma segura a float.
     """
 
-    found_normal = False
-    found_premium = False
-
-    for word in words:
-
-        if word.get("page", 1) != 1:
-            continue
-
-        text = word.get("text", "").strip().lower()
-
-        if text not in {"saldo", "promedio"}:
-            continue
-
-        top = word.get("top")
-
-        if top is None:
-            continue
-
-        if abs(top - SALDO_PROMEDIO_NORMAL_TOP) <= 2.0:
-            found_normal = True
-            break
-
-        if abs(top - SALDO_PROMEDIO_PREMIUM_TOP) <= 2.0:
-            found_premium = True
-
-    if found_normal:
-        return 0.0
-
-    if found_premium:
-        return (
-            SALDO_PROMEDIO_PREMIUM_TOP
-            - SALDO_PROMEDIO_NORMAL_TOP
+    try:
+        return float(
+            value
         )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
 
-    # Por defecto, asumimos el layout normal si no se
-    # encuentra una referencia clara.
-    return 0.0
+
+def safe_page(
+    word: Dict[str, Any],
+) -> int:
+    """
+    Devuelve el número de página.
+    """
+
+    try:
+        return int(
+            word.get(
+                "page",
+                1,
+            )
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 1
+
+
+# ============================================================
+# GEOMETRÍA
+# ============================================================
+
+
+def word_center(
+    word: Dict[str, Any],
+) -> Tuple[
+    float,
+    float,
+]:
+    """
+    Centro geométrico de una word.
+    """
+
+    x0 = safe_float(
+        word.get(
+            "x0",
+            0.0,
+        )
+    )
+
+    x1 = safe_float(
+        word.get(
+            "x1",
+            x0,
+        )
+    )
+
+    top = safe_float(
+        word.get(
+            "top",
+            0.0,
+        )
+    )
+
+    bottom = safe_float(
+        word.get(
+            "bottom",
+            top,
+        )
+    )
+
+    return (
+        (x0 + x1) / 2.0,
+        (top + bottom) / 2.0,
+    )
 
 
 def word_inside_box(
     word: Dict[str, Any],
-    box: tuple[float, float, float, float],
+    box: Tuple[
+        float,
+        float,
+        float,
+        float,
+    ],
+    padding_x: float = 0.0,
+    padding_y: float = 0.0,
 ) -> bool:
     """
-    Determina si una palabra pertenece a una región espacial.
+    Determina si el centro de la word está dentro de la caja.
+    """
 
-    box:
+    xmin, xmax, ymin, ymax = box
 
-        (
-            xmin,
-            xmax,
-            ymin,
-            ymax
+    center_x, center_y = word_center(
+        word
+    )
+
+    return (
+        xmin - padding_x
+        <= center_x
+        <= xmax + padding_x
+        and
+        ymin - padding_y
+        <= center_y
+        <= ymax + padding_y
+    )
+
+
+def line_bounds(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> Tuple[
+    float,
+    float,
+    float,
+    float,
+]:
+    """
+    Calcula la caja envolvente de un renglón.
+    """
+
+    if not line:
+        return (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         )
 
-    Se utiliza el centro de la palabra para evitar problemas
-    con palabras que se encuentren parcialmente sobre el
-    límite de una región.
+    xmin = min(
+        safe_float(
+            word.get(
+                "x0",
+                0.0,
+            )
+        )
+        for word in line
+    )
+
+    xmax = max(
+        safe_float(
+            word.get(
+                "x1",
+                0.0,
+            )
+        )
+        for word in line
+    )
+
+    ymin = min(
+        safe_float(
+            word.get(
+                "top",
+                0.0,
+            )
+        )
+        for word in line
+    )
+
+    ymax = max(
+        safe_float(
+            word.get(
+                "bottom",
+                0.0,
+            )
+        )
+        for word in line
+    )
+
+    return (
+        xmin,
+        xmax,
+        ymin,
+        ymax,
+    )
+
+
+def line_center_x(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> float:
     """
-    # Todo el resumen financiero está en la primera página.
-    # Ignoramos cualquier palabra que no sea de la página 1.
-    page = word.get("page", 1)
-    if page != 1:
+    Centro horizontal de un renglón.
+    """
+
+    xmin, xmax, _, _ = line_bounds(
+        line
+    )
+
+    return (
+        xmin + xmax
+    ) / 2.0
+
+
+def line_center_y(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> float:
+    """
+    Centro vertical de un renglón.
+    """
+
+    _, _, ymin, ymax = line_bounds(
+        line
+    )
+
+    return (
+        ymin + ymax
+    ) / 2.0
+
+
+# ============================================================
+# AGRUPACIÓN EN RENGLONES
+# ============================================================
+
+
+def group_words_into_lines(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+    y_tolerance: float = LINE_Y_TOLERANCE,
+) -> List[
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Agrupa words en renglones lógicos.
+
+    La agrupación se realiza por página y proximidad vertical.
+
+    Las palabras de una misma línea pueden presentar pequeñas
+    diferencias verticales por efecto del OCR.
+    """
+
+    valid_words = [
+        word
+        for word in words
+        if clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+    ]
+
+    valid_words.sort(
+        key=lambda word: (
+            safe_page(word),
+            safe_float(
+                word.get(
+                    "top",
+                    0.0,
+                )
+            ),
+            safe_float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            ),
+        )
+    )
+
+    lines_by_page: Dict[
+        int,
+        List[
+            List[
+                Dict[str, Any]
+            ]
+        ]
+    ] = {}
+
+    for word in valid_words:
+
+        page = safe_page(
+            word
+        )
+
+        _, center_y = word_center(
+            word
+        )
+
+        page_lines = (
+            lines_by_page.setdefault(
+                page,
+                [],
+            )
+        )
+
+        best_line = None
+
+        best_distance = float(
+            "inf"
+        )
+
+        for line in reversed(
+            page_lines
+        ):
+
+            line_y = line_center_y(
+                line
+            )
+
+            distance = abs(
+                center_y
+                -
+                line_y
+            )
+
+            if (
+                distance
+                <=
+                y_tolerance
+                and
+                distance
+                <
+                best_distance
+            ):
+
+                best_distance = distance
+
+                best_line = line
+
+            if (
+                line_y
+                <
+                center_y
+                -
+                y_tolerance
+            ):
+                break
+
+        if best_line is None:
+
+            page_lines.append(
+                [word]
+            )
+
+        else:
+
+            best_line.append(
+                word
+            )
+
+    result = []
+
+    for page in sorted(
+        lines_by_page
+    ):
+
+        for line in lines_by_page[
+            page
+        ]:
+
+            line.sort(
+                key=lambda word:
+                    safe_float(
+                        word.get(
+                            "x0",
+                            0.0,
+                        )
+                    )
+            )
+
+            result.append(
+                line
+            )
+
+    return result
+
+
+def line_text(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> str:
+    """
+    Concatena las words del renglón.
+    """
+
+    parts = []
+
+    for word in line:
+
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if text:
+            parts.append(
+                text
+            )
+
+    return " ".join(
+        parts
+    ).strip()
+
+
+def normalized_line_text(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+) -> str:
+    """
+    Texto normalizado del renglón.
+    """
+
+    return normalize_text(
+        line_text(
+            line
+        )
+    )
+
+
+# ============================================================
+# AGRUPACIÓN POR PÁGINA
+# ============================================================
+
+
+def page_groups(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Dict[
+    int,
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Agrupa words por página.
+    """
+
+    result: Dict[
+        int,
+        List[
+            Dict[str, Any]
+        ]
+    ] = {}
+
+    for word in words:
+
+        page = safe_page(
+            word
+        )
+
+        result.setdefault(
+            page,
+            []
+        ).append(
+            word
+        )
+
+    return result
+
+
+# ============================================================
+# DETECCIÓN DE PÁGINA
+# ============================================================
+
+
+def score_financial_page(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> int:
+    """
+    Calcula evidencia de que una página contiene el resumen
+    financiero HSBC.
+    """
+
+    lines = group_words_into_lines(
+        words
+    )
+
+    normalized_lines = [
+        normalized_line_text(
+            line
+        )
+        for line in lines
+    ]
+
+    joined = " ".join(
+        normalized_lines
+    )
+
+    score = 0
+
+    if "RESUMEN" in joined:
+        score += 5
+
+    if "SALDO INICIAL" in joined:
+        score += 8
+
+    elif (
+        "SALDO" in joined
+        and
+        "INICIAL" in joined
+    ):
+        score += 5
+
+    if "DEPOSITOS" in joined:
+        score += 4
+
+    if "ABONOS" in joined:
+        score += 4
+
+    if "RETIROS" in joined:
+        score += 3
+
+    if "CARGOS" in joined:
+        score += 3
+
+    if (
+        "INTERESES" in joined
+        and
+        "NETOS" in joined
+    ):
+        score += 5
+
+    if "SALDO FINAL" in joined:
+        score += 8
+
+    if (
+        "DIAS" in joined
+        and
+        "TRANSCURRIDOS" in joined
+    ):
+        score += 5
+
+    if (
+        "COMISIONES COBRADAS"
+        in joined
+    ):
+        score += 6
+
+    if (
+        "SALDO PROMEDIO"
+        in joined
+    ):
+        score += 6
+
+    if (
+        "TASA PROMEDIO NOMINAL"
+        in joined
+    ):
+        score += 6
+
+    if (
+        "ISR RETENIDO"
+        in joined
+    ):
+        score += 6
+
+    if (
+        "PAGO INTERES NOMINAL"
+        in joined
+    ):
+        score += 6
+
+    right_side_words = [
+        word
+        for word in words
+        if (
+            safe_float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            )
+            >= BOX_FINANCIAL_VALUE[0]
+        )
+    ]
+
+    if right_side_words:
+        score += 2
+
+    return score
+
+
+def find_financial_page(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[int]:
+    """
+    Encuentra la página más probable del resumen financiero.
+    """
+
+    groups = page_groups(
+        words
+    )
+
+    if not groups:
+        return None
+
+    scored_pages = []
+
+    for page, page_words in groups.items():
+
+        score = score_financial_page(
+            page_words
+        )
+
+        if score > 0:
+
+            scored_pages.append(
+                (
+                    score,
+                    page,
+                )
+            )
+
+    if not scored_pages:
+        return None
+
+    scored_pages.sort(
+        key=lambda item: (
+            -item[0],
+            item[1],
+        )
+    )
+
+    return scored_pages[0][1]
+
+
+# ============================================================
+# LOCALIZACIÓN DE ANCLAS
+# ============================================================
+
+
+def line_contains_tokens(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+    tokens: Sequence[str],
+) -> bool:
+    """
+    Determina si el renglón contiene todos los tokens.
+    """
+
+    normalized = normalized_line_text(
+        line
+    )
+
+    return all(
+        normalize_text(token)
+        in normalized
+        for token in tokens
+    )
+
+
+def find_anchor_lines(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    tokens: Sequence[str],
+) -> List[
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Busca todos los renglones que contienen la etiqueta.
+    """
+
+    return [
+        list(line)
+        for line in lines
+        if line_contains_tokens(
+            line,
+            tokens,
+        )
+    ]
+
+
+def find_best_anchor_line(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    tokens: Sequence[str],
+    expected_y: Optional[float] = None,
+) -> Optional[
+    List[
+        Dict[str, Any]
+    ]
+]:
+    """
+    Selecciona la mejor línea ancla.
+
+    El texto determina los candidatos.
+
+    expected_y únicamente resuelve ambigüedades entre
+    múltiples coincidencias.
+    """
+
+    candidates = find_anchor_lines(
+        lines,
+        tokens,
+    )
+
+    if not candidates:
+        return None
+
+    if expected_y is None:
+        return list(
+            candidates[0]
+        )
+
+    return min(
+        candidates,
+        key=lambda line: abs(
+            line_center_y(line)
+            -
+            expected_y
+        ),
+    )
+
+
+# ============================================================
+# DETECCIÓN DE WORDS NUMÉRICAS
+# ============================================================
+
+
+def normalize_numeric_text(
+    value: str,
+) -> str:
+    """
+    Normaliza un valor numérico sin convertirlo todavía.
+    """
+
+    text = value.strip()
+
+    if not text:
+        return ""
+
+    text = text.replace(
+        "$",
+        "",
+    )
+
+    text = text.replace(
+        " ",
+        "",
+    )
+
+    text = text.replace(
+        ",",
+        "",
+    )
+
+    return text
+
+
+def is_numeric_word(
+    word: Dict[str, Any],
+) -> bool:
+    """
+    Determina si la word representa una parte de un valor
+    financiero.
+    """
+
+    text = clean_word_text(
+        word.get(
+            "text",
+            "",
+        )
+    )
+
+    if not text:
         return False
 
-    x0 = word.get("x0", 0)
-    x1 = word.get("x1", 0)
+    if text == "$":
+        return True
 
-    top = word.get("top", 0)
-    bottom = word.get("bottom", 0)
-
-    box_xmin, box_xmax, box_ymin, box_ymax = box
-
-    # Comprueba si hay superposición entre la caja de la palabra y la caja de búsqueda.
-    # Esto es más robusto que usar el centro, especialmente para palabras en los bordes.
-    x_overlap = x0 < box_xmax and x1 > box_xmin
-    y_overlap = top < box_ymax and bottom > box_ymin
-
-    return x_overlap and y_overlap
-
-
-def words_in_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-) -> List[Dict[str, Any]]:
-    """
-    Devuelve las palabras que pertenecen a la caja,
-    aplicando únicamente el desplazamiento vertical
-    correspondiente al layout detectado.
-    """
-
-    delta_y = get_delta_y(words)
-
-    box_xmin, box_xmax, box_ymin, box_ymax = box
-
-    adjusted_box = (
-        box_xmin,
-        box_xmax,
-        box_ymin + delta_y,
-        box_ymax + delta_y,
+    normalized = normalize_numeric_text(
+        text
     )
+
+    if not normalized:
+        return False
+
+    if MONEY_PATTERN.fullmatch(
+        text
+    ):
+        return True
+
+    if INTEGER_PATTERN.fullmatch(
+        normalized
+    ):
+        return True
+
+    if PERCENTAGE_PATTERN.fullmatch(
+        normalized
+    ):
+        return True
+
+    return False
+
+
+def extract_numeric_text_from_words(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[str]:
+    """
+    Reconstruye un valor desde sus words numéricas.
+    """
+
+    if not words:
+        return None
+
+    ordered = sorted(
+        words,
+        key=lambda word: safe_float(
+            word.get(
+                "x0",
+                0.0,
+            )
+        ),
+    )
+
+    parts = []
+
+    for word in ordered:
+
+        text = clean_word_text(
+            word.get(
+                "text",
+                "",
+            )
+        )
+
+        if not text:
+            continue
+
+        if text == "$":
+            continue
+
+        normalized = normalize_numeric_text(
+            text
+        )
+
+        if normalized:
+            parts.append(
+                normalized
+            )
+
+    if not parts:
+        return None
+
+    value = "".join(
+        parts
+    )
+
+    if not re.fullmatch(
+        r"\d+(?:\.\d+)?",
+        value,
+    ):
+        return None
+
+    return value
+
+
+# ============================================================
+# PARSERS DE TIPO
+# ============================================================
+
+
+def parse_money(
+    value: Optional[str],
+) -> Optional[float]:
+    """
+    Convierte importe monetario a float.
+    """
+
+    if value is None:
+        return None
+
+    value = normalize_numeric_text(
+        value
+    )
+
+    if not re.fullmatch(
+        r"\d+(?:\.\d{1,2})?",
+        value,
+    ):
+        return None
+
+    try:
+        return float(
+            value
+        )
+    except ValueError:
+        return None
+
+
+def parse_integer(
+    value: Optional[str],
+) -> Optional[int]:
+    """
+    Convierte entero a int.
+    """
+
+    if value is None:
+        return None
+
+    value = value.strip()
+
+    if not re.fullmatch(
+        r"\d+",
+        value,
+    ):
+        return None
+
+    try:
+        return int(
+            value
+        )
+    except ValueError:
+        return None
+
+
+def parse_percentage(
+    value: Optional[str],
+) -> Optional[float]:
+    """
+    Convierte porcentaje a float.
+
+    Ejemplo:
+
+        0.0000%
+
+    →
+
+        0.0
+    """
+
+    if value is None:
+        return None
+
+    value = value.strip()
+
+    value = value.replace(
+        "%",
+        "",
+    )
+
+    value = value.replace(
+        ",",
+        ".",
+    )
+
+    if not re.fullmatch(
+        r"\d+(?:\.\d+)?",
+        value,
+    ):
+        return None
+
+    try:
+        return float(
+            value
+        )
+    except ValueError:
+        return None
+
+
+# ============================================================
+# COLUMNA FINANCIERA
+# ============================================================
+
+
+def value_column_words(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Devuelve únicamente words numéricas ubicadas dentro de la
+    columna financiera derecha.
+    """
+
+    result = []
+
+    xmin, xmax, ymin, ymax = (
+        BOX_FINANCIAL_VALUE
+    )
+
+    for word in words:
+
+        if not is_numeric_word(
+            word
+        ):
+            continue
+
+        center_x, center_y = word_center(
+            word
+        )
+
+        if not (
+            xmin - BOX_PADDING_X
+            <= center_x
+            <= xmax + BOX_PADDING_X
+        ):
+            continue
+
+        if not (
+            ymin - BOX_PADDING_Y
+            <= center_y
+            <= ymax + BOX_PADDING_Y
+        ):
+            continue
+
+        result.append(
+            word
+        )
+
+    return result
+
+
+# ============================================================
+# ASOCIACIÓN ANCLA → VALOR
+# ============================================================
+
+
+def value_candidates_near_anchor(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+    anchor: Sequence[
+        Dict[str, Any]
+    ],
+    expected_y: Optional[float] = None,
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Busca candidatos numéricos en la columna financiera.
+
+    La asociación utiliza:
+
+        1. ancla semántica;
+        2. columna X;
+        3. proximidad Y.
+
+    Cuando expected_y existe, se utiliza como referencia
+    principal del VALOR.
+
+    Esto evita errores en etiquetas multilínea.
+    """
+
+    if not anchor:
+        return []
+
+    anchor_y = line_center_y(
+        anchor
+    )
+
+    reference_y = (
+        expected_y
+        if expected_y is not None
+        else anchor_y
+    )
+
+    candidates = []
+
+    for word in value_column_words(
+        words
+    ):
+
+        _, center_y = word_center(
+            word
+        )
+
+        distance = abs(
+            center_y
+            -
+            reference_y
+        )
+
+        if (
+            distance
+            >
+            VALUE_Y_TOLERANCE
+        ):
+            continue
+
+        candidates.append(
+            (
+                distance,
+                word,
+            )
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            word_center(
+                item[1]
+            )[1],
+            word_center(
+                item[1]
+            )[0],
+        )
+    )
+
+    return [
+        word
+        for _, word in candidates
+    ]
+
+
+def select_value_row(
+    candidates: Sequence[
+        Dict[str, Any]
+    ],
+) -> List[
+    Dict[str, Any]
+]:
+    """
+    Selecciona el grupo de words que forma el mismo valor.
+
+    Por ejemplo:
+
+        $
+        7,589.17
+
+    se considera un único valor.
+    """
+
+    if not candidates:
+        return []
+
+    first_y = word_center(
+        candidates[0]
+    )[1]
 
     result = [
         word
-        for word in words
-        if word_inside_box(word, adjusted_box)
+        for word in candidates
+        if abs(
+            word_center(word)[1]
+            -
+            first_y
+        )
+        <= LINE_Y_TOLERANCE
     ]
 
     result.sort(
-        key=lambda word: (
-            word.get("page", 1),
-            word.get("top", 0),
-            word.get("x0", 0),
+        key=lambda word: safe_float(
+            word.get(
+                "x0",
+                0.0,
+            )
         )
     )
 
     return result
 
 
-def text_from_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+def extract_value_near_anchor(
+    words: Sequence[
+        Dict[str, Any]
+    ],
+    anchor: Sequence[
+        Dict[str, Any]
+    ],
+    expected_y: Optional[float] = None,
 ) -> Optional[str]:
     """
-    Extrae y concatena el texto contenido dentro de una
-    región espacial.
+    Extrae el texto numérico asociado a un ancla.
     """
 
-    selected = words_in_box(
+    candidates = value_candidates_near_anchor(
         words,
-        box,
+        anchor,
+        expected_y=expected_y,
     )
 
-    values = []
-
-    for word in selected:
-
-        text = word.get("text", "").strip()
-
-        if text:
-            values.append(text)
-
-    if not values:
+    if not candidates:
         return None
 
-    return " ".join(values).strip()
+    value_words = select_value_row(
+        candidates
+    )
+
+    if not value_words:
+        return None
+
+    return extract_numeric_text_from_words(
+        value_words
+    )
 
 
-def extract_numeric_amount_from_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+# ============================================================
+# EXTRACTORES EXISTENTES
+# ============================================================
+
+
+def extract_saldo_anterior(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
 ) -> Optional[float]:
     """
-    Extrae un importe monetario desde una región espacial.
-    
-    Ignora símbolos monetarios y busca un token numérico,
-    soportando separadores de miles. Es robusto contra la
-    fragmentación de palabras del OCR (ej. "$" y "6,341.00"
-    como palabras separadas).
+    Saldo Inicial del -> saldo_anterior
     """
 
-    selected = words_in_box(
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "SALDO",
+            "INICIAL",
+        ),
+        expected_y=EXPECTED_Y_SALDO_ANTERIOR,
+    )
+
+    if anchor is None:
+        return None
+
+    value = extract_value_near_anchor(
         words,
-        box,
+        anchor,
+        expected_y=EXPECTED_Y_SALDO_ANTERIOR,
     )
 
-    # Patrón monetario.
-    # Soporta números con o sin decimales y comas de miles.
-    amount_pattern = re.compile(
-        r"""
-        ^[+-]?
-        (?:
-            \d{1,3}(?:,\d{3})+
-            |
-            \d+
+    return parse_money(
+        value
+    )
+
+
+def extract_depositos_abonos(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Depósitos/ -> depositos_abonos
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "DEPOSITOS/",
+        ),
+        expected_y=EXPECTED_Y_DEPOSITOS_ABONOS,
+    )
+
+    if anchor is None:
+
+        anchor = find_best_anchor_line(
+            lines,
+            (
+                "DEPOSITOS",
+            ),
+            expected_y=EXPECTED_Y_DEPOSITOS_ABONOS,
         )
-        (?:\.\d{2,})?
-        $
-        """,
-        re.VERBOSE,
-    )
 
-    # Buscar únicamente palabras que sean importes.
-    for word in selected:
-
-        text = word.get("text", "").strip()
-
-        if not text or not amount_pattern.fullmatch(text):
-            continue
-
-        try:
-            return float(text.replace(",", ""))
-        except (ValueError, TypeError):
-            continue
-
-    return None
-
-# ============================================================
-# UTILIDADES NUMÉRICAS
-# ============================================================
-
-
-def parse_amount(value: Optional[str]) -> float:
-    """
-    Convierte un texto numérico (posiblemente con comas de
-    miles) a float.
-
-    Devuelve 0.0 si el valor es None, vacío, o no puede
-    convertirse.
-    """
-
-    if not value:
-        return 0.0
-
-    value = (
-        value
-        .replace(",", "")
-        .replace(" ", "")
-        .strip()
-    )
-
-    try:
-        return float(value)
-
-    except (ValueError, TypeError):
-
-        return 0.0
-
-
-def parse_amount_optional(value: Optional[str]) -> Optional[float]:
-    """
-    Igual que parse_amount, pero preserva None cuando no se
-    encontró texto dentro de la caja.
-    """
-
-    if not value:
+    if anchor is None:
         return None
 
-    value = (
-        value
-        .replace(",", "")
-        .replace(" ", "")
-        .strip()
+    value = extract_value_near_anchor(
+        words,
+        anchor,
+        expected_y=EXPECTED_Y_DEPOSITOS_ABONOS,
     )
 
-    try:
-        return float(value)
+    return parse_money(
+        value
+    )
 
-    except (ValueError, TypeError):
 
+def extract_retiros_cargos(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Retiros/Cargos -> retiros_cargos
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "RETIROS/CARGOS",
+        ),
+        expected_y=EXPECTED_Y_RETIROS_CARGOS,
+    )
+
+    if anchor is None:
+
+        anchor = find_best_anchor_line(
+            lines,
+            (
+                "RETIROS",
+                "CARGOS",
+            ),
+            expected_y=EXPECTED_Y_RETIROS_CARGOS,
+        )
+
+    if anchor is None:
         return None
 
-
-def parse_int(value: Optional[str]) -> int:
-    """
-    Convierte un texto entero (posiblemente con comas de
-    miles) a int.
-
-    Devuelve 0 si el valor es None, vacío, o no puede
-    convertirse.
-    """
-
-    if not value:
-        return 0
-
-    value = (
-        value
-        .replace(",", "")
-        .replace(" ", "")
-        .strip()
+    value = extract_value_near_anchor(
+        words,
+        anchor,
+        expected_y=EXPECTED_Y_RETIROS_CARGOS,
     )
 
-    try:
-        return int(float(value))
+    return parse_money(
+        value
+    )
 
-    except (ValueError, TypeError):
 
-        return 0
+def extract_intereses_a_favor(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    En la sección inicial:
+
+        Intereses
+        Netos
+        Sin Capital
+                            $ 0.00
+
+    Este extractor conserva ese campo de la V1.
+
+    En la sección posterior existe además:
+
+        Pago Interés Nominal en el Mes
+
+    Para el modelo ResumenFinanciero utilizaremos este último
+    como asociación principal cuando esté disponible.
+    """
+
+    anchor_mes = find_best_anchor_line(
+        lines,
+        (
+            "PAGO",
+            "INTERES",
+            "NOMINAL",
+            "MES",
+        ),
+        expected_y=EXPECTED_Y_PAGO_INTERES_MES,
+    )
+
+    if anchor_mes is not None:
+
+        value = extract_value_near_anchor(
+            words,
+            anchor_mes,
+            expected_y=EXPECTED_Y_PAGO_INTERES_MES,
+        )
+
+        parsed = parse_money(
+            value
+        )
+
+        if parsed is not None:
+            return parsed
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "INTERESES",
+            "NETOS",
+        ),
+        expected_y=EXPECTED_Y_INTERESES_NETOS,
+    )
+
+    if anchor is None:
+        return None
+
+    value = extract_value_near_anchor(
+        words,
+        anchor,
+        expected_y=EXPECTED_Y_INTERESES_NETOS,
+    )
+
+    return parse_money(
+        value
+    )
+
+
+def extract_dias_periodo(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[int]:
+    """
+    Días Transcurridos en el mes -> dias_periodo
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "DIAS",
+            "TRANSCURRIDOS",
+            "MES",
+        ),
+        expected_y=EXPECTED_Y_DIAS_PERIODO,
+    )
+
+    if anchor is None:
+
+        anchor = find_best_anchor_line(
+            lines,
+            (
+                "DIAS",
+                "TRANSCURRIDOS",
+            ),
+            expected_y=EXPECTED_Y_DIAS_PERIODO,
+        )
+
+    if anchor is None:
+        return None
+
+    value = extract_value_near_anchor(
+        words,
+        anchor,
+        expected_y=EXPECTED_Y_DIAS_PERIODO,
+    )
+
+    return parse_integer(
+        value
+    )
+
+
+def extract_saldo_final(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Saldo Final -> saldo_final
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "SALDO",
+            "FINAL",
+        ),
+        expected_y=EXPECTED_Y_SALDO_FINAL,
+    )
+
+    if anchor is None:
+        return None
+
+    value = extract_value_near_anchor(
+        words,
+        anchor,
+        expected_y=EXPECTED_Y_SALDO_FINAL,
+    )
+
+    return parse_money(
+        value
+    )
 
 
 # ============================================================
-# EXTRACTORES INDIVIDUALES
+# NUEVOS EXTRACTORES
 # ============================================================
 
 
 def extract_saldo_promedio(
-    words: List[Dict[str, Any]],
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
 ) -> Optional[float]:
     """
-    Extrae directamente el saldo promedio (Rendimiento)
-    desde su coordenada espacial.
+    Extrae:
+
+        El Saldo Promedio en el Mes
+        (promedio de los saldos diarios del periodo)
+        de su cuenta fue:
+
+                            $ 7,589.17
+
+    Se utiliza expected_y porque la descripción ocupa un
+    renglón largo y el valor aparece posteriormente.
     """
 
-    texto = text_from_box(
-        words,
-        BOX_SALDO_PROMEDIO,
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "SALDO",
+            "PROMEDIO",
+            "MES",
+        ),
+        expected_y=EXPECTED_Y_SALDO_PROMEDIO,
     )
 
-    return parse_amount_optional(texto)
+    if anchor is None:
+        return None
 
-
-def extract_dias_periodo(
-    words: List[Dict[str, Any]],
-) -> int:
-    """
-    Extrae directamente los días del periodo desde su
-    coordenada espacial.
-    """
-
-    texto = text_from_box(
+    value = extract_value_near_anchor(
         words,
-        BOX_DIAS_PERIODO,
+        anchor,
+        expected_y=EXPECTED_Y_SALDO_PROMEDIO,
     )
 
-    return parse_int(texto)
+    return parse_money(
+        value
+    )
 
 
 def extract_tasa_bruta_anual(
-    words: List[Dict[str, Any]],
-) -> float:
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
     """
-    Extrae directamente la tasa bruta anual (%) desde su
-    coordenada espacial.
+    Extrae:
+
+        Tasa Promedio Nominal       0.0000%
+
+    y la asigna a:
+
+        tasa_bruta_anual
     """
 
-    texto = text_from_box(
-        words,
-        BOX_TASA_BRUTA_ANUAL,
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "TASA",
+            "PROMEDIO",
+            "NOMINAL",
+        ),
+        expected_y=EXPECTED_Y_TASA_PROMEDIO_NOMINAL,
     )
 
-    return parse_amount(texto)
+    if anchor is None:
+        return None
 
-
-def extract_saldo_promedio_gravable(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el saldo promedio gravable desde
-    su coordenada espacial.
-    """
-
-    texto = text_from_box(
+    value = extract_value_near_anchor(
         words,
-        BOX_SALDO_PROMEDIO_GRAVABLE,
+        anchor,
+        expected_y=EXPECTED_Y_TASA_PROMEDIO_NOMINAL,
     )
 
-    return parse_amount(texto)
-
-
-def extract_intereses_a_favor(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente los intereses a favor (+) desde
-    su coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_INTERESES_A_FAVOR,
+    return parse_percentage(
+        value
     )
-
-    return parse_amount(texto)
-
-
-def extract_isr_retenido(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el ISR retenido (-) desde su
-    coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_ISR_RETENIDO,
-    )
-
-    return parse_amount(texto)
-
-
-def extract_cheques_pagados(
-    words: List[Dict[str, Any]],
-) -> int:
-    """
-    Extrae directamente el número de cheques pagados desde
-    su coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_CHEQUES_PAGADOS,
-    )
-
-    return parse_int(texto)
 
 
 def extract_manejo_cuenta(
-    words: List[Dict[str, Any]],
-) -> float:
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
     """
-    Extrae directamente el importe de manejo de cuenta
-    desde su coordenada espacial.
+    Extrae:
+
+        Comisiones Cobradas en el Mes       $ 0.00
+
+    y lo asigna a:
+
+        manejo_cuenta
     """
 
-    texto = text_from_box(
-        words,
-        BOX_MANEJO_CUENTA,
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "COMISIONES",
+            "COBRADAS",
+            "MES",
+        ),
+        expected_y=EXPECTED_Y_COMISIONES_COBRADAS,
     )
 
-    return parse_amount(texto)
+    if anchor is None:
+        return None
 
-
-def extract_cargos_objetados(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el importe de cargos objetados
-    desde su coordenada espacial.
-    """
-
-    texto = text_from_box(
+    value = extract_value_near_anchor(
         words,
-        BOX_CARGOS_OBJETADOS,
+        anchor,
+        expected_y=EXPECTED_Y_COMISIONES_COBRADAS,
     )
 
-    return parse_amount(texto)
-
-
-def extract_abonos_objetados(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el importe de abonos objetados
-    desde su coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_ABONOS_OBJETADOS,
+    return parse_money(
+        value
     )
-
-    return parse_amount(texto)
-
-
-def extract_saldo_anterior(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el saldo anterior (Comportamiento)
-    desde su coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_SALDO_ANTERIOR,
-    )
-
-    return parse_amount(texto)
-
-
-def extract_depositos_abonos(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el importe de depósitos / abonos (+)
-    desde su coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_DEPOSITOS_ABONOS,
-    )
-
-    return parse_amount(texto)
-
-
-def extract_retiros_cargos(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el importe de retiros / cargos (-)
-    desde su coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_RETIROS_CARGOS,
-    )
-
-    return parse_amount(texto)
-
-
-def extract_saldo_final(
-    words: List[Dict[str, Any]],
-) -> float:
-    """
-    Extrae directamente el saldo final (Comportamiento)
-    desde su coordenada espacial.
-    """
-
-    texto = text_from_box(
-        words,
-        BOX_SALDO_FINAL,
-    )
-
-    return parse_amount(texto)
 
 
 def extract_saldo_promedio_minimo_mensual(
-    words: List[Dict[str, Any]],
-) -> float:
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
     """
-    Extrae directamente el saldo promedio mínimo mensual
-    desde su coordenada espacial.
+    Extrae el valor asociado a:
+
+        El Saldo Promedio Mínimo Requerido para
+        Exentar el Cobro de la Comisión de Administración
+        Renta es:
+
+                            $ 0.00
+
+    y lo asigna a:
+
+        saldo_promedio_minimo_mensual
     """
 
-    texto = text_from_box(
-        words,
-        BOX_SALDO_PROMEDIO_MINIMO_MENSUAL,
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "SALDO",
+            "PROMEDIO",
+            "MINIMO",
+            "REQUERIDO",
+        ),
+        expected_y=EXPECTED_Y_SALDO_PROMEDIO_MINIMO,
     )
 
-    return parse_amount(texto)
+    if anchor is None:
+        return None
+
+    value = extract_value_near_anchor(
+        words,
+        anchor,
+        expected_y=EXPECTED_Y_SALDO_PROMEDIO_MINIMO,
+    )
+
+    return parse_money(
+        value
+    )
+
+
+def extract_isr_retenido(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Extrae:
+
+        ISR Retenido en el Mes      $ 0.00
+
+    y lo asigna a:
+
+        isr_retenido
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "ISR",
+            "RETENIDO",
+            "MES",
+        ),
+        expected_y=EXPECTED_Y_ISR_RETENIDO_MES,
+    )
+
+    if anchor is None:
+        return None
+
+    value = extract_value_near_anchor(
+        words,
+        anchor,
+        expected_y=EXPECTED_Y_ISR_RETENIDO_MES,
+    )
+
+    return parse_money(
+        value
+    )
+
+
+# ============================================================
+# CAMPOS SIN EVIDENCIA SUFICIENTE TODAVÍA
+# ============================================================
+
+
+def extract_saldo_promedio_gravable(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Pendiente.
+
+    No se encuentra una etiqueta inequívoca de
+    "Saldo promedio gravable" en las coordenadas proporcionadas.
+    """
+
+    return None
+
+
+def extract_cheques_pagados(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[int]:
+    """
+    Pendiente.
+
+    No se proporcionó todavía un renglón inequívoco de
+    cheques pagados.
+    """
+
+    return None
+
+
+def extract_cargos_objetados(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Pendiente.
+
+    No se proporcionó todavía el renglón correspondiente.
+    """
+
+    return None
+
+
+def extract_abonos_objetados(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Pendiente.
+
+    No se proporcionó todavía el renglón correspondiente.
+    """
+
+    return None
 
 
 def extract_saldo_global(
-    words: List[Dict[str, Any]],
-) -> float:
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
     """
-    Extrae el saldo global exclusivamente mediante coordenadas
-    espaciales.
+    Pendiente.
 
-    La función NO utiliza la etiqueta "Saldo Global", solo la
-    caja de coordenadas definida en `BOX_SALDO_GLOBAL`.
+    No se proporcionó todavía una etiqueta inequívoca
+    para saldo global.
     """
-    value = extract_numeric_amount_from_box(
-        words,
-        BOX_SALDO_GLOBAL,
-    )
-    return value if value is not None else 0.0
+
+    return None
 
 
 # ============================================================
@@ -789,109 +2084,230 @@ def extract_saldo_global(
 
 
 def extract_resumen_financiero_words(
-    words: List[Dict[str, Any]],
+    words: List[
+        Dict[str, Any]
+    ],
 ) -> ResumenFinanciero:
     """
-    Extractor espacial del resumen financiero BBVA.
+    Extractor robusto de ResumenFinanciero HSBC.
 
-    Este extractor NO utiliza etiquetas del documento para
-    encontrar los campos.
+    Arquitectura:
 
-    Cada dato se obtiene exclusivamente desde la región
-    espacial previamente identificada en el PDF, dentro del
-    bloque "Información Financiera".
+        WORDS
+          ↓
+        PÁGINA FINANCIERA
+          ↓
+        RENGLONES LÓGICOS
+          ↓
+        ANCLA SEMÁNTICA
+          ↓
+        COLUMNA DE VALORES
+          ↓
+        REFERENCIA Y DEL VALOR
+          ↓
+        RECONSTRUCCIÓN DEL VALOR
+          ↓
+        PARSING / VALIDACIÓN
+          ↓
+        ResumenFinanciero
 
-    Campos extraídos:
+    Características:
 
-        Rendimiento
-            - saldo_promedio
-            - dias_periodo
-            - tasa_bruta_anual
-            - saldo_promedio_gravable
-            - intereses_a_favor
-            - isr_retenido
-
-        Comisiones
-            - cheques_pagados
-            - manejo_cuenta
-
-        Total Comisiones
-            - cargos_objetados
-            - abonos_objetados
-
-        Comportamiento
-            - saldo_anterior
-            - depositos_abonos
-            - retiros_cargos
-            - saldo_final
-            - saldo_promedio_minimo_mensual
-            - saldo_global (coordenada estimada, ver
-              BOX_SALDO_GLOBAL)
+        - trabaja directamente con words;
+        - reconstruye renglones lógicos;
+        - usa texto como ancla;
+        - usa X para distinguir la columna;
+        - usa Y esperado del VALOR;
+        - soporta etiquetas multilínea;
+        - soporta valores compuestos por varias words;
+        - tolera desplazamientos moderados del OCR;
+        - no depende de texto concatenado previamente.
     """
 
-    saldo_promedio = extract_saldo_promedio(
+    # ========================================================
+    # 1. SIN WORDS
+    # ========================================================
+
+    if not words:
+
+        return ResumenFinanciero(
+            saldo_promedio=None,
+            dias_periodo=None,
+            tasa_bruta_anual=None,
+            saldo_promedio_gravable=None,
+            intereses_a_favor=None,
+            isr_retenido=None,
+            cheques_pagados=None,
+            manejo_cuenta=None,
+            cargos_objetados=None,
+            abonos_objetados=None,
+            saldo_anterior=None,
+            depositos_abonos=None,
+            retiros_cargos=None,
+            saldo_final=None,
+            saldo_promedio_minimo_mensual=None,
+            saldo_global=None,
+        )
+
+    # ========================================================
+    # 2. LOCALIZAR PÁGINA FINANCIERA
+    # ========================================================
+
+    financial_page = find_financial_page(
         words
     )
 
-    dias_periodo = extract_dias_periodo(
-        words
+    if financial_page is not None:
+
+        financial_words = [
+            word
+            for word in words
+            if safe_page(word)
+            ==
+            financial_page
+        ]
+
+    else:
+
+        financial_words = list(
+            words
+        )
+
+    # ========================================================
+    # 3. AGRUPAR EN RENGLONES
+    # ========================================================
+
+    lines = group_words_into_lines(
+        financial_words
     )
 
-    tasa_bruta_anual = extract_tasa_bruta_anual(
-        words
+    # ========================================================
+    # 4. CAMPOS EXISTENTES
+    # ========================================================
+
+    saldo_anterior = (
+        extract_saldo_anterior(
+            lines,
+            financial_words,
+        )
     )
 
-    saldo_promedio_gravable = extract_saldo_promedio_gravable(
-        words
+    depositos_abonos = (
+        extract_depositos_abonos(
+            lines,
+            financial_words,
+        )
     )
 
-    intereses_a_favor = extract_intereses_a_favor(
-        words
+    retiros_cargos = (
+        extract_retiros_cargos(
+            lines,
+            financial_words,
+        )
     )
 
-    isr_retenido = extract_isr_retenido(
-        words
+    intereses_a_favor = (
+        extract_intereses_a_favor(
+            lines,
+            financial_words,
+        )
     )
 
-    cheques_pagados = extract_cheques_pagados(
-        words
+    dias_periodo = (
+        extract_dias_periodo(
+            lines,
+            financial_words,
+        )
     )
 
-    manejo_cuenta = extract_manejo_cuenta(
-        words
+    saldo_final = (
+        extract_saldo_final(
+            lines,
+            financial_words,
+        )
     )
 
-    cargos_objetados = extract_cargos_objetados(
-        words
+    # ========================================================
+    # 5. NUEVOS CAMPOS
+    # ========================================================
+
+    saldo_promedio = (
+        extract_saldo_promedio(
+            lines,
+            financial_words,
+        )
     )
 
-    abonos_objetados = extract_abonos_objetados(
-        words
+    tasa_bruta_anual = (
+        extract_tasa_bruta_anual(
+            lines,
+            financial_words,
+        )
     )
 
-    saldo_anterior = extract_saldo_anterior(
-        words
+    manejo_cuenta = (
+        extract_manejo_cuenta(
+            lines,
+            financial_words,
+        )
     )
 
-    depositos_abonos = extract_depositos_abonos(
-        words
+    saldo_promedio_minimo_mensual = (
+        extract_saldo_promedio_minimo_mensual(
+            lines,
+            financial_words,
+        )
     )
 
-    retiros_cargos = extract_retiros_cargos(
-        words
+    isr_retenido = (
+        extract_isr_retenido(
+            lines,
+            financial_words,
+        )
     )
 
-    saldo_final = extract_saldo_final(
-        words
+    # ========================================================
+    # 6. CAMPOS TODAVÍA NO IDENTIFICADOS
+    # ========================================================
+
+    saldo_promedio_gravable = (
+        extract_saldo_promedio_gravable(
+            lines,
+            financial_words,
+        )
     )
 
-    saldo_promedio_minimo_mensual = extract_saldo_promedio_minimo_mensual(
-        words
+    cheques_pagados = (
+        extract_cheques_pagados(
+            lines,
+            financial_words,
+        )
     )
 
-    saldo_global = extract_saldo_global(
-        words
+    cargos_objetados = (
+        extract_cargos_objetados(
+            lines,
+            financial_words,
+        )
     )
+
+    abonos_objetados = (
+        extract_abonos_objetados(
+            lines,
+            financial_words,
+        )
+    )
+
+    saldo_global = (
+        extract_saldo_global(
+            lines,
+            financial_words,
+        )
+    )
+
+    # ========================================================
+    # 7. MODELO
+    # ========================================================
 
     return ResumenFinanciero(
         saldo_promedio=saldo_promedio,
@@ -900,29 +2316,55 @@ def extract_resumen_financiero_words(
 
         tasa_bruta_anual=tasa_bruta_anual,
 
-        saldo_promedio_gravable=saldo_promedio_gravable,
+        saldo_promedio_gravable=(
+            saldo_promedio_gravable
+        ),
 
-        intereses_a_favor=intereses_a_favor,
+        intereses_a_favor=(
+            intereses_a_favor
+        ),
 
-        isr_retenido=isr_retenido,
+        isr_retenido=(
+            isr_retenido
+        ),
 
-        cheques_pagados=cheques_pagados,
+        cheques_pagados=(
+            cheques_pagados
+        ),
 
-        manejo_cuenta=manejo_cuenta,
+        manejo_cuenta=(
+            manejo_cuenta
+        ),
 
-        cargos_objetados=cargos_objetados,
+        cargos_objetados=(
+            cargos_objetados
+        ),
 
-        abonos_objetados=abonos_objetados,
+        abonos_objetados=(
+            abonos_objetados
+        ),
 
-        saldo_anterior=saldo_anterior,
+        saldo_anterior=(
+            saldo_anterior
+        ),
 
-        depositos_abonos=depositos_abonos,
+        depositos_abonos=(
+            depositos_abonos
+        ),
 
-        retiros_cargos=retiros_cargos,
+        retiros_cargos=(
+            retiros_cargos
+        ),
 
-        saldo_final=saldo_final,
+        saldo_final=(
+            saldo_final
+        ),
 
-        saldo_promedio_minimo_mensual=saldo_promedio_minimo_mensual,
+        saldo_promedio_minimo_mensual=(
+            saldo_promedio_minimo_mensual
+        ),
 
-        saldo_global=saldo_global,
+        saldo_global=(
+            saldo_global
+        ),
     )
