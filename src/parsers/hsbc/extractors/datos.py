@@ -1,522 +1,1871 @@
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+
+import re
+import unicodedata
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from models.datos_cuenta import DatosCuenta
 
 
 # ============================================================
-# CONFIGURACIÓN ESPACIAL — DATOS DE CUENTA BBVA
+# CONFIGURACIÓN ESPACIAL — DATOS DE CUENTA HSBC
 # ============================================================
 #
-# Estas coordenadas corresponden directamente a los valores
-# observados en el PDF BBVA proporcionado.
+# Las coordenadas corresponden al formato observado en el
+# estado de cuenta HSBC proporcionado.
 #
-# NO se utilizan etiquetas para localizar los datos.
-# El extractor únicamente lee lo que exista dentro de
-# cada región espacial.
+# IMPORTANTE:
+#
+# A diferencia de BBVA, estas coordenadas NO se consideran
+# absolutas.
+#
+# Se utilizan como:
+#
+#   1. referencia espacial;
+#   2. guía para localizar el dato;
+#   3. criterio de proximidad;
+#   4. fallback cuando el OCR desplaza ligeramente las
+#      palabras.
+#
+# La validación definitiva se realiza mediante texto y
+# estructura del estado de cuenta.
+#
+# El extractor funciona con:
+#
+#   - PDF digital leído mediante words;
+#   - PDF procesado mediante OCR;
+#   - desplazamientos moderados de X/Y;
+#   - palabras separadas;
+#   - páginas iniciales ausentes.
+#
 # ============================================================
+
+
+# ------------------------------------------------------------
+# COORDENADAS DE REFERENCIA
+# ------------------------------------------------------------
+#
+# Estas son las coordenadas observadas en el JSON proporcionado.
+#
+# Página de referencia:
+#
+#     página 2
+#
+# del documento original proporcionado.
+#
+# El extractor NO depende de que la página sea exactamente 2.
+# ------------------------------------------------------------
 
 
 # ------------------------------------------------------------
 # PRODUCTO PRINCIPAL
 #
-# Libretón Básico Cuenta Digital
+# Texto observado:
 #
-# x0 = 459.9866
-# x1 = 598.2236
-# top = 16.6544
-# bottom = 27.6544
+#     CUENTA PREMIER
+#
+# Coordenadas aproximadas:
+#
+#     CUENTA   x=257..302
+#     PREMIER  x=306..355
+#     top      ~=25
 # ------------------------------------------------------------
 
-# Coordenadas ajustadas según estado_bbva2.pdf
 BOX_PRODUCTO_PRINCIPAL = (
-    459.0,  # x0
-    599.0,  # x1
-    16.0,   # top
-    28.0,   # bottom
-)
-
-
-# ------------------------------------------------------------
-# PERIODO INICIAL
-#
-# 27/06/2022
-#
-# x0 = 498.9133
-# x1 = 539.9533
-# top = 48.3818
-# bottom = 58.3818
-# ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
-BOX_PERIODO_INICIO = (
-    498.0,  # x0
-    540.0,  # x1
-    48.0,   # top
-    59.0,   # bottom
-)
-
-
-# ------------------------------------------------------------
-# PERIODO FINAL
-#
-# 26/07/2022
-#
-# x0 = 554.5433
-# x1 = 595.5833
-# top = 48.3818
-# bottom = 58.3818
-# ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
-BOX_PERIODO_FIN = (
-    554.0,  # x0
-    596.0,  # x1
-    48.0,   # top
-    59.0,   # bottom
-)
-
-
-# ------------------------------------------------------------
-# FECHA DE CORTE
-#
-# 26/07/2022
-#
-# x0 = 554.5433
-# x1 = 595.5833
-# top = 63.4054
-# bottom = 73.4054
-# ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
-BOX_FECHA_CORTE = (
-    554.0,  # x0
-    596.0,  # x1
-    63.0,   # top
-    74.0,   # bottom
-)
-
-
-# ------------------------------------------------------------
-# NÚMERO DE CUENTA
-#
-# 1563369348
-#
-# x0 = 549.9833
-# x1 = 595.5833
-# top = 78.4290
-# bottom = 88.4290
-# ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
-BOX_NUMERO_CUENTA = (
-    549.0,  # x0
-    596.0,  # x1
-    78.0,   # top
-    89.0,   # bottom
-)
-
-
-# ------------------------------------------------------------
-# NÚMERO DE CLIENTE
-#
-# C8715220
-#
-# x0 = 558.1933
-# x1 = 595.5833
-# top = 93.4526
-# bottom = 103.4526
-# ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
-BOX_NUMERO_CLIENTE = (
-    558.0,  # x0
-    596.0,  # x1
-    93.0,   # top
-    104.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# RFC
-#
-# FASS770615SN6
-# NADJ951003-9I2
-#
-# x0 = 530.8533
-# x1 = 595.5833
-# top = 108.4762
-# bottom = 118.4762
-# ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
-BOX_RFC = (
-    530.0,  # x0
-    596.0,  # x1
-    108.0,  # top
-    119.0,  # bottom
-)
-
-
-# ------------------------------------------------------------
-# CLABE
-#
-# 012 180 01546750943 2
-# 012 680 01563369348 1
-# x0 = 506.6633 ... 595.5833
-# top = 123.4999
-# bottom = 133.4999
-#
-# Los fragmentos deben concatenarse:
-#
-# 012 + 180 + 01546750943 + 2
-#
-# = 012180015467509432
-# ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
-BOX_CLABE = (
-    506.0,  # x0
-    596.0,  # x1
-    123.0,  # top
-    134.0,  # bottom
+    240.0,
+    370.0,
+    15.0,
+    55.0,
 )
 
 
 # ------------------------------------------------------------
 # NOMBRE DEL CLIENTE
 #
-# JONATHAN NAVA DIONICIO
+# Texto observado:
 #
-# x0 = 40.8888 ... 145.6888
-# top = 101.9564
-# bottom = 111.9564
+#     JUAN ANTONIO GARCIA CARRADA
+#
+# Coordenadas:
+#
+#     x = 43..176
+#     top ~= 110
 # ------------------------------------------------------------
-# Coordenadas ajustadas según estado_bbva2.pdf
+
 BOX_NOMBRE_CLIENTE = (
-    40.0,   # x0
-    300.0,  # x1 (ampliado para nombres largos)
-    101.0,  # top
-    112.0,  # bottom
+    30.0,
+    230.0,
+    90.0,
+    130.0,
+)
+
+
+# ------------------------------------------------------------
+# NUMERO DE CUENTA
+#
+# Etiqueta:
+#
+#     NUMERO
+#     DE
+#     CUENTA
+#
+# Valor:
+#
+#     6270638192
+#
+# Coordenadas del valor:
+#
+#     x = 43..86
+#     top ~= 227
+# ------------------------------------------------------------
+
+BOX_NUMERO_CUENTA = (
+    35.0,
+    150.0,
+    220.0,
+    245.0,
+)
+
+
+# ------------------------------------------------------------
+# CLABE
+#
+# Etiqueta:
+#
+#     CLABE
+#     INTERBANCARIA
+#
+# Valor observado dividido en words:
+#
+#     021905062706381
+#     925
+#
+# Resultado:
+#
+#     021905062706381925
+#
+# Coordenadas:
+#
+#     x = 182..260
+#     top ~= 227
+# ------------------------------------------------------------
+
+BOX_CLABE = (
+    170.0,
+    300.0,
+    220.0,
+    245.0,
+)
+
+
+# ------------------------------------------------------------
+# NUMERO DE CLIENTE
+#
+# Valor:
+#
+#     38801782
+#
+# Coordenadas:
+#
+#     x = 43..77
+#     top ~= 248
+# ------------------------------------------------------------
+
+BOX_NUMERO_CLIENTE = (
+    35.0,
+    150.0,
+    235.0,
+    265.0,
+)
+
+
+# ------------------------------------------------------------
+# RFC
+#
+# Valor:
+#
+#     GACJ700226PP2
+#
+# Coordenadas:
+#
+#     x = 43..105
+#     top ~= 267
+# ------------------------------------------------------------
+
+BOX_RFC = (
+    35.0,
+    160.0,
+    250.0,
+    280.0,
+)
+
+
+# ------------------------------------------------------------
+# PERIODO
+#
+# Texto observado:
+#
+#     Periodo del 01/06/2026 al 30/06/2026
+#
+# Las palabras aparecen dentro de una tabla.
+#
+# Coordenadas aproximadas:
+#
+#     top ~= 277
+#
+# Este extractor NO depende de coordenadas exactas para este
+# campo: primero identifica la línea que contiene "Periodo"
+# y después valida las dos fechas.
+# ------------------------------------------------------------
+
+BOX_PERIODO = (
+    350.0,
+    560.0,
+    265.0,
+    295.0,
+)
+
+
+# ------------------------------------------------------------
+# FECHA DE CORTE
+#
+# En el formato HSBC proporcionado, la fecha final del periodo
+# corresponde al cierre del estado.
+#
+# Fallback:
+#
+#     fecha_corte = periodo_fin
+#
+# ------------------------------------------------------------
+
+
+# ============================================================
+# CONSTANTES DE TOLERANCIA
+# ============================================================
+
+# Tolerancia vertical para considerar palabras pertenecientes
+# al mismo renglón.
+LINE_Y_TOLERANCE = 5.0
+
+# Tolerancia espacial para boxes durante OCR.
+BOX_PADDING_X = 12.0
+BOX_PADDING_Y = 10.0
+
+# Distancia máxima en Y entre etiqueta y valor.
+VALUE_MAX_VERTICAL_DISTANCE = 45.0
+
+# Número máximo de páginas que se consideran al localizar
+# inicialmente la zona de datos.
+MAX_CANDIDATE_PAGES = 12
+
+
+# ============================================================
+# PATRONES DE VALIDACIÓN
+# ============================================================
+
+ACCOUNT_PATTERN = re.compile(
+    r"^\d{8,18}$"
+)
+
+CLIENT_PATTERN = re.compile(
+    r"^\d{5,15}$"
+)
+
+CLABE_PATTERN = re.compile(
+    r"^\d{18}$"
+)
+
+RFC_PATTERN = re.compile(
+    r"^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{2,4}$",
+    re.IGNORECASE,
+)
+
+DATE_PATTERN = re.compile(
+    r"\b\d{2}[/-]\d{2}[/-]\d{4}\b"
 )
 
 
 # ============================================================
-# UTILIDADES ESPACIALES
+# UTILIDADES DE TEXTO
 # ============================================================
+
+
+def normalize_text(value: Any) -> str:
+    """
+    Normaliza texto para comparación semántica.
+
+    Se eliminan:
+
+        - acentos;
+        - diferencias de mayúsculas/minúsculas;
+        - espacios repetidos.
+
+    Ejemplo:
+
+        "Número de Cuenta"
+
+    se convierte en:
+
+        "NUMERO DE CUENTA"
+    """
+
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    if not text:
+        return ""
+
+    text = unicodedata.normalize(
+        "NFD",
+        text,
+    )
+
+    text = "".join(
+        char
+        for char in text
+        if unicodedata.category(char) != "Mn"
+    )
+
+    text = text.upper()
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
+
+def clean_word_text(value: Any) -> str:
+    """
+    Limpia el texto individual de una word.
+    """
+
+    if value is None:
+        return ""
+
+    return str(value).strip()
+
+
+def normalized_word_text(word: Dict[str, Any]) -> str:
+    """
+    Devuelve el texto normalizado de una word.
+    """
+
+    return normalize_text(
+        word.get("text", "")
+    )
+
+
+# ============================================================
+# UTILIDADES GEOMÉTRICAS
+# ============================================================
+
+
+def word_center(
+    word: Dict[str, Any],
+) -> Tuple[float, float]:
+    """
+    Devuelve el centro geométrico de una word.
+    """
+
+    x0 = float(
+        word.get("x0", 0.0)
+    )
+
+    x1 = float(
+        word.get("x1", x0)
+    )
+
+    top = float(
+        word.get("top", 0.0)
+    )
+
+    bottom = float(
+        word.get("bottom", top)
+    )
+
+    return (
+        (x0 + x1) / 2,
+        (top + bottom) / 2,
+    )
 
 
 def word_inside_box(
     word: Dict[str, Any],
-    box: tuple[float, float, float, float],
+    box: Tuple[float, float, float, float],
+    padding_x: float = 0.0,
+    padding_y: float = 0.0,
 ) -> bool:
     """
-    Determina si una palabra pertenece a una región espacial.
+    Determina si el centro de una palabra se encuentra
+    dentro de una región espacial.
 
-    box:
-
-        (
-            xmin,
-            xmax,
-            ymin,
-            ymax
-        )
-
-    Se utiliza el centro de la palabra para evitar problemas
-    con palabras que se encuentren parcialmente sobre el
-    límite de una región.
+    A diferencia del extractor BBVA, aquí se permite
+    padding para tolerar desplazamientos producidos por OCR.
     """
-    # Todos los datos de la cuenta están en la primera página.
-    # Ignoramos cualquier palabra que no sea de la página 1.
-    page = word.get("page", 1)
-    if page != 1:
-        return False
-
-    x0 = word.get("x0", 0)
-    x1 = word.get("x1", 0)
-
-    top = word.get("top", 0)
-    bottom = word.get("bottom", 0)
 
     xmin, xmax, ymin, ymax = box
 
-    center_x = (x0 + x1) / 2
-    center_y = (top + bottom) / 2
+    center_x, center_y = word_center(
+        word
+    )
 
     return (
-        xmin <= center_x <= xmax
-        and ymin <= center_y <= ymax
+        xmin - padding_x
+        <= center_x
+        <= xmax + padding_x
+        and
+        ymin - padding_y
+        <= center_y
+        <= ymax + padding_y
     )
 
 
 def words_in_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+    words: Sequence[Dict[str, Any]],
+    box: Tuple[float, float, float, float],
+    padding_x: float = BOX_PADDING_X,
+    padding_y: float = BOX_PADDING_Y,
 ) -> List[Dict[str, Any]]:
     """
-    Devuelve las palabras que se encuentran dentro de
-    una región espacial.
-
-    Las palabras se ordenan de izquierda a derecha.
+    Devuelve las words localizadas dentro de una caja.
     """
 
-    result = [
+    selected = [
         word
         for word in words
-        if word_inside_box(word, box)
+        if word_inside_box(
+            word,
+            box,
+            padding_x=padding_x,
+            padding_y=padding_y,
+        )
     ]
 
-    result.sort(
+    selected.sort(
         key=lambda word: (
-            word.get("page", 1),
-            word.get("top", 0),
-            word.get("x0", 0),
+            int(word.get("page", 1)),
+            float(word.get("top", 0.0)),
+            float(word.get("x0", 0.0)),
+        )
+    )
+
+    return selected
+
+
+def box_center(
+    box: Tuple[float, float, float, float],
+) -> Tuple[float, float]:
+    """
+    Devuelve el centro de una caja.
+    """
+
+    xmin, xmax, ymin, ymax = box
+
+    return (
+        (xmin + xmax) / 2,
+        (ymin + ymax) / 2,
+    )
+
+
+# ============================================================
+# AGRUPACIÓN DE WORDS EN RENGLONES
+# ============================================================
+
+
+def group_words_into_lines(
+    words: Sequence[Dict[str, Any]],
+    y_tolerance: float = LINE_Y_TOLERANCE,
+) -> List[List[Dict[str, Any]]]:
+    """
+    Agrupa palabras que pertenecen al mismo renglón.
+
+    Esto es especialmente importante para OCR porque el reader
+    entrega palabras individuales y no oraciones.
+
+    El algoritmo utiliza el centro Y de cada palabra y después
+    ordena cada renglón de izquierda a derecha.
+    """
+
+    valid_words = [
+        word
+        for word in words
+        if clean_word_text(
+            word.get("text", "")
+        )
+    ]
+
+    valid_words = sorted(
+        valid_words,
+        key=lambda word: (
+            int(word.get("page", 1)),
+            float(word.get("top", 0.0)),
+            float(word.get("x0", 0.0)),
+        ),
+    )
+
+    lines: List[List[Dict[str, Any]]] = []
+
+    for word in valid_words:
+
+        _, center_y = word_center(
+            word
+        )
+
+        placed = False
+
+        for line in reversed(lines):
+
+            if not line:
+                continue
+
+            _, line_center_y = word_center(
+                line[-1]
+            )
+
+            if abs(center_y - line_center_y) <= y_tolerance:
+
+                line.append(
+                    word
+                )
+
+                placed = True
+                break
+
+        if not placed:
+            lines.append(
+                [word]
+            )
+
+    for line in lines:
+        line.sort(
+            key=lambda word: (
+                float(word.get("x0", 0.0))
+            )
+        )
+
+    return lines
+
+
+def line_text(
+    line: Sequence[Dict[str, Any]],
+) -> str:
+    """
+    Concatena las palabras de un renglón.
+    """
+
+    values = []
+
+    for word in line:
+
+        text = clean_word_text(
+            word.get("text", "")
+        )
+
+        if text:
+            values.append(
+                text
+            )
+
+    return " ".join(values).strip()
+
+
+def normalized_line_text(
+    line: Sequence[Dict[str, Any]],
+) -> str:
+    """
+    Devuelve el texto normalizado de un renglón.
+    """
+
+    return normalize_text(
+        line_text(line)
+    )
+
+
+def line_bounds(
+    line: Sequence[Dict[str, Any]],
+) -> Tuple[float, float, float, float]:
+    """
+    Calcula la caja envolvente del renglón.
+    """
+
+    if not line:
+        return (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    xmin = min(
+        float(word.get("x0", 0.0))
+        for word in line
+    )
+
+    xmax = max(
+        float(word.get("x1", 0.0))
+        for word in line
+    )
+
+    ymin = min(
+        float(word.get("top", 0.0))
+        for word in line
+    )
+
+    ymax = max(
+        float(word.get("bottom", 0.0))
+        for word in line
+    )
+
+    return (
+        xmin,
+        xmax,
+        ymin,
+        ymax,
+    )
+
+
+# ============================================================
+# LOCALIZACIÓN DE ETIQUETAS
+# ============================================================
+
+
+def line_contains_tokens(
+    line: Sequence[Dict[str, Any]],
+    tokens: Sequence[str],
+) -> bool:
+    """
+    Determina si un renglón contiene todos los tokens indicados.
+
+    Ejemplo:
+
+        ["NUMERO", "DE", "CUENTA"]
+
+    coincide con:
+
+        "NUMERO DE CUENTA"
+    """
+
+    normalized = normalized_line_text(
+        line
+    )
+
+    return all(
+        normalize_text(token) in normalized
+        for token in tokens
+    )
+
+
+def find_lines_containing_tokens(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+    tokens: Sequence[str],
+) -> List[List[Dict[str, Any]]]:
+    """
+    Busca todos los renglones que contengan un conjunto
+    determinado de tokens.
+    """
+
+    return [
+        list(line)
+        for line in lines
+        if line_contains_tokens(
+            line,
+            tokens,
+        )
+    ]
+
+
+def find_best_anchor_line(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+    tokens: Sequence[str],
+    expected_box: Optional[
+        Tuple[float, float, float, float]
+    ] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Busca la mejor coincidencia textual y espacial.
+
+    Primero exige coincidencia textual.
+
+    Después utiliza la posición esperada únicamente para
+    decidir cuál coincidencia es la más probable.
+    """
+
+    candidates = find_lines_containing_tokens(
+        lines,
+        tokens,
+    )
+
+    if not candidates:
+        return None
+
+    if expected_box is None:
+        return candidates[0]
+
+    expected_x, expected_y = box_center(
+        expected_box
+    )
+
+    best_line = None
+    best_score = float("inf")
+
+    for line in candidates:
+
+        xmin, xmax, ymin, ymax = line_bounds(
+            line
+        )
+
+        center_x = (xmin + xmax) / 2
+        center_y = (ymin + ymax) / 2
+
+        distance = (
+            abs(center_x - expected_x)
+            +
+            abs(center_y - expected_y)
+        )
+
+        if distance < best_score:
+
+            best_score = distance
+            best_line = line
+
+    return best_line
+
+
+# ============================================================
+# PÁGINA DE DATOS HSBC
+# ============================================================
+
+
+def page_groups(
+    words: Sequence[Dict[str, Any]],
+) -> Dict[int, List[Dict[str, Any]]]:
+    """
+    Agrupa words por número de página.
+    """
+
+    result: Dict[
+        int,
+        List[Dict[str, Any]]
+    ] = {}
+
+    for word in words:
+
+        try:
+            page = int(
+                word.get("page", 1)
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            page = 1
+
+        result.setdefault(
+            page,
+            []
+        ).append(
+            word
+        )
+
+    return result
+
+
+def score_data_page(
+    words: Sequence[Dict[str, Any]],
+) -> int:
+    """
+    Calcula qué tan probable es que una página sea la página
+    principal de datos de cuenta HSBC.
+
+    Se utilizan varias señales independientes.
+    """
+
+    score = 0
+
+    lines = group_words_into_lines(
+        words
+    )
+
+    normalized_lines = [
+        normalized_line_text(line)
+        for line in lines
+    ]
+
+    joined = " ".join(
+        normalized_lines
+    )
+
+    # --------------------------------------------------------
+    # Señales fuertes
+    # --------------------------------------------------------
+
+    if (
+        "NUMERO DE CUENTA"
+        in joined
+    ):
+        score += 10
+
+    if (
+        "CLABE"
+        in joined
+    ):
+        score += 7
+
+    if (
+        "NUMERO DE CLIENTE"
+        in joined
+    ):
+        score += 7
+
+    if (
+        re.search(
+            r"\bRFC\b",
+            joined,
+        )
+    ):
+        score += 6
+
+    if (
+        "RESUMEN DE CUENTAS"
+        in joined
+    ):
+        score += 5
+
+    # --------------------------------------------------------
+    # Señales adicionales
+    # --------------------------------------------------------
+
+    if (
+        "PERIODO"
+        in joined
+    ):
+        score += 3
+
+    if (
+        "SALDO INICIAL"
+        in joined
+    ):
+        score += 2
+
+    if (
+        "SALDO FINAL"
+        in joined
+    ):
+        score += 2
+
+    return score
+
+
+def find_data_page(
+    words: Sequence[Dict[str, Any]],
+) -> Optional[int]:
+    """
+    Encuentra automáticamente la página que contiene los
+    datos generales de la cuenta.
+
+    No asume que la página 2 exista.
+
+    Esto resuelve tanto:
+
+        documento con hoja inicial
+        documento sin hoja inicial
+        documento OCR
+        documento digital
+    """
+
+    groups = page_groups(
+        words
+    )
+
+    scored_pages = []
+
+    for page, page_words in groups.items():
+
+        score = score_data_page(
+            page_words
+        )
+
+        if score > 0:
+            scored_pages.append(
+                (
+                    score,
+                    page,
+                )
+            )
+
+    if not scored_pages:
+        return None
+
+    scored_pages.sort(
+        key=lambda item: (
+            -item[0],
+            item[1],
+        )
+    )
+
+    return scored_pages[0][1]
+
+
+# ============================================================
+# UTILIDADES PARA VALORES POSTERIORES A UNA ETIQUETA
+# ============================================================
+
+
+def line_center_y(
+    line: Sequence[Dict[str, Any]],
+) -> float:
+    """
+    Centro vertical de un renglón.
+    """
+
+    _, _, ymin, ymax = line_bounds(
+        line
+    )
+
+    return (
+        ymin + ymax
+    ) / 2
+
+
+def line_center_x(
+    line: Sequence[Dict[str, Any]],
+) -> float:
+    """
+    Centro horizontal de un renglón.
+    """
+
+    xmin, xmax, _, _ = line_bounds(
+        line
+    )
+
+    return (
+        xmin + xmax
+    ) / 2
+
+
+def candidate_lines_after_anchor(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+    anchor: Sequence[Dict[str, Any]],
+    max_vertical_distance: float = VALUE_MAX_VERTICAL_DISTANCE,
+) -> List[List[Dict[str, Any]]]:
+    """
+    Devuelve renglones cercanos que aparecen después de una
+    etiqueta.
+    """
+
+    anchor_y = line_center_y(
+        anchor
+    )
+
+    result = []
+
+    for line in lines:
+
+        y = line_center_y(
+            line
+        )
+
+        delta_y = y - anchor_y
+
+        if (
+            0.0
+            <= delta_y
+            <= max_vertical_distance
+        ):
+            result.append(
+                list(line)
+            )
+
+    result.sort(
+        key=lambda line: (
+            line_center_y(line)
         )
     )
 
     return result
 
 
-def text_from_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-) -> Optional[str]:
+def extract_candidate_words_from_lines(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+) -> List[str]:
     """
-    Extrae y concatena el texto contenido dentro de una
-    región espacial.
-
-    No busca etiquetas.
-    No interpreta el contenido.
-    Simplemente devuelve lo que existe dentro de la caja.
+    Extrae las palabras de varias líneas.
     """
 
-    selected = words_in_box(
-        words,
-        box,
-    )
+    result = []
 
-    values = []
+    for line in lines:
 
-    for word in selected:
+        for word in line:
 
-        text = word.get("text", "").strip()
+            text = clean_word_text(
+                word.get("text", "")
+            )
 
-        if text:
-            values.append(text)
+            if text:
+                result.append(
+                    text
+                )
 
-    if not values:
-        return None
-
-    return " ".join(values).strip()
-
-
-def numeric_text_from_box(
-    words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-) -> Optional[str]:
-    """
-    Extrae los fragmentos numéricos contenidos en una
-    región espacial y los concatena.
-
-    Se utiliza específicamente para la CLABE, donde BBVA
-    puede entregar el valor dividido en varias palabras.
-    """
-
-    selected = words_in_box(
-        words,
-        box,
-    )
-
-    parts = []
-
-    for word in selected:
-
-        text = word.get("text", "").strip()
-
-        if text.isdigit():
-            parts.append(text)
-
-    if not parts:
-        return None
-
-    return "".join(parts)
+    return result
 
 
 # ============================================================
-# EXTRACTORES INDIVIDUALES
+# EXTRACTOR DE CUENTA
+# ============================================================
+
+
+def extract_account_from_anchor(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+) -> Optional[str]:
+    """
+    Extrae número de cuenta usando:
+
+        NUMERO DE CUENTA
+
+    y después busca un valor numérico cercano.
+
+    La posición esperada actúa como restricción espacial.
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "NUMERO",
+            "DE",
+            "CUENTA",
+        ),
+        expected_box=(
+            40.0,
+            140.0,
+            210.0,
+            225.0,
+        ),
+    )
+
+    if anchor is None:
+        return None
+
+    candidates = candidate_lines_after_anchor(
+        lines,
+        anchor,
+    )
+
+    best_value = None
+    best_distance = float("inf")
+
+    for line in candidates:
+
+        text = line_text(
+            line
+        )
+
+        compact = re.sub(
+            r"\D",
+            "",
+            text,
+        )
+
+        if not ACCOUNT_PATTERN.match(
+            compact
+        ):
+            continue
+
+        distance = abs(
+            line_center_y(line)
+            -
+            line_center_y(anchor)
+        )
+
+        if distance < best_distance:
+
+            best_distance = distance
+            best_value = compact
+
+    return best_value
+
+
+# ============================================================
+# EXTRACTOR DE CLABE
+# ============================================================
+
+
+def extract_clabe_from_anchor(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+) -> Optional[str]:
+    """
+    Extrae la CLABE a partir de la etiqueta:
+
+        CLABE INTERBANCARIA
+
+    La CLABE puede venir dividida en varias words.
+
+    Ejemplo:
+
+        021905062706381
+        925
+
+    Se concatena hasta obtener:
+
+        021905062706381925
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "CLABE",
+        ),
+        expected_box=(
+            180.0,
+            280.0,
+            210.0,
+            225.0,
+        ),
+    )
+
+    if anchor is None:
+        return None
+
+    candidates = candidate_lines_after_anchor(
+        lines,
+        anchor,
+    )
+
+    for line in candidates:
+
+        parts = []
+
+        for word in line:
+
+            text = clean_word_text(
+                word.get("text", "")
+            )
+
+            digits = re.sub(
+                r"\D",
+                "",
+                text,
+            )
+
+            if digits:
+                parts.append(
+                    digits
+                )
+
+        candidate = "".join(
+            parts
+        )
+
+        if CLABE_PATTERN.match(
+            candidate
+        ):
+            return candidate
+
+    # --------------------------------------------------------
+    # Fallback:
+    #
+    # La OCR puede separar la CLABE en más de un renglón.
+    # --------------------------------------------------------
+
+    accumulated = ""
+
+    for line in candidates:
+
+        for word in line:
+
+            text = clean_word_text(
+                word.get("text", "")
+            )
+
+            digits = re.sub(
+                r"\D",
+                "",
+                text,
+            )
+
+            if not digits:
+                continue
+
+            accumulated += digits
+
+            if len(accumulated) == 18:
+                return accumulated
+
+            if len(accumulated) > 18:
+                return None
+
+    return None
+
+
+# ============================================================
+# EXTRACTOR DE CLIENTE
+# ============================================================
+
+
+def extract_numero_cliente_from_anchor(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+) -> Optional[str]:
+    """
+    Extrae el número de cliente desde:
+
+        NUMERO DE CLIENTE
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "NUMERO",
+            "DE",
+            "CLIENTE",
+        ),
+        expected_box=(
+            40.0,
+            140.0,
+            225.0,
+            245.0,
+        ),
+    )
+
+    if anchor is None:
+        return None
+
+    candidates = candidate_lines_after_anchor(
+        lines,
+        anchor,
+    )
+
+    for line in candidates:
+
+        value = re.sub(
+            r"\D",
+            "",
+            line_text(line),
+        )
+
+        if CLIENT_PATTERN.match(
+            value
+        ):
+            return value
+
+    return None
+
+
+# ============================================================
+# EXTRACTOR RFC
+# ============================================================
+
+
+def extract_rfc_from_anchor(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+) -> Optional[str]:
+    """
+    Extrae RFC desde la etiqueta RFC.
+
+    La validación evita confundir el RFC con números cercanos.
+    """
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "RFC",
+        ),
+        expected_box=(
+            40.0,
+            110.0,
+            248.0,
+            265.0,
+        ),
+    )
+
+    if anchor is None:
+        return None
+
+    candidates = candidate_lines_after_anchor(
+        lines,
+        anchor,
+    )
+
+    for line in candidates:
+
+        raw = line_text(
+            line
+        )
+
+        candidate = re.sub(
+            r"[^A-Z0-9Ñ&]",
+            "",
+            raw.upper(),
+        )
+
+        if RFC_PATTERN.match(
+            candidate
+        ):
+            return candidate
+
+    return None
+
+
+# ============================================================
+# EXTRACTOR DE PERIODO
+# ============================================================
+
+
+def extract_dates(
+    text: str,
+) -> List[str]:
+    """
+    Extrae fechas dd/mm/yyyy o dd-mm-yyyy.
+    """
+
+    return DATE_PATTERN.findall(
+        text
+    )
+
+
+def normalize_date(
+    value: str,
+) -> str:
+    """
+    Normaliza separador de fecha a '/'.
+    """
+
+    return value.replace(
+        "-",
+        "/",
+    )
+
+
+def extract_periodo(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+) -> Tuple[
+    Optional[str],
+    Optional[str],
+]:
+    """
+    Busca la línea que representa:
+
+        Periodo del 01/06/2026 al 30/06/2026
+
+    No depende de coordenadas exactas.
+
+    Primero utiliza el texto "Periodo".
+
+    Después exige dos fechas.
+    """
+
+    candidates = []
+
+    for line in lines:
+
+        normalized = normalized_line_text(
+            line
+        )
+
+        if "PERIODO" not in normalized:
+            continue
+
+        dates = extract_dates(
+            line_text(line)
+        )
+
+        if len(dates) >= 2:
+
+            candidates.append(
+                (
+                    line,
+                    dates[:2],
+                )
+            )
+
+    if not candidates:
+        return (
+            None,
+            None,
+        )
+
+    # Preferimos la línea más cercana a la coordenada
+    # de referencia del documento original.
+    best_line = None
+    best_dates = None
+    best_distance = float("inf")
+
+    expected_y = 277.0
+
+    for line, dates in candidates:
+
+        y = line_center_y(
+            line
+        )
+
+        distance = abs(
+            y - expected_y
+        )
+
+        if distance < best_distance:
+
+            best_distance = distance
+            best_line = line
+            best_dates = dates
+
+    if best_line is None or best_dates is None:
+        return (
+            None,
+            None,
+        )
+
+    periodo_inicio = normalize_date(
+        best_dates[0]
+    )
+
+    periodo_fin = normalize_date(
+        best_dates[1]
+    )
+
+    return (
+        periodo_inicio,
+        periodo_fin,
+    )
+
+
+# ============================================================
+# EXTRACTOR DEL PRODUCTO
 # ============================================================
 
 
 def extract_producto_principal(
-    words: List[Dict[str, Any]],
+    words: Sequence[Dict[str, Any]],
 ) -> Optional[str]:
     """
-    Extrae directamente el producto principal desde
-    su coordenada espacial.
+    Extrae el producto principal.
 
-    Ejemplo:
+    En el formato proporcionado, la información aparece como:
 
-        Libretón Básico Cuenta Digital
+        CUENTA PREMIER
+
+    Se busca primero por texto y posteriormente se utiliza la
+    coordenada como criterio de preferencia.
     """
 
-    return text_from_box(
+    lines = group_words_into_lines(
+        words
+    )
+
+    candidates = []
+
+    for line in lines:
+
+        normalized = normalized_line_text(
+            line
+        )
+
+        if (
+            "CUENTA" in normalized
+            and
+            "PREMIER" in normalized
+        ):
+            candidates.append(
+                line
+            )
+
+    if candidates:
+
+        expected_x, expected_y = box_center(
+            BOX_PRODUCTO_PRINCIPAL
+        )
+
+        best = min(
+            candidates,
+            key=lambda line: (
+                abs(
+                    line_center_x(line)
+                    -
+                    expected_x
+                )
+                +
+                abs(
+                    line_center_y(line)
+                    -
+                    expected_y
+                )
+            ),
+        )
+
+        text = line_text(
+            best
+        )
+
+        # ----------------------------------------------------
+        # Nos interesa el nombre del producto y no el resto
+        # del encabezado.
+        # ----------------------------------------------------
+
+        normalized = normalize_text(
+            text
+        )
+
+        if (
+            "CUENTA PREMIER"
+            in normalized
+        ):
+            return "Cuenta Premier"
+
+        return text.strip()
+
+    # --------------------------------------------------------
+    # Fallback espacial
+    # --------------------------------------------------------
+
+    selected = words_in_box(
         words,
         BOX_PRODUCTO_PRINCIPAL,
     )
 
-
-def extract_periodo_inicio(
-    words: List[Dict[str, Any]],
-) -> Optional[str]:
-    """
-    Extrae directamente la fecha inicial del periodo.
-
-    Ejemplo:
-
-        05/05/2026
-    """
-
-    return text_from_box(
-        words,
-        BOX_PERIODO_INICIO,
+    text = line_text(
+        selected
     )
 
+    if not text:
+        return None
 
-def extract_periodo_fin(
-    words: List[Dict[str, Any]],
-) -> Optional[str]:
-    """
-    Extrae directamente la fecha final del periodo.
-
-    Ejemplo:
-
-        04/06/2026
-    """
-
-    return text_from_box(
-        words,
-        BOX_PERIODO_FIN,
+    normalized = normalize_text(
+        text
     )
 
+    if (
+        "CUENTA" in normalized
+        and
+        "PREMIER" in normalized
+    ):
+        return "Cuenta Premier"
 
-def extract_fecha_corte(
-    words: List[Dict[str, Any]],
-) -> Optional[str]:
+    return None
+
+
+# ============================================================
+# EXTRACTOR NOMBRE DEL CLIENTE
+# ============================================================
+
+
+def is_probable_person_name(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
     """
-    Extrae directamente la fecha de corte desde
-    su coordenada espacial.
+    Determina si un renglón parece corresponder a un nombre
+    de cliente.
 
-    Ejemplo:
-
-        04/06/2026
+    Se evitan textos comerciales y etiquetas.
     """
 
-    return text_from_box(
-        words,
-        BOX_FECHA_CORTE,
+    text = line_text(
+        line
     )
 
-
-def extract_numero_cuenta(
-    words: List[Dict[str, Any]],
-) -> Optional[str]:
-    """
-    Extrae directamente el número de cuenta desde
-    su coordenada espacial.
-
-    Ejemplo:
-
-        1546750943
-    """
-
-    return text_from_box(
-        words,
-        BOX_NUMERO_CUENTA,
+    normalized = normalize_text(
+        text
     )
 
+    if not text:
+        return False
 
-def extract_numero_cliente(
-    words: List[Dict[str, Any]],
-) -> Optional[str]:
-    """
-    Extrae directamente el número de cliente desde
-    su coordenada espacial.
+    # --------------------------------------------------------
+    # El nombre debe contener únicamente contenido textual
+    # razonable.
+    # --------------------------------------------------------
 
-    Ejemplo:
+    if any(
+        token in normalized
+        for token in (
+            "HSBC",
+            "CUENTA",
+            "PREMIER",
+            "ESTADO",
+            "RESUMEN",
+            "NUMERO",
+            "RFC",
+            "CLABE",
+            "PERIODO",
+            "SUCURSAL",
+            "INFORMATIVO",
+        )
+    ):
+        return False
 
-        A0289423
-    """
+    if re.search(
+        r"\d",
+        text,
+    ):
+        return False
 
-    return text_from_box(
-        words,
-        BOX_NUMERO_CLIENTE,
+    letters = re.findall(
+        r"[A-ZÁÉÍÓÚÜÑ]+",
+        text.upper(),
     )
 
+    if len(letters) < 2:
+        return False
 
-def extract_rfc(
-    words: List[Dict[str, Any]],
+    total_letters = sum(
+        len(value)
+        for value in letters
+    )
+
+    if total_letters < 5:
+        return False
+
+    return True
+
+
+def extract_nombre_cliente(
+    words: Sequence[Dict[str, Any]],
 ) -> Optional[str]:
     """
-    Extrae directamente el RFC desde su coordenada
-    espacial.
+    Extrae el nombre del cliente.
 
-    Ejemplo:
+    En el documento proporcionado aparece aproximadamente:
 
-        FASS770615SN6
+        JUAN ANTONIO GARCIA CARRADA
+
+    El extractor usa:
+
+        1. coordenada esperada;
+        2. agrupación en renglón;
+        3. validación textual;
+        4. descarte de encabezados comerciales.
     """
 
-    value = text_from_box(
-        words,
-        BOX_RFC,
+    lines = group_words_into_lines(
+        words
     )
+
+    candidate_lines = [
+        list(line)
+        for line in lines
+        if word_inside_box(
+            {
+                "x0": (
+                    line_bounds(line)[0]
+                ),
+                "x1": (
+                    line_bounds(line)[1]
+                ),
+                "top": (
+                    line_bounds(line)[2]
+                ),
+                "bottom": (
+                    line_bounds(line)[3]
+                ),
+                "page": (
+                    line[0].get(
+                        "page",
+                        1,
+                    )
+                    if line
+                    else 1
+                ),
+            },
+            BOX_NOMBRE_CLIENTE,
+            padding_x=25.0,
+            padding_y=20.0,
+        )
+    ]
+
+    candidates = [
+        line
+        for line in candidate_lines
+        if is_probable_person_name(line)
+    ]
+
+    if candidates:
+
+        expected_x, expected_y = box_center(
+            BOX_NOMBRE_CLIENTE
+        )
+
+        best = min(
+            candidates,
+            key=lambda line: (
+                abs(
+                    line_center_x(line)
+                    -
+                    expected_x
+                )
+                +
+                abs(
+                    line_center_y(line)
+                    -
+                    expected_y
+                )
+            ),
+        )
+
+        return line_text(
+            best
+        )
+
+    # --------------------------------------------------------
+    # Fallback:
+    #
+    # buscar palabras dentro de la región y reconstruirlas.
+    # --------------------------------------------------------
+
+    selected = words_in_box(
+        words,
+        BOX_NOMBRE_CLIENTE,
+        padding_x=30.0,
+        padding_y=25.0,
+    )
+
+    if not selected:
+        return None
+
+    selected_lines = group_words_into_lines(
+        selected
+    )
+
+    for line in selected_lines:
+
+        if is_probable_person_name(
+            line
+        ):
+            return line_text(
+                line
+            )
+
+    return None
+
+
+# ============================================================
+# VALIDACIONES
+# ============================================================
+
+
+def validate_numero_cuenta(
+    value: Optional[str],
+) -> Optional[str]:
+    """
+    Valida número de cuenta.
+    """
 
     if value is None:
         return None
 
-    return value.replace(" ", "")
-
-
-def extract_clabe(
-    words: List[Dict[str, Any]],
-) -> Optional[str]:
-    """
-    Extrae directamente la CLABE desde su coordenada
-    espacial.
-
-    BBVA puede entregar la CLABE como varios words:
-
-        012
-        180
-        01546750943
-        2
-
-    El extractor los concatena para obtener:
-
-        012180015467509432
-    """
-
-    value = numeric_text_from_box(
-        words,
-        BOX_CLABE,
+    value = re.sub(
+        r"\D",
+        "",
+        value,
     )
 
-    if value is None:
-        return None
-
-    if len(value) != 18:
+    if not ACCOUNT_PATTERN.match(
+        value
+    ):
         return None
 
     return value
 
 
-def extract_nombre_cliente(
-    words: List[Dict[str, Any]],
+def validate_numero_cliente(
+    value: Optional[str],
 ) -> Optional[str]:
     """
-    Extrae directamente el nombre del cliente desde
-    su coordenada espacial.
-
-    Ejemplo:
-
-        SELVA FRANCO SANCHEZ
+    Valida número de cliente.
     """
 
-    return text_from_box(
-        words,
-        BOX_NOMBRE_CLIENTE,
+    if value is None:
+        return None
+
+    value = re.sub(
+        r"\D",
+        "",
+        value,
     )
+
+    if not CLIENT_PATTERN.match(
+        value
+    ):
+        return None
+
+    return value
+
+
+def validate_clabe(
+    value: Optional[str],
+) -> Optional[str]:
+    """
+    Valida CLABE mexicana.
+
+    Por ahora la validación estructural se limita a:
+
+        exactamente 18 dígitos.
+
+    """
+
+    if value is None:
+        return None
+
+    value = re.sub(
+        r"\D",
+        "",
+        value,
+    )
+
+    if not CLABE_PATTERN.match(
+        value
+    ):
+        return None
+
+    return value
+
+
+def validate_rfc(
+    value: Optional[str],
+) -> Optional[str]:
+    """
+    Valida RFC.
+    """
+
+    if value is None:
+        return None
+
+    value = re.sub(
+        r"[^A-Z0-9Ñ&]",
+        "",
+        value.upper(),
+    )
+
+    if not RFC_PATTERN.match(
+        value
+    ):
+        return None
+
+    return value
+
+
+def validate_date(
+    value: Optional[str],
+) -> Optional[str]:
+    """
+    Valida formato dd/mm/yyyy.
+    """
+
+    if value is None:
+        return None
+
+    value = normalize_date(
+        value
+    )
+
+    if not re.fullmatch(
+        r"\d{2}/\d{2}/\d{4}",
+        value,
+    ):
+        return None
+
+    return value
 
 
 # ============================================================
@@ -528,15 +1877,17 @@ def extract_datos_cuenta_words(
     words: List[Dict[str, Any]],
 ) -> DatosCuenta:
     """
-    Extractor espacial de datos generales de cuenta BBVA.
+    Extractor robusto de datos generales de cuenta HSBC.
 
-    Este extractor NO utiliza etiquetas del documento para
-    encontrar los campos.
+    El extractor utiliza una estrategia híbrida:
 
-    Cada dato se obtiene exclusivamente desde la región
-    espacial previamente identificada en el PDF.
+        TEXTO
+            +
+        COORDENADAS
+            +
+        ESTRUCTURA DEL DOCUMENTO
 
-    Campos extraídos:
+    Los campos extraídos son:
 
         - producto_principal
         - periodo_inicio
@@ -547,43 +1898,216 @@ def extract_datos_cuenta_words(
         - rfc
         - clabe
         - nombre_cliente
+
+    ========================================================
+    FLUJO
+    ========================================================
+
+    1. Se agrupan las words por página.
+
+    2. Se identifica automáticamente la página con mayor
+       evidencia de ser la página de datos.
+
+    3. Se reconstruyen renglones a partir de las words.
+
+    4. Las etiquetas localizan la información:
+
+           NUMERO DE CUENTA
+           CLABE
+           NUMERO DE CLIENTE
+           RFC
+           PERIODO
+
+    5. Las coordenadas ayudan a seleccionar la coincidencia
+       correcta cuando una palabra o etiqueta aparece varias
+       veces.
+
+    6. Los valores se validan por formato.
+
+    7. Si la hoja inicial no existe, el algoritmo continúa
+       funcionando porque no depende del número absoluto
+       de página.
+
+    ========================================================
     """
 
-    producto_principal = extract_producto_principal(
+    if not words:
+        return DatosCuenta(
+            producto_principal=None,
+            periodo_inicio=None,
+            periodo_fin=None,
+            fecha_corte=None,
+            numero_cuenta=None,
+            numero_cliente=None,
+            rfc=None,
+            clabe=None,
+            nombre_cliente=None,
+        )
+
+    # ========================================================
+    # 1. IDENTIFICAR PÁGINA DE DATOS
+    # ========================================================
+
+    data_page = find_data_page(
         words
     )
 
-    periodo_inicio = extract_periodo_inicio(
-        words
+    # --------------------------------------------------------
+    # Si no encontramos una página claramente identificable,
+    # utilizamos todas las words como fallback.
+    # --------------------------------------------------------
+
+    if data_page is not None:
+
+        data_words = [
+            word
+            for word in words
+            if int(
+                word.get(
+                    "page",
+                    1,
+                )
+            )
+            == data_page
+        ]
+
+    else:
+
+        data_words = list(
+            words
+        )
+
+    # ========================================================
+    # 2. RECONSTRUIR RENGLONES
+    # ========================================================
+
+    lines = group_words_into_lines(
+        data_words
     )
 
-    periodo_fin = extract_periodo_fin(
-        words
+    # ========================================================
+    # 3. PRODUCTO PRINCIPAL
+    # ========================================================
+
+    producto_principal = (
+        extract_producto_principal(
+            data_words
+        )
     )
 
-    fecha_corte = extract_fecha_corte(
-        words
+    # ========================================================
+    # 4. NOMBRE DEL CLIENTE
+    # ========================================================
+
+    nombre_cliente = (
+        extract_nombre_cliente(
+            data_words
+        )
     )
 
-    numero_cuenta = extract_numero_cuenta(
-        words
+    # ========================================================
+    # 5. NUMERO DE CUENTA
+    # ========================================================
+
+    numero_cuenta = (
+        extract_account_from_anchor(
+            lines
+        )
     )
 
-    numero_cliente = extract_numero_cliente(
-        words
+    numero_cuenta = (
+        validate_numero_cuenta(
+            numero_cuenta
+        )
     )
 
-    rfc = extract_rfc(
-        words
+    # ========================================================
+    # 6. CLABE
+    # ========================================================
+
+    clabe = (
+        extract_clabe_from_anchor(
+            lines
+        )
     )
 
-    clabe = extract_clabe(
-        words
+    clabe = validate_clabe(
+        clabe
     )
 
-    nombre_cliente = extract_nombre_cliente(
-        words
+    # ========================================================
+    # 7. NUMERO DE CLIENTE
+    # ========================================================
+
+    numero_cliente = (
+        extract_numero_cliente_from_anchor(
+            lines
+        )
     )
+
+    numero_cliente = (
+        validate_numero_cliente(
+            numero_cliente
+        )
+    )
+
+    # ========================================================
+    # 8. RFC
+    # ========================================================
+
+    rfc = (
+        extract_rfc_from_anchor(
+            lines
+        )
+    )
+
+    rfc = validate_rfc(
+        rfc
+    )
+
+    # ========================================================
+    # 9. PERIODO
+    # ========================================================
+
+    periodo_inicio, periodo_fin = (
+        extract_periodo(
+            lines
+        )
+    )
+
+    periodo_inicio = (
+        validate_date(
+            periodo_inicio
+        )
+    )
+
+    periodo_fin = (
+        validate_date(
+            periodo_fin
+        )
+    )
+
+    # ========================================================
+    # 10. FECHA DE CORTE
+    # ========================================================
+    #
+    # En el layout HSBC proporcionado, el periodo es:
+    #
+    #     Periodo del 01/06/2026 al 30/06/2026
+    #
+    # Por lo tanto el cierre corresponde a la fecha final.
+    #
+    # Si posteriormente encontramos otro layout HSBC que
+    # contenga una etiqueta específica "Fecha de corte", esta
+    # función puede ampliarse sin modificar el resto del
+    # extractor.
+    # ========================================================
+
+    fecha_corte = periodo_fin
+
+    # ========================================================
+    # 11. DEVOLVER MODELO
+    # ========================================================
 
     return DatosCuenta(
         producto_principal=producto_principal,
