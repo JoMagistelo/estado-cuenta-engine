@@ -2378,12 +2378,12 @@ def main(page: ft.Page):
             ft.Container(
                 content=ft.Image(
                     src=str(LOGO_PATH),
-                    width=105,
-                    height=70,
+                    width=180,
+                    height=120,
                     fit=ft.BoxFit.CONTAIN,
                 ),
-                width=115,
-                height=70,
+                width=185,
+                height=125,
                 alignment=ft.Alignment.CENTER,
             )
         )
@@ -2393,17 +2393,17 @@ def main(page: ft.Page):
             controls=[
                 ft.Text(
                     "Secretaría Anticorrupción y Buen Gobierno",
-                    size=15,
+                    size=13,
                     weight=ft.FontWeight.W_500,
                 ),
                 ft.Text(
                     "Dirección General de Evaluación de Confianza",
-                    size=13,
+                    size=11,
                     weight=ft.FontWeight.W_500,
                 ),
                 ft.Text(
                     "Departamento de Investigación de Antecedentes",
-                    size=13,
+                    size=10,
                     weight=ft.FontWeight.W_500,
                 ),
             ],
