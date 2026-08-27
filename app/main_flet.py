@@ -224,7 +224,7 @@ def main(page: ft.Page):
     #
     # ========================================================
 
-    UI_SCALE = 0.90
+    UI_SCALE = 0.85
 
     # Scroll global de la aplicación
     page.scroll = ft.ScrollMode.AUTO
@@ -328,21 +328,6 @@ def main(page: ft.Page):
             content=ft.Column(
                 controls=[
 
-                    ft.Text(
-                        "Recomendación importante",
-                        size=16,
-                        weight=ft.FontWeight.BOLD,
-                        color=GOB_GOLD,
-                    ),
-
-                    ft.Text(
-                        "Se recomienda eliminar de los estados de cuenta "
-                        "las páginas que no contengan información relevante "
-                        "antes de procesarlos. Esto ayuda a mantener el "
-                        "documento limpio y facilita la revisión de los "
-                        "resultados extraídos.",
-                    ),
-
                     ft.Divider(),
 
                     ft.Text(
@@ -393,21 +378,20 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
+                        "Actualmente se procesan estados de cuenta "
+                        "digitales de:",
+                    ),
+
+                    ft.Text(
                         "BBVA",
                         size=14,
                         weight=ft.FontWeight.BOLD,
                     ),
 
                     ft.Text(
-                        "Actualmente se procesan estados de cuenta "
-                        "digitales de:",
-                    ),
-
-                    ft.Text(
                         "• Libretón Básico\n"
-                        "• Básico\n"
-                        "• Nómina\n"
-                        "• Premium",
+                        "• Libretón Nómina\n"
+                        "• Libretón Premium",
                     ),
 
                     ft.Text(
@@ -417,23 +401,15 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Actualmente se procesan:",
-                    ),
-
-                    ft.Text(
                         "• Nómina Banorte\n"
                         "• Nómina Banorte sin chequera\n"
-                        "• ENLACE NEGOCIOS",
+                        "• Enlace Negocios",
                     ),
 
                     ft.Text(
                         "Banamex",
                         size=14,
                         weight=ft.FontWeight.BOLD,
-                    ),
-
-                    ft.Text(
-                        "Actualmente se encuentra habilitado:",
                     ),
 
                     ft.Text(
@@ -449,7 +425,7 @@ def main(page: ft.Page):
 
                     ft.Text(
                         "• Banamex Premium\n"
-                        "• HSBC digital",
+                        "• HSBC digital y OCR",
                     ),
 
                     ft.Divider(),
@@ -2147,6 +2123,13 @@ def main(page: ft.Page):
 
                 return
 
+            # =================================================
+            # MOSTRAR SECCIONES DE RESULTADOS
+            # =================================================
+
+            auditoria_section.visible = True
+            export_section.visible = True
+
             loading_ring.visible = True
 
             status_text.value = (
@@ -2413,6 +2396,91 @@ def main(page: ft.Page):
     )
 
     # ========================================================
+    # SECCIÓN DE AUDITORÍA
+    # ========================================================
+    #
+    # Se mantiene oculta hasta que el usuario seleccione
+    # al menos un archivo PDF.
+    #
+    # ========================================================
+
+    auditoria_section = ft.Column(
+        controls=[
+
+            ft.Text(
+                "🔍 Auditoría de Resultados",
+                size=24,
+                weight=ft.FontWeight.BOLD,
+            ),
+
+            # =================================================
+            # TABLA + SELECTOR
+            # =================================================
+
+            ft.Row(
+                controls=[
+                    processing_summary_view,
+
+                    ft.Container(
+                        content=dropdown_files,
+                        width=390,
+                        padding=10,
+                    ),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.START,
+                spacing=15,
+            ),
+
+            auditoria_view,
+
+        ],
+        spacing=0,
+        visible=False,
+    )
+
+    # ========================================================
+    # SECCIÓN DE EXPORTACIÓN
+    # ========================================================
+    #
+    # Se mantiene oculta hasta que el usuario seleccione
+    # al menos un archivo PDF.
+    #
+    # ========================================================
+
+    export_section = ft.Column(
+        controls=[
+
+            ft.Divider(),
+
+            ft.Text(
+                "📤 Exportar Todos los Resultados a Excel",
+                size=24,
+                weight=ft.FontWeight.BOLD,
+            ),
+
+            ft.Container(
+                content=ft.Text(
+                    "Haz clic en el botón para generar un único archivo "
+                    "Excel con los datos de todos los estados de cuenta "
+                    "procesados."
+                ),
+                padding=ft.Padding.only(
+                    bottom=10,
+                ),
+            ),
+
+            export_button,
+
+            ft.Container(
+                height=50,
+            ),
+
+        ],
+        spacing=0,
+        visible=False,
+    )
+
+    # ========================================================
     # CONTENIDO PRINCIPAL
     # ========================================================
     #
@@ -2465,7 +2533,6 @@ def main(page: ft.Page):
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
 
-
             ft.Divider(),
 
             # =================================================
@@ -2482,66 +2549,18 @@ def main(page: ft.Page):
                 spacing=10,
             ),
 
-            ft.Divider(),
-
             # =================================================
             # AUDITORÍA
             # =================================================
 
-            ft.Text(
-                "🔍 Auditoría de Resultados",
-                size=24,
-                weight=ft.FontWeight.BOLD,
-            ),
-
-            # =================================================
-            # TABLA + SELECTOR
-            # =================================================
-
-            ft.Row(
-                controls=[
-                    processing_summary_view,
-
-                    ft.Container(
-                        content=dropdown_files,
-                        width=390,
-                        padding=10,
-                    ),
-                ],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-                spacing=15,
-            ),
-
-            auditoria_view,
-
-            ft.Divider(),
+            auditoria_section,
 
             # =================================================
             # EXPORTACIÓN
             # =================================================
 
-            ft.Text(
-                "📤 Exportar Todos los Resultados a Excel",
-                size=24,
-                weight=ft.FontWeight.BOLD,
-            ),
+            export_section,
 
-            ft.Container(
-                content=ft.Text(
-                    "Haz clic en el botón para generar un único archivo "
-                    "Excel con los datos de todos los estados de cuenta "
-                    "procesados."
-                ),
-                padding=ft.Padding.only(
-                    bottom=10,
-                ),
-            ),
-
-            export_button,
-
-            ft.Container(
-                height=50,
-            ),
         ],
         spacing=0,
     )
@@ -2550,7 +2569,10 @@ def main(page: ft.Page):
     # ESCALA GLOBAL
     # ========================================================
 
-    app_content.scale = UI_SCALE
+    app_content.scale = ft.Scale(
+        scale=UI_SCALE,
+        alignment=ft.Alignment.TOP_LEFT,
+    )
 
     page.add(
         app_content
