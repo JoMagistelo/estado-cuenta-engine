@@ -1,237 +1,344 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from dataclasses import dataclass
 from math import hypot
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from models.resumen_financiero import ResumenFinanciero
 
 
 # ============================================================
-# CONFIGURACIÓN GENERAL
+# CONFIGURACIÓN ESPACIAL — RESUMEN FINANCIERO BANAMEX
 # ============================================================
 #
-# Este extractor trabaja EXCLUSIVAMENTE mediante coordenadas
-# espaciales.
+# El extractor conserva las cajas históricas de "MiCuenta" y
+# agrega "Cuenta Base Banamex" mediante perfiles de layout.
 #
-# NO depende de que las palabras vengan agrupadas.
-#
-# Cada elemento obtenido por pdfplumber representa una palabra
-# independiente con sus propias coordenadas:
-#
-#     {
-#         "text": "...",
-#         "x0": ...,
-#         "x1": ...,
-#         "top": ...,
-#         "bottom": ...,
-#         "page": ...
-#     }
-#
-# Por lo tanto, las cajas se definen alrededor de la CELDA
-# donde vive el valor y no alrededor de una frase completa.
-#
-# La estructura está diseñada para tolerar:
-#
-#   - pequeños desplazamientos verticales
-#   - pequeños desplazamientos horizontales
-#   - cambios ligeros de espaciado
-#   - cambios ligeros en el ancho de las palabras
-#   - diferencias pequeñas entre estados
-#
-# Los campos que no fueron observados en las coordenadas
-# suministradas se retornan como "N/A".
+# Cada perfil contiene sus señales de detección y las celdas
+# de sus valores. La lógica para validar, elegir y convertir
+# candidatos es única y compartida por todos los perfiles.
 #
 # ============================================================
 
+
+Box = tuple[float, float, float, float]
 
 PAGE_GENERAL = 1
-
 NA_VALUE = "N/A"
-
-
-# ============================================================
-# TOLERANCIAS ESPACIALES
-# ============================================================
-#
-# Las coordenadas proporcionadas corresponden a un documento
-# concreto.
-#
-# No queremos depender de coincidencias exactas.
-#
-# Por eso las cajas se expanden mediante estas tolerancias.
-#
-# Una modificación pequeña del PDF no debería romper el
-# extractor.
-#
-# ============================================================
 
 TOLERANCE_X = 6.0
 TOLERANCE_Y = 4.0
 
 
+@dataclass(frozen=True, slots=True)
+class FieldRegion:
+    """Página y caja espacial en la que vive un campo."""
+
+    page: int
+    box: Box
+
+
+@dataclass(frozen=True, slots=True)
+class ResumenLayout:
+    """Perfil espacial de un resumen financiero Banamex."""
+
+    key: str
+    markers: tuple[tuple[int, str], ...]
+    saldo_promedio: FieldRegion
+    dias_periodo: FieldRegion
+    saldo_anterior: FieldRegion
+    depositos_abonos: FieldRegion
+    retiros_cargos: FieldRegion
+    saldo_final: FieldRegion
+
+
 # ============================================================
-# CAJAS ESPACIALES
+# LAYOUT HISTÓRICO — MICUENTA
 # ============================================================
 #
-# Todas las coordenadas provienen del estado de cuenta
-# proporcionado.
-#
-# La caja NO intenta representar únicamente la palabra.
-#
-# Representa la región/celda donde vive el valor.
+# Se conservan exactamente las cajas originales y sus nombres
+# públicos BOX_* para mantener compatibilidad con imports y
+# pruebas existentes.
 #
 # ============================================================
 
 
-# ------------------------------------------------------------
-# SALDO ANTERIOR
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $65.68
-#
-# Coordenadas observadas:
-#
-#     x0 = 289.500
-#     x1 = 317.022
-#     top = 481.563
-#     bottom = 490.563
-#
-# ------------------------------------------------------------
+BOX_SALDO_ANTERIOR: Box = (
+    260.0,
+    335.0,
+    476.0,
+    497.0,
+)
 
-BOX_SALDO_ANTERIOR = (
-    260.0,   # x0
-    335.0,   # x1
-    476.0,   # top
-    497.0,   # bottom
+BOX_DEPOSITOS_ABONOS: Box = (
+    250.0,
+    335.0,
+    487.0,
+    506.0,
+)
+
+BOX_RETIROS_CARGOS: Box = (
+    250.0,
+    335.0,
+    498.0,
+    519.0,
+)
+
+BOX_SALDO_FINAL: Box = (
+    255.0,
+    340.0,
+    509.0,
+    534.0,
+)
+
+BOX_SALDO_PROMEDIO: Box = (
+    175.0,
+    250.0,
+    535.0,
+    560.0,
+)
+
+BOX_DIAS_PERIODO: Box = (
+    205.0,
+    250.0,
+    546.0,
+    568.0,
 )
 
 
-# ------------------------------------------------------------
-# DEPÓSITOS / ABONOS
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $61,105.00
-#
-# Coordenadas:
-#
-#     x0 = 270.000
-#     x1 = 315.036
-#     top = 492.963
-#     bottom = 501.963
-#
-# ------------------------------------------------------------
-
-BOX_DEPOSITOS_ABONOS = (
-    250.0,   # x0
-    335.0,   # x1
-    487.0,   # top
-    506.0,   # bottom
+LAYOUT_MICUENTA = ResumenLayout(
+    key="micuenta",
+    markers=(
+        (PAGE_GENERAL, "MICUENTA"),
+        (PAGE_GENERAL, "MI CUENTA"),
+    ),
+    saldo_promedio=FieldRegion(
+        PAGE_GENERAL,
+        BOX_SALDO_PROMEDIO,
+    ),
+    dias_periodo=FieldRegion(
+        PAGE_GENERAL,
+        BOX_DIAS_PERIODO,
+    ),
+    saldo_anterior=FieldRegion(
+        PAGE_GENERAL,
+        BOX_SALDO_ANTERIOR,
+    ),
+    depositos_abonos=FieldRegion(
+        PAGE_GENERAL,
+        BOX_DEPOSITOS_ABONOS,
+    ),
+    retiros_cargos=FieldRegion(
+        PAGE_GENERAL,
+        BOX_RETIROS_CARGOS,
+    ),
+    saldo_final=FieldRegion(
+        PAGE_GENERAL,
+        BOX_SALDO_FINAL,
+    ),
 )
 
 
-# ------------------------------------------------------------
-# RETIROS / CARGOS
-# ------------------------------------------------------------
+# ============================================================
+# LAYOUT NUEVO — CUENTA BASE BANAMEX
+# ============================================================
 #
-# Valor observado:
+# Valores observados en página 1:
 #
-#     $59,970.68
+#     Saldo Anterior       y ~= 401.23
+#     Depósitos            y ~= 413.14
+#     Retiros              y ~= 424.64
+#     Saldo Final          y ~= 436.14
+#     Saldo Promedio       y ~= 473.34
+#     Días Transcurridos   y ~= 484.84
 #
-# Coordenadas:
+# Las cajas separan las filas; las tolerancias globales se
+# aplican después para absorber desplazamientos pequeños.
 #
-#     x0 = 270.000
-#     x1 = 315.036
-#     top = 504.363
-#     bottom = 513.363
-#
-# ------------------------------------------------------------
+# ============================================================
 
-BOX_RETIROS_CARGOS = (
-    250.0,   # x0
-    335.0,   # x1
-    498.0,   # top
-    519.0,   # bottom
+
+BOX_SALDO_ANTERIOR_CUENTA_BASE: Box = (
+    270.0,
+    342.0,
+    397.0,
+    405.0,
+)
+
+BOX_DEPOSITOS_ABONOS_CUENTA_BASE: Box = (
+    270.0,
+    342.0,
+    409.0,
+    417.0,
+)
+
+BOX_RETIROS_CARGOS_CUENTA_BASE: Box = (
+    270.0,
+    342.0,
+    420.5,
+    428.5,
+)
+
+BOX_SALDO_FINAL_CUENTA_BASE: Box = (
+    280.0,
+    347.0,
+    432.0,
+    440.0,
+)
+
+BOX_SALDO_PROMEDIO_CUENTA_BASE: Box = (
+    180.0,
+    250.0,
+    464.0,
+    482.0,
+)
+
+BOX_DIAS_PERIODO_CUENTA_BASE: Box = (
+    205.0,
+    250.0,
+    476.0,
+    493.0,
 )
 
 
-# ------------------------------------------------------------
-# SALDO FINAL
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $1,200.00
-#
-# Coordenadas:
-#
-#     x0 = 275.700
-#     x1 = 324.628
-#     top = 515.677
-#     bottom = 526.677
-#
-# ------------------------------------------------------------
-
-BOX_SALDO_FINAL = (
-    255.0,   # x0
-    340.0,   # x1
-    509.0,   # top
-    534.0,   # bottom
+LAYOUT_CUENTA_BASE = ResumenLayout(
+    key="cuenta_base",
+    markers=(
+        (
+            PAGE_GENERAL,
+            "RESUMEN GENERAL CUENTA BASE BANAMEX",
+        ),
+        (PAGE_GENERAL, "CUENTA BASE BANAMEX"),
+    ),
+    saldo_promedio=FieldRegion(
+        PAGE_GENERAL,
+        BOX_SALDO_PROMEDIO_CUENTA_BASE,
+    ),
+    dias_periodo=FieldRegion(
+        PAGE_GENERAL,
+        BOX_DIAS_PERIODO_CUENTA_BASE,
+    ),
+    saldo_anterior=FieldRegion(
+        PAGE_GENERAL,
+        BOX_SALDO_ANTERIOR_CUENTA_BASE,
+    ),
+    depositos_abonos=FieldRegion(
+        PAGE_GENERAL,
+        BOX_DEPOSITOS_ABONOS_CUENTA_BASE,
+    ),
+    retiros_cargos=FieldRegion(
+        PAGE_GENERAL,
+        BOX_RETIROS_CARGOS_CUENTA_BASE,
+    ),
+    saldo_final=FieldRegion(
+        PAGE_GENERAL,
+        BOX_SALDO_FINAL_CUENTA_BASE,
+    ),
 )
 
 
-# ------------------------------------------------------------
-# SALDO PROMEDIO
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     $1,676.00
-#
-# Coordenadas:
-#
-#     x0 = 191.400
-#     x1 = 231.432
-#     top = 541.263
-#     bottom = 550.263
-#
-# ------------------------------------------------------------
-
-BOX_SALDO_PROMEDIO = (
-    175.0,   # x0
-    250.0,   # x1
-    535.0,   # top
-    560.0,   # bottom
+BANAMEX_LAYOUTS = (
+    LAYOUT_CUENTA_BASE,
+    LAYOUT_MICUENTA,
 )
 
+DEFAULT_LAYOUT = LAYOUT_MICUENTA
 
-# ------------------------------------------------------------
-# DÍAS DEL PERIODO
-# ------------------------------------------------------------
-#
-# Valor observado:
-#
-#     31
-#
-# Coordenadas:
-#
-#     x0 = 224.700
-#     x1 = 234.708
-#     top = 552.663
-#     bottom = 561.663
-#
-# ------------------------------------------------------------
 
-BOX_DIAS_PERIODO = (
-    205.0,   # x0
-    250.0,   # x1
-    546.0,   # top
-    568.0,   # bottom
-)
+# ============================================================
+# DETECCIÓN DE LAYOUT
+# ============================================================
+
+
+def normalize_text(value: str) -> str:
+    """Normaliza texto para comparar señales del layout."""
+
+    normalized = unicodedata.normalize(
+        "NFD",
+        str(value or ""),
+    )
+
+    normalized = "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    )
+
+    normalized = normalized.upper()
+    normalized = re.sub(r"[^A-Z0-9]+", " ", normalized)
+
+    return " ".join(normalized.split())
+
+
+def _page_texts(
+    words: List[Dict[str, Any]],
+) -> Dict[int, str]:
+    """Reconstruye texto normalizado por página para detección."""
+
+    pages: Dict[int, List[Dict[str, Any]]] = {}
+
+    for word in words:
+        page = int(word.get("page", PAGE_GENERAL))
+        pages.setdefault(page, []).append(word)
+
+    result: Dict[int, str] = {}
+
+    for page, page_words in pages.items():
+        ordered = sorted(
+            page_words,
+            key=lambda word: (
+                word.get("top", 0),
+                word.get("x0", 0),
+            ),
+        )
+
+        result[page] = normalize_text(
+            " ".join(
+                str(word.get("text", ""))
+                for word in ordered
+            )
+        )
+
+    return result
+
+
+def detect_resumen_layout(
+    words: List[Dict[str, Any]],
+) -> ResumenLayout:
+    """
+    Selecciona el perfil con más señales reconocidas.
+
+    El fallback sigue siendo MiCuenta para que documentos
+    históricos sin marcador explícito conserven el resultado
+    anterior.
+    """
+
+    page_texts = _page_texts(words)
+
+    best_layout = DEFAULT_LAYOUT
+    best_score = 0
+
+    for layout in BANAMEX_LAYOUTS:
+        score = sum(
+            1
+            for page, marker in layout.markers
+            if normalize_text(marker) in page_texts.get(page, "")
+        )
+
+        if score > best_score:
+            best_layout = layout
+            best_score = score
+
+    return best_layout
+
+
+def _resolve_layout(
+    words: List[Dict[str, Any]],
+    layout: Optional[ResumenLayout],
+) -> ResumenLayout:
+    return layout or detect_resumen_layout(words)
 
 
 # ============================================================
@@ -240,17 +347,11 @@ BOX_DIAS_PERIODO = (
 
 
 def _expand_box(
-    box: tuple[float, float, float, float],
+    box: Box,
     tolerance_x: float = TOLERANCE_X,
     tolerance_y: float = TOLERANCE_Y,
-) -> tuple[float, float, float, float]:
-    """
-    Expande ligeramente una caja espacial.
-
-    Esto permite tolerar pequeños cambios de coordenadas entre
-    estados de cuenta sin tener que modificar inmediatamente
-    cada caja.
-    """
+) -> Box:
+    """Expande una caja para absorber variaciones pequeñas."""
 
     xmin, xmax, ymin, ymax = box
 
@@ -264,29 +365,20 @@ def _expand_box(
 
 def word_inside_box(
     word: Dict[str, Any],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int,
 ) -> bool:
-    """
-    Determina si una palabra pertenece a una región espacial.
+    """Determina por su centro si una palabra está en la caja."""
 
-    Se utiliza el CENTRO de la palabra, no solamente x0/x1.
-
-    Esto es importante porque las palabras son elementos
-    independientes y pueden desplazarse ligeramente dentro
-    de su celda.
-    """
-
-    page = word.get("page", 1)
+    page = int(word.get("page", PAGE_GENERAL))
 
     if page != page_number:
         return False
 
-    x0 = word.get("x0", 0)
-    x1 = word.get("x1", 0)
-
-    top = word.get("top", 0)
-    bottom = word.get("bottom", 0)
+    x0 = float(word.get("x0", 0))
+    x1 = float(word.get("x1", 0))
+    top = float(word.get("top", 0))
+    bottom = float(word.get("bottom", 0))
 
     xmin, xmax, ymin, ymax = _expand_box(box)
 
@@ -301,17 +393,10 @@ def word_inside_box(
 
 def words_in_box(
     words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int = PAGE_GENERAL,
 ) -> List[Dict[str, Any]]:
-    """
-    Devuelve todas las palabras pertenecientes a una región.
-
-    Las palabras se ordenan por:
-
-        1. posición vertical
-        2. posición horizontal
-    """
+    """Devuelve las palabras ordenadas dentro de una región."""
 
     result = [
         word
@@ -333,109 +418,42 @@ def words_in_box(
     return result
 
 
-def _parse_amount(value: Optional[str]) -> Optional[float]:
-    """
-    Convierte un texto numérico (posiblemente con comas y
-    símbolo de moneda) a float.
-
-    Devuelve None si el valor es None, vacío, o no puede
-    convertirse.
-    """
-
-    if value is None or value == NA_VALUE:
-        return None
-
-    cleaned_value = (
-        value.replace("$", "")
-        .replace(",", "")
-        .strip()
-    )
-
-    try:
-        return float(cleaned_value)
-    except (ValueError, TypeError):
-        return None
-
-
-def _parse_int(value: Optional[str]) -> Optional[int]:
-    """
-    Convierte un texto numérico a int.
-
-    Devuelve None si el valor es None, vacío, o no puede
-    convertirse.
-    """
-
-    if value is None or value == NA_VALUE:
-        return None
-
-    cleaned_value = (
-        value.strip()
-    )
-
-    try:
-        # Se convierte a float primero para manejar "31.0"
-        return int(float(cleaned_value))
-    except (ValueError, TypeError):
-        return None
-
-
 # ============================================================
-# UTILIDADES DE TEXTO / NÚMEROS
+# UTILIDADES DE TEXTO Y CONVERSIÓN
 # ============================================================
 
 
 _MONEY_PATTERN = re.compile(
     r"""
     ^
-
-    # signo opcional
+    \(?
     [-+]?
-
-    # símbolo monetario opcional
     \$?
-
-    # número
-    \d{1,3}
-
-    # grupos opcionales de miles
-    (?:,\d{3})*
-
-    # decimales opcionales
+    (?:
+        \d{1,3}(?:,\d{3})+
+        |
+        \d+
+    )
     (?:\.\d{2})?
-
+    \)?
+    -?
     $
-
     """,
     re.VERBOSE,
 )
 
 
 def is_money_text(text: str) -> bool:
-    """
-    Determina si un fragmento de texto representa una cantidad
-    monetaria.
-
-    Ejemplos válidos:
-
-        $65.68
-        $61,105.00
-        $59,970.68
-        $1,200.00
-        $1,676.00
-    """
+    """Indica si un fragmento representa una cantidad."""
 
     if not text:
         return False
 
-    value = text.strip()
-
-    return bool(_MONEY_PATTERN.fullmatch(value))
+    return bool(_MONEY_PATTERN.fullmatch(text.strip()))
 
 
 def is_integer_text(text: str) -> bool:
-    """
-    Determina si el texto es un entero simple.
-    """
+    """Indica si un fragmento es un entero simple."""
 
     if not text:
         return False
@@ -443,24 +461,66 @@ def is_integer_text(text: str) -> bool:
     return bool(re.fullmatch(r"\d{1,3}", text.strip()))
 
 
+def _parse_amount(value: Optional[str]) -> Optional[float]:
+    """Convierte texto monetario a float de forma segura."""
+
+    if value is None or value == NA_VALUE:
+        return None
+
+    cleaned_value = value.strip()
+    is_negative = False
+
+    if (
+        cleaned_value.startswith("(")
+        and cleaned_value.endswith(")")
+    ):
+        is_negative = True
+        cleaned_value = cleaned_value[1:-1]
+
+    if cleaned_value.endswith("-"):
+        is_negative = True
+        cleaned_value = cleaned_value[:-1]
+
+    cleaned_value = (
+        cleaned_value.replace("$", "")
+        .replace(",", "")
+        .strip()
+    )
+
+    try:
+        parsed = float(cleaned_value)
+    except (ValueError, TypeError):
+        return None
+
+    if is_negative:
+        parsed = -abs(parsed)
+
+    return parsed
+
+
+def _parse_int(value: Optional[str]) -> Optional[int]:
+    """Convierte texto entero de forma segura."""
+
+    if value is None or value == NA_VALUE:
+        return None
+
+    try:
+        return int(float(value.strip()))
+    except (ValueError, TypeError):
+        return None
+
+
 def _candidate_distance(
     word: Dict[str, Any],
     target_x: float,
     target_y: float,
 ) -> float:
-    """
-    Calcula la distancia entre el centro de una palabra y un
-    punto esperado.
+    """Distancia del centro de una palabra al centro esperado."""
 
-    Se utiliza para elegir el candidato más cercano cuando una
-    región contiene más de una palabra válida.
-    """
-
-    x0 = word.get("x0", 0)
-    x1 = word.get("x1", 0)
-
-    top = word.get("top", 0)
-    bottom = word.get("bottom", 0)
+    x0 = float(word.get("x0", 0))
+    x1 = float(word.get("x1", 0))
+    top = float(word.get("top", 0))
+    bottom = float(word.get("bottom", 0))
 
     center_x = (x0 + x1) / 2
     center_y = (top + bottom) / 2
@@ -471,12 +531,8 @@ def _candidate_distance(
     )
 
 
-def _box_center(
-    box: tuple[float, float, float, float],
-) -> tuple[float, float]:
-    """
-    Obtiene el centro geométrico de una caja.
-    """
+def _box_center(box: Box) -> tuple[float, float]:
+    """Devuelve el centro geométrico de una caja."""
 
     xmin, xmax, ymin, ymax = box
 
@@ -488,20 +544,11 @@ def _box_center(
 
 def extract_value_from_box(
     words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
-    validator,
+    box: Box,
+    validator: Callable[[str], bool],
     page_number: int = PAGE_GENERAL,
 ) -> Optional[str]:
-    """
-    Extrae el candidato válido más cercano al centro esperado
-    de una caja.
-
-    Esto hace que el extractor no dependa de que exista
-    exactamente una palabra en una coordenada fija.
-
-    Si existen varias palabras válidas dentro de la región,
-    se selecciona la más cercana al centro de la celda.
-    """
+    """Elige el candidato válido más cercano al centro."""
 
     selected = words_in_box(
         words=words,
@@ -509,19 +556,11 @@ def extract_value_from_box(
         page_number=page_number,
     )
 
-    candidates: List[Dict[str, Any]] = []
-
-    for word in selected:
-
-        text = str(
-            word.get("text", "")
-        ).strip()
-
-        if not text:
-            continue
-
-        if validator(text):
-            candidates.append(word)
+    candidates = [
+        word
+        for word in selected
+        if validator(str(word.get("text", "")).strip())
+    ]
 
     if not candidates:
         return None
@@ -536,21 +575,17 @@ def extract_value_from_box(
         )
     )
 
-    value = str(
-        candidates[0].get("text", "")
-    ).strip()
+    value = str(candidates[0].get("text", "")).strip()
 
     return value or None
 
 
 def extract_money_from_box(
     words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int = PAGE_GENERAL,
 ) -> Optional[str]:
-    """
-    Extrae una cantidad monetaria de una región.
-    """
+    """Extrae una cantidad monetaria de una región."""
 
     return extract_value_from_box(
         words=words,
@@ -562,18 +597,42 @@ def extract_money_from_box(
 
 def extract_integer_from_box(
     words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int = PAGE_GENERAL,
 ) -> Optional[str]:
-    """
-    Extrae un entero de una región.
-    """
+    """Extrae un entero de una región."""
 
     return extract_value_from_box(
         words=words,
         box=box,
         validator=is_integer_text,
         page_number=page_number,
+    )
+
+
+def _money_from_region(
+    words: List[Dict[str, Any]],
+    region: FieldRegion,
+) -> Optional[float]:
+    return _parse_amount(
+        extract_money_from_box(
+            words=words,
+            box=region.box,
+            page_number=region.page,
+        )
+    )
+
+
+def _integer_from_region(
+    words: List[Dict[str, Any]],
+    region: FieldRegion,
+) -> Optional[int]:
+    return _parse_int(
+        extract_integer_from_box(
+            words=words,
+            box=region.box,
+            page_number=region.page,
+        )
     )
 
 
@@ -584,148 +643,58 @@ def extract_integer_from_box(
 
 def extract_saldo_promedio(
     words: List[Dict[str, Any]],
+    layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
-    """
-    Extrae:
-
-        Saldo Promedio
-
-    Valor observado:
-
-        $1,676.00
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_SALDO_PROMEDIO,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
+    profile = _resolve_layout(words, layout)
+    return _money_from_region(words, profile.saldo_promedio)
 
 
 def extract_dias_periodo(
     words: List[Dict[str, Any]],
+    layout: Optional[ResumenLayout] = None,
 ) -> Optional[int]:
-    """
-    Extrae:
-
-        Días Transcurridos
-
-    Valor observado:
-
-        31
-    """
-
-    value = extract_integer_from_box(
-        words=words,
-        box=BOX_DIAS_PERIODO,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_int(value)
+    profile = _resolve_layout(words, layout)
+    return _integer_from_region(words, profile.dias_periodo)
 
 
 def extract_saldo_anterior(
     words: List[Dict[str, Any]],
+    layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
-    """
-    Extrae:
-
-        Saldo Anterior
-
-    Valor observado:
-
-        $65.68
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_SALDO_ANTERIOR,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
+    profile = _resolve_layout(words, layout)
+    return _money_from_region(words, profile.saldo_anterior)
 
 
 def extract_depositos_abonos(
     words: List[Dict[str, Any]],
+    layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
-    """
-    Extrae:
-
-        Depósitos
-
-    Valor observado:
-
-        $61,105.00
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_DEPOSITOS_ABONOS,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
+    profile = _resolve_layout(words, layout)
+    return _money_from_region(words, profile.depositos_abonos)
 
 
 def extract_retiros_cargos(
     words: List[Dict[str, Any]],
+    layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
-    """
-    Extrae:
-
-        Retiros
-
-    Valor observado:
-
-        $59,970.68
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_RETIROS_CARGOS,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
+    profile = _resolve_layout(words, layout)
+    return _money_from_region(words, profile.retiros_cargos)
 
 
 def extract_saldo_final(
     words: List[Dict[str, Any]],
+    layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
-    """
-    Extrae:
-
-        Saldo al 06 de febrero de 2026
-
-    Valor observado:
-
-        $1,200.00
-    """
-
-    value = extract_money_from_box(
-        words=words,
-        box=BOX_SALDO_FINAL,
-        page_number=PAGE_GENERAL,
-    )
-
-    return _parse_amount(value)
+    profile = _resolve_layout(words, layout)
+    return _money_from_region(words, profile.saldo_final)
 
 
 # ============================================================
-# CAMPOS NO DISPONIBLES EN LAS COORDENADAS PROPORCIONADAS
+# CAMPOS NO DISPONIBLES EN LOS LAYOUTS OBSERVADOS
 # ============================================================
 #
-# Estos campos forman parte del modelo ResumenFinanciero, pero
-# no aparecen en las coordenadas suministradas.
-#
-# Por indicación expresa:
-#
-#     -> se retorna N/A
-#
-# NO se intenta inferirlos.
+# Se conserva el contrato público del extractor original. No
+# se infieren conceptos que no estén inequívocamente presentes.
 #
 # ============================================================
 
@@ -733,110 +702,60 @@ def extract_saldo_final(
 def extract_tasa_bruta_anual(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Tasa Bruta Anual no fue
-    proporcionada.
-    """
-
     return None
 
 
 def extract_saldo_promedio_gravable(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Saldo Promedio Gravable no
-    fue proporcionada.
-    """
-
     return None
 
 
 def extract_intereses_a_favor(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Intereses a Favor no fue
-    proporcionada.
-    """
-
     return None
 
 
 def extract_isr_retenido(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a ISR Retenido no fue
-    proporcionada.
-    """
-
     return None
 
 
 def extract_cheques_pagados(
     words: List[Dict[str, Any]],
 ) -> Optional[int]:
-    """
-    La coordenada correspondiente a Cheques Pagados no fue
-    proporcionada.
-    """
-
     return None
 
 
 def extract_manejo_cuenta(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Manejo de Cuenta no fue
-    proporcionada.
-    """
-
     return None
 
 
 def extract_cargos_objetados(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Cargos Objetados no fue
-    proporcionada.
-    """
-
     return None
 
 
 def extract_abonos_objetados(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Abonos Objetados no fue
-    proporcionada.
-    """
-
     return None
 
 
 def extract_saldo_promedio_minimo_mensual(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Saldo Promedio Mínimo
-    Mensual no fue proporcionada.
-    """
-
     return None
 
 
 def extract_saldo_global(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
-    """
-    La coordenada correspondiente a Saldo Global no fue
-    proporcionada.
-    """
-
     return None
 
 
@@ -849,165 +768,54 @@ def extract_resumen_financiero_words(
     words: List[Dict[str, Any]],
 ) -> ResumenFinanciero:
     """
-    Extractor espacial del RESUMEN FINANCIERO BANAMEX.
+    Extrae el resumen financiero Banamex con selección previa
+    del perfil espacial adecuado.
 
-    El extractor utiliza exclusivamente coordenadas
-    espaciales.
+    Layouts soportados:
 
-    No depende de que las palabras de una etiqueta estén
-    agrupadas.
-
-    Ejemplo:
-
-        "Saldo Anterior"
-
-    llega como:
-
-        "Saldo"
-        "Anterior"
-
-    en dos objetos independientes.
-
-    Lo mismo sucede con:
-
-        "Días Transcurridos"
-
-    y cualquier otro texto del PDF.
-
-    Campos actualmente disponibles mediante las coordenadas
-    proporcionadas:
-
-        - saldo_promedio
-        - dias_periodo
-        - saldo_anterior
-        - depositos_abonos
-        - retiros_cargos
-        - saldo_final
-
-    Campos sin coordenadas proporcionadas:
-
-        - tasa_bruta_anual
-        - saldo_promedio_gravable
-        - intereses_a_favor
-        - isr_retenido
-        - cheques_pagados
-        - manejo_cuenta
-        - cargos_objetados
-        - abonos_objetados
-        - saldo_promedio_minimo_mensual
-        - saldo_global
-    
-    Estos últimos retornan None.
+        - MiCuenta (comportamiento histórico)
+        - Cuenta Base Banamex
     """
 
-    # --------------------------------------------------------
-    # CAMPOS OBSERVADOS
-    # --------------------------------------------------------
-
-    saldo_promedio = extract_saldo_promedio(
-        words
-    )
-
-    dias_periodo = extract_dias_periodo(
-        words
-    )
-
-    saldo_anterior = extract_saldo_anterior(
-        words
-    )
-
-    depositos_abonos = extract_depositos_abonos(
-        words
-    )
-
-    retiros_cargos = extract_retiros_cargos(
-        words
-    )
-
-    saldo_final = extract_saldo_final(
-        words
-    )
-
-    # --------------------------------------------------------
-    # CAMPOS NO OBSERVADOS
-    # --------------------------------------------------------
-
-    tasa_bruta_anual = extract_tasa_bruta_anual(
-        words
-    )
-
-    saldo_promedio_gravable = extract_saldo_promedio_gravable(
-        words
-    )
-
-    intereses_a_favor = extract_intereses_a_favor(
-        words
-    )
-
-    isr_retenido = extract_isr_retenido(
-        words
-    )
-
-    cheques_pagados = extract_cheques_pagados(
-        words
-    )
-
-    manejo_cuenta = extract_manejo_cuenta(
-        words
-    )
-
-    cargos_objetados = extract_cargos_objetados(
-        words
-    )
-
-    abonos_objetados = extract_abonos_objetados(
-        words
-    )
-
-    saldo_promedio_minimo_mensual = (
-        extract_saldo_promedio_minimo_mensual(
-            words
-        )
-    )
-
-    saldo_global = extract_saldo_global(
-        words
-    )
-
-    # --------------------------------------------------------
-    # RESULTADO
-    # --------------------------------------------------------
+    layout = detect_resumen_layout(words)
 
     return ResumenFinanciero(
-        saldo_promedio=saldo_promedio,
-
-        dias_periodo=dias_periodo,
-
-        tasa_bruta_anual=tasa_bruta_anual,
-
-        saldo_promedio_gravable=saldo_promedio_gravable,
-
-        intereses_a_favor=intereses_a_favor,
-
-        isr_retenido=isr_retenido,
-
-        cheques_pagados=cheques_pagados,
-
-        manejo_cuenta=manejo_cuenta,
-
-        cargos_objetados=cargos_objetados,
-
-        abonos_objetados=abonos_objetados,
-
-        saldo_anterior=saldo_anterior,
-
-        depositos_abonos=depositos_abonos,
-
-        retiros_cargos=retiros_cargos,
-
-        saldo_final=saldo_final,
-
-        saldo_promedio_minimo_mensual=saldo_promedio_minimo_mensual,
-
-        saldo_global=saldo_global,
+        saldo_promedio=extract_saldo_promedio(
+            words,
+            layout,
+        ),
+        dias_periodo=extract_dias_periodo(
+            words,
+            layout,
+        ),
+        tasa_bruta_anual=extract_tasa_bruta_anual(words),
+        saldo_promedio_gravable=(
+            extract_saldo_promedio_gravable(words)
+        ),
+        intereses_a_favor=extract_intereses_a_favor(words),
+        isr_retenido=extract_isr_retenido(words),
+        cheques_pagados=extract_cheques_pagados(words),
+        manejo_cuenta=extract_manejo_cuenta(words),
+        cargos_objetados=extract_cargos_objetados(words),
+        abonos_objetados=extract_abonos_objetados(words),
+        saldo_anterior=extract_saldo_anterior(
+            words,
+            layout,
+        ),
+        depositos_abonos=extract_depositos_abonos(
+            words,
+            layout,
+        ),
+        retiros_cargos=extract_retiros_cargos(
+            words,
+            layout,
+        ),
+        saldo_final=extract_saldo_final(
+            words,
+            layout,
+        ),
+        saldo_promedio_minimo_mensual=(
+            extract_saldo_promedio_minimo_mensual(words)
+        ),
+        saldo_global=extract_saldo_global(words),
     )

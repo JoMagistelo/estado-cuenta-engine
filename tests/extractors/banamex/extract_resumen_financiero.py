@@ -8,7 +8,7 @@ from parsers.banamex.extractors.resumen import (
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "edo_banamex1.pdf"
+PDF_PATH = ROOT / "data" / "banamex_cuenta_base_2024.pdf"
 
 
 def main():

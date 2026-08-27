@@ -27,6 +27,18 @@ BOX_CARGO = (345.0, 415.0, 0.0, 900.0)
 BOX_ABONO = (420.0, 505.0, 0.0, 900.0)
 BOX_SALDO = (515.0, 575.0, 0.0, 900.0)
 
+MOVEMENT_DATA_COLUMNS: Tuple[
+    Tuple[str, Tuple[float, float, float, float]],
+    ...,
+] = (
+    ("dia", BOX_DAY),
+    ("concepto", BOX_CONCEPTO),
+    ("referencia_serial", BOX_REFERENCIA_SERIAL),
+    ("cargo", BOX_CARGO),
+    ("abono", BOX_ABONO),
+    ("saldo", BOX_SALDO),
+)
+
 
 # ============================================================
 # CONFIGURACIÓN ESPACIAL — TABLAS SPEI
@@ -298,6 +310,31 @@ def primary_spei_column(
     best_overlap = 0.0
 
     for column_name, box in SPEI_DATA_COLUMNS:
+        overlap = horizontal_overlap_width(word, box)
+
+        if overlap > best_overlap:
+            best_name = column_name
+            best_overlap = overlap
+
+    return best_name
+
+
+def primary_movement_column(
+    word: Dict[str, Any],
+) -> Optional[str]:
+    """
+    Determina la columna principal de una word del detalle de
+    movimientos mediante el mayor solapamiento horizontal real.
+
+    Referencia / Serial se reconstruye con esta propiedad exclusiva
+    para impedir que una palabra de Descripción o Retiro/Cargo que
+    roce el límite invalide el renglón completo de referencia.
+    """
+
+    best_name: Optional[str] = None
+    best_overlap = 0.0
+
+    for column_name, box in MOVEMENT_DATA_COLUMNS:
         overlap = horizontal_overlap_width(word, box)
 
         if overlap > best_overlap:
@@ -1369,6 +1406,30 @@ def is_table_breaker_line(
     return False
 
 
+def is_spei_information_header_line(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    Detecta el encabezado real que inicia una sección informativa
+    SPEI después del detalle de movimientos.
+
+    Exigir ``INFORMACION`` y ``PERIODO`` evita confundir este cierre
+    estructural con el concepto ordinario de un movimiento SPEI.
+    """
+
+    normalized = normalize_text(line_text(line))
+
+    return (
+        "INFORMACION" in normalized
+        and "SPEI" in normalized
+        and "PERIODO" in normalized
+        and (
+            "ENVIADOS" in normalized
+            or "RECIBIDOS" in normalized
+        )
+    )
+
+
 def split_page_into_movement_rows(
     words: Sequence[Dict[str, Any]],
 ) -> List[MovementRow]:
@@ -1400,7 +1461,10 @@ def split_page_into_movement_rows(
                 current_row = None
             break
 
-        if table_started and is_table_breaker_line(line):
+        if table_started and (
+            is_table_breaker_line(line)
+            or is_spei_information_header_line(line)
+        ):
             if current_row is not None:
                 rows.append(current_row)
                 current_row = None
@@ -1421,11 +1485,13 @@ def split_page_into_movement_rows(
             continue
 
         if current_row is not None:
-            previous_line = current_row.lines[-1]
-            gap = line_center_y(line) - line_center_y(previous_line)
-
-            if 0.0 <= gap <= MOVEMENT_ROW_MAX_GAP:
-                current_row.lines.append(list(line))
+            # La siguiente línea con día delimita la próxima fila.
+            # Mientras no aparezca ese inicio ni un cierre explícito
+            # de tabla, toda línea pertenece al movimiento actual.
+            #
+            # No se usa una distancia vertical máxima: HSBC puede
+            # imprimir Referencia y Serial con separaciones variables.
+            current_row.lines.append(list(line))
 
     if current_row is not None:
         rows.append(current_row)
@@ -1512,14 +1578,49 @@ def extract_concepto(row: MovementRow) -> str:
 # REFERENCIA / SERIAL
 # ============================================================
 
+def is_reference_word_candidate(
+    word: Dict[str, Any],
+) -> bool:
+    """
+    Valida una word individual antes de reconstruir los renglones
+    de Referencia / Serial.
+
+    Un símbolo monetario situado exactamente sobre el límite con
+    Retiro/Cargo no debe invalidar una referencia legítima que
+    comparte su misma coordenada vertical.
+    """
+
+    text = clean_word_text(word.get("text", ""))
+    if not text:
+        return False
+
+    compact = re.sub(r"\s+", "", text)
+    if not compact or compact in ("$", "-"):
+        return False
+
+    return bool(REFERENCE_PATTERN.fullmatch(compact))
+
+
 def reference_serial_words(
     row: MovementRow,
 ) -> List[Dict[str, Any]]:
-    return words_from_rows_in_box(
-        row,
-        BOX_REFERENCIA_SERIAL,
-        padding_x=8.0,
+    selected = [
+        word
+        for line in row.lines
+        for word in line
+        if primary_movement_column(word) == "referencia_serial"
+        and is_reference_word_candidate(word)
+    ]
+
+    selected.sort(
+        key=lambda word: (
+            safe_page(word),
+            safe_float(word.get("top", 0.0)),
+            safe_float(word.get("x0", 0.0)),
+        )
     )
+
+    return selected
 
 
 def reference_serial_lines(
@@ -2114,8 +2215,19 @@ def enrich_movements_from_spei(
 
     indexes = build_spei_match_indexes(spei_rows)
 
-    for movement in movements:
-        spei_match = find_spei_match(movement, indexes)
+    # Primero se resuelven todas las coincidencias sobre el estado
+    # original e inmutable del lote. Después se aplican los mapeos.
+    # Así, el enriquecimiento de un movimiento nunca puede influir
+    # en la resolución de ningún movimiento posterior.
+    resolved_matches = [
+        find_spei_match(movement, indexes)
+        for movement in movements
+    ]
+
+    for movement, spei_match in zip(
+        movements,
+        resolved_matches,
+    ):
         if spei_match is None:
             continue
 

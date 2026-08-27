@@ -1,4 +1,9 @@
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from models.datos_cuenta import DatosCuenta
 
@@ -7,268 +12,397 @@ from models.datos_cuenta import DatosCuenta
 # CONFIGURACIÓN ESPACIAL — DATOS DE CUENTA BANAMEX
 # ============================================================
 #
-# Este extractor trabaja exclusivamente mediante coordenadas
-# espaciales.
+# El extractor conserva el layout histórico "MiCuenta" y
+# agrega "Cuenta Base Banamex" mediante perfiles espaciales.
 #
-# NO utiliza etiquetas para localizar los valores.
+# Cada perfil declara:
 #
-# Las cajas están definidas pensando en la CELDA / COLUMNA
-# donde vive cada dato, y no únicamente alrededor de las
-# palabras actualmente observadas.
+#     - señales textuales para reconocer el layout
+#     - página donde vive cada dato
+#     - caja/celda espacial de cada dato
 #
-# Esto permite tolerar:
-#
-#   - nombres de producto más largos
-#   - nombres de cliente más largos
-#   - pequeñas variaciones de espaciado
-#   - cambios menores en el ancho del texto
+# Para soportar un layout futuro basta con agregar un nuevo
+# perfil. La lógica de extracción no se duplica.
 #
 # ============================================================
 
 
-# ============================================================
-# PÁGINAS
-# ============================================================
+Box = tuple[float, float, float, float]
 
 PAGE_GENERAL = 1
 PAGE_CLIENTE = 2
 
 
+@dataclass(frozen=True, slots=True)
+class FieldRegion:
+    """Página y caja espacial en la que vive un campo."""
+
+    page: int
+    box: Box
+
+
+@dataclass(frozen=True, slots=True)
+class DatosCuentaLayout:
+    """Perfil espacial completo de un layout Banamex."""
+
+    key: str
+    markers: tuple[tuple[int, str], ...]
+    producto_principal: FieldRegion
+    periodo_inicio: FieldRegion
+    periodo_fin: FieldRegion
+    fecha_corte: FieldRegion
+    numero_cuenta: FieldRegion
+    numero_cliente: FieldRegion
+    rfc: FieldRegion
+    clabe: FieldRegion
+    nombre_cliente: FieldRegion
+
+
 # ============================================================
-# PRODUCTO PRINCIPAL
+# LAYOUT HISTÓRICO — MICUENTA
 # ============================================================
 #
-# Fila:
-#
-#     PRODUCTO/SERVICIO | CONTRATO | ...
-#
-# Valor observado:
-#
-#     MiCuenta
-#
-# Coordenada observada:
-#
-#     x0 = 18.3
-#     x1 = 56.811
-#     top = 392.463
-#     bottom = 401.463
-#
-# IMPORTANTE:
-#
-# La caja NO se limita a x1 = 56.811.
-#
-# Se utiliza prácticamente todo el ancho de la columna
-# PRODUCTO/SERVICIO, hasta antes de la columna CONTRATO.
+# Estas son exactamente las regiones que ya utilizaba el
+# extractor estable. Se conservan también los nombres públicos
+# BOX_* para no romper imports o pruebas existentes.
 #
 # ============================================================
 
-BOX_PRODUCTO_PRINCIPAL = (
-    17.0,   # x0
-    178.0,  # x1
-    389.0,  # top
-    405.0,  # bottom
+
+BOX_PRODUCTO_PRINCIPAL: Box = (
+    17.0,
+    178.0,
+    389.0,
+    405.0,
+)
+
+BOX_NUMERO_CUENTA: Box = (
+    178.0,
+    249.0,
+    389.0,
+    405.0,
+)
+
+BOX_PERIODO_INICIO: Box = (
+    98.0,
+    170.0,
+    453.0,
+    471.0,
+)
+
+BOX_PERIODO_FIN: Box = (
+    186.0,
+    257.0,
+    453.0,
+    471.0,
+)
+
+BOX_FECHA_CORTE: Box = (
+    406.0,
+    467.0,
+    377.0,
+    393.0,
+)
+
+BOX_NUMERO_CLIENTE: Box = (
+    420.0,
+    482.0,
+    17.0,
+    35.0,
+)
+
+BOX_NOMBRE_CLIENTE: Box = (
+    18.0,
+    280.0,
+    40.0,
+    58.0,
+)
+
+BOX_RFC: Box = (
+    392.0,
+    483.0,
+    28.0,
+    47.0,
+)
+
+BOX_CLABE: Box = (
+    133.0,
+    250.0,
+    400.0,
+    417.0,
+)
+
+
+LAYOUT_MICUENTA = DatosCuentaLayout(
+    key="micuenta",
+    markers=(
+        (PAGE_GENERAL, "MICUENTA"),
+        (PAGE_GENERAL, "MI CUENTA"),
+    ),
+    producto_principal=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PRODUCTO_PRINCIPAL,
+    ),
+    periodo_inicio=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PERIODO_INICIO,
+    ),
+    periodo_fin=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PERIODO_FIN,
+    ),
+    fecha_corte=FieldRegion(
+        PAGE_GENERAL,
+        BOX_FECHA_CORTE,
+    ),
+    numero_cuenta=FieldRegion(
+        PAGE_GENERAL,
+        BOX_NUMERO_CUENTA,
+    ),
+    numero_cliente=FieldRegion(
+        PAGE_CLIENTE,
+        BOX_NUMERO_CLIENTE,
+    ),
+    rfc=FieldRegion(
+        PAGE_GENERAL,
+        BOX_RFC,
+    ),
+    clabe=FieldRegion(
+        PAGE_GENERAL,
+        BOX_CLABE,
+    ),
+    nombre_cliente=FieldRegion(
+        PAGE_CLIENTE,
+        BOX_NOMBRE_CLIENTE,
+    ),
 )
 
 
 # ============================================================
-# NÚMERO DE CUENTA / CONTRATO
+# LAYOUT NUEVO — CUENTA BASE BANAMEX
 # ============================================================
 #
-# Coordenada observada:
-#
-#     x0 = 187.8
-#     x1 = 232.836
-#     top = 392.463
-#     bottom = 401.463
-#
-# La columna CONTRATO comienza aproximadamente en x=181.8
-# y termina antes de la columna de SALDO ANTERIOR.
+# En este layout todos los datos se encuentran en página 1.
+# Las regiones corresponden a las celdas observadas en
+# banamex_cuenta_base_2024_raw_words.json.
 #
 # ============================================================
 
-BOX_NUMERO_CUENTA = (
-    178.0,  # x0
-    249.0,  # x1
-    389.0,  # top
-    405.0,  # bottom
+
+BOX_PRODUCTO_PRINCIPAL_CUENTA_BASE: Box = (
+    14.0,
+    150.0,
+    316.0,
+    335.0,
+)
+
+BOX_NUMERO_CUENTA_CUENTA_BASE: Box = (
+    165.0,
+    245.0,
+    316.0,
+    335.0,
+)
+
+BOX_PERIODO_INICIO_CUENTA_BASE: Box = (
+    140.0,
+    215.0,
+    369.0,
+    387.0,
+)
+
+BOX_PERIODO_FIN_CUENTA_BASE: Box = (
+    228.0,
+    295.0,
+    369.0,
+    387.0,
+)
+
+BOX_FECHA_CORTE_CUENTA_BASE: Box = (
+    410.0,
+    478.0,
+    304.0,
+    322.0,
+)
+
+BOX_NUMERO_CLIENTE_CUENTA_BASE: Box = (
+    420.0,
+    482.0,
+    18.0,
+    36.0,
+)
+
+BOX_NOMBRE_CLIENTE_CUENTA_BASE: Box = (
+    60.0,
+    265.0,
+    145.0,
+    163.0,
+)
+
+BOX_RFC_CUENTA_BASE: Box = (
+    389.0,
+    480.0,
+    30.0,
+    48.0,
+)
+
+BOX_CLABE_CUENTA_BASE: Box = (
+    130.0,
+    245.0,
+    328.0,
+    346.0,
 )
 
 
-# ============================================================
-# PERIODO INICIAL
-# ============================================================
-#
-# Texto:
-#
-#     RESUMEN DEL 09/ENE/2026 AL 08/FEB/2026
-#
-# Valor:
-#
-#     09/ENE/2026
-#
-# Coordenada observada:
-#
-#     x0 = 101.411
-#     x1 = 166.839
-#
-# La caja deja margen a ambos lados para que una variación
-# razonable del texto no provoque pérdida.
-#
-# ============================================================
-
-BOX_PERIODO_INICIO = (
-    98.0,   # x0
-    170.0,  # x1
-    453.0,  # top
-    471.0,  # bottom
+LAYOUT_CUENTA_BASE = DatosCuentaLayout(
+    key="cuenta_base",
+    markers=(
+        (
+            PAGE_GENERAL,
+            "RESUMEN GENERAL CUENTA BASE BANAMEX",
+        ),
+        (PAGE_GENERAL, "CUENTA BASE BANAMEX"),
+    ),
+    producto_principal=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PRODUCTO_PRINCIPAL_CUENTA_BASE,
+    ),
+    periodo_inicio=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PERIODO_INICIO_CUENTA_BASE,
+    ),
+    periodo_fin=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PERIODO_FIN_CUENTA_BASE,
+    ),
+    fecha_corte=FieldRegion(
+        PAGE_GENERAL,
+        BOX_FECHA_CORTE_CUENTA_BASE,
+    ),
+    numero_cuenta=FieldRegion(
+        PAGE_GENERAL,
+        BOX_NUMERO_CUENTA_CUENTA_BASE,
+    ),
+    numero_cliente=FieldRegion(
+        PAGE_GENERAL,
+        BOX_NUMERO_CLIENTE_CUENTA_BASE,
+    ),
+    rfc=FieldRegion(
+        PAGE_GENERAL,
+        BOX_RFC_CUENTA_BASE,
+    ),
+    clabe=FieldRegion(
+        PAGE_GENERAL,
+        BOX_CLABE_CUENTA_BASE,
+    ),
+    nombre_cliente=FieldRegion(
+        PAGE_GENERAL,
+        BOX_NOMBRE_CLIENTE_CUENTA_BASE,
+    ),
 )
 
 
-# ============================================================
-# PERIODO FINAL
-# ============================================================
-#
-# Valor:
-#
-#     08/FEB/2026
-#
-# Coordenada observada:
-#
-#     x0 = 189.466
-#     x1 = 253.673
-#
-# ============================================================
-
-BOX_PERIODO_FIN = (
-    186.0,  # x0
-    257.0,  # x1
-    453.0,  # top
-    471.0,  # bottom
+# Los perfiles específicos se evalúan primero. Si ningún
+# marcador conocido aparece, el fallback sigue siendo el
+# layout histórico para preservar el comportamiento anterior.
+BANAMEX_LAYOUTS = (
+    LAYOUT_CUENTA_BASE,
+    LAYOUT_MICUENTA,
 )
 
-
-# ============================================================
-# FECHA DE CORTE
-# ============================================================
-#
-# En la tabla RESUMEN GENERAL aparece:
-#
-#     SALDO AL 06/FEB/2026
-#
-# La fecha está ubicada en:
-#
-#     x0 = 409.821
-#     x1 = 462.354
-#
-# La caja se limita a la celda de la fecha, NO a toda la
-# expresión "SALDO AL".
-#
-# ============================================================
-
-BOX_FECHA_CORTE = (
-    406.0,  # x0
-    467.0,  # x1
-    377.0,  # top
-    393.0,  # bottom
-)
+DEFAULT_LAYOUT = LAYOUT_MICUENTA
 
 
 # ============================================================
-# NÚMERO DE CLIENTE
-# ============================================================
-#
-# Coordenada:
-#
-#     x0 = 424.5
-#     x1 = 479.544
-#     top = 20.677
-#     bottom = 31.677
-#
-# Se utiliza la zona derecha del encabezado.
-#
+# DETECCIÓN DE LAYOUT
 # ============================================================
 
-BOX_NUMERO_CLIENTE = (
-    420.0,  # x0
-    482.0,  # x1
-    17.0,   # top
-    35.0,   # bottom
-)
+
+def normalize_text(value: str) -> str:
+    """Normaliza texto para comparar señales del layout."""
+
+    normalized = unicodedata.normalize(
+        "NFD",
+        str(value or ""),
+    )
+
+    normalized = "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    )
+
+    normalized = normalized.upper()
+    normalized = re.sub(r"[^A-Z0-9]+", " ", normalized)
+
+    return " ".join(normalized.split())
 
 
-# ============================================================
-# NOMBRE DEL CLIENTE
-# ============================================================
-#
-# La caja cubre la zona completa donde aparece el nombre,
-# permitiendo que aparezcan nombres más largos.
-#
-# ============================================================
+def _page_texts(
+    words: List[Dict[str, Any]],
+) -> Dict[int, str]:
+    """Reconstruye texto normalizado por página para detección."""
 
-BOX_NOMBRE_CLIENTE = (
-    18.0,   # x0
-    280.0,  # x1
-    40.0,   # top
-    58.0,   # bottom
-)
+    pages: Dict[int, List[Dict[str, Any]]] = {}
 
+    for word in words:
+        page = int(word.get("page", PAGE_GENERAL))
+        pages.setdefault(page, []).append(word)
 
-# ============================================================
-# RFC
-# ============================================================
-#
-#
-# Coordenada:
-#
-#     x0 = 397.2
-#     x1 = 480.965
-#     top = 32.077
-#     bottom = 43.077
-#
-# La etiqueta "Registro Federal de Contribuyentes" está
-# aproximadamente entre x=189 y x=363.
-#
-# El valor comienza aproximadamente en x=397.
-#
-# ============================================================
+    result: Dict[int, str] = {}
 
-BOX_RFC = (
-    392.0,  # x0
-    483.0,  # x1
-    28.0,   # top
-    47.0,   # bottom
-)
+    for page, page_words in pages.items():
+        ordered = sorted(
+            page_words,
+            key=lambda word: (
+                word.get("top", 0),
+                word.get("x0", 0),
+            ),
+        )
+
+        result[page] = normalize_text(
+            " ".join(
+                str(word.get("text", ""))
+                for word in ordered
+            )
+        )
+
+    return result
 
 
-# ============================================================
-# CLABE
-# ============================================================
-#
-#
-# Coordenada:
-#
-#     x0 = 137.7
-#     x1 = 227.772
-#     top = 403.863
-#     bottom = 412.863
-#
-# La etiqueta:
-#
-#     CLABE Interbancaria
-#
-# ocupa aproximadamente x=18.3 hasta x=102.837.
-#
-# Por eso la caja empieza después de la etiqueta y deja
-# espacio suficiente hacia la derecha.
-#
-# ============================================================
+def detect_datos_cuenta_layout(
+    words: List[Dict[str, Any]],
+) -> DatosCuentaLayout:
+    """
+    Selecciona el perfil con mayor cantidad de señales.
 
-BOX_CLABE = (
-    133.0,  # x0
-    250.0,  # x1
-    400.0,  # top
-    417.0,  # bottom
-)
+    Si el documento no contiene una señal conocida, conserva
+    el perfil histórico como fallback compatible.
+    """
+
+    page_texts = _page_texts(words)
+
+    best_layout = DEFAULT_LAYOUT
+    best_score = 0
+
+    for layout in BANAMEX_LAYOUTS:
+        score = sum(
+            1
+            for page, marker in layout.markers
+            if normalize_text(marker) in page_texts.get(page, "")
+        )
+
+        if score > best_score:
+            best_layout = layout
+            best_score = score
+
+    return best_layout
+
+
+def _resolve_layout(
+    words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout],
+) -> DatosCuentaLayout:
+    return layout or detect_datos_cuenta_layout(words)
 
 
 # ============================================================
@@ -278,40 +412,20 @@ BOX_CLABE = (
 
 def word_inside_box(
     word: Dict[str, Any],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int,
 ) -> bool:
-    """
-    Determina si una palabra pertenece a una región espacial.
+    """Determina por su centro si una palabra está en la caja."""
 
-    box:
-
-        (
-            xmin,
-            xmax,
-            ymin,
-            ymax
-        )
-
-    Se utiliza el centro de la palabra para evitar problemas
-    con palabras que se encuentren parcialmente sobre el
-    límite de una región.
-
-    A diferencia del extractor BBVA, aquí la página se recibe
-    explícitamente porque los datos generales de Banamex se
-    encuentran distribuidos entre página 1 y página 2.
-    """
-
-    page = word.get("page", 1)
+    page = int(word.get("page", PAGE_GENERAL))
 
     if page != page_number:
         return False
 
-    x0 = word.get("x0", 0)
-    x1 = word.get("x1", 0)
-
-    top = word.get("top", 0)
-    bottom = word.get("bottom", 0)
+    x0 = float(word.get("x0", 0))
+    x1 = float(word.get("x1", 0))
+    top = float(word.get("top", 0))
+    bottom = float(word.get("bottom", 0))
 
     xmin, xmax, ymin, ymax = box
 
@@ -326,27 +440,18 @@ def word_inside_box(
 
 def words_in_box(
     words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int,
 ) -> List[Dict[str, Any]]:
-    """
-    Devuelve las palabras que se encuentran dentro de una
-    región espacial determinada.
-
-    Las palabras se ordenan:
-
-        página
-        posición vertical
-        posición horizontal
-    """
+    """Devuelve las palabras ordenadas dentro de una región."""
 
     result = [
         word
         for word in words
         if word_inside_box(
-            word,
-            box,
-            page_number,
+            word=word,
+            box=box,
+            page_number=page_number,
         )
     ]
 
@@ -363,35 +468,22 @@ def words_in_box(
 
 def text_from_box(
     words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int,
 ) -> Optional[str]:
-    """
-    Extrae y concatena el texto contenido dentro de una
-    región espacial.
-
-    No busca etiquetas.
-
-    No interpreta el contenido.
-
-    Simplemente devuelve las palabras existentes dentro
-    de la caja.
-    """
+    """Concatena el texto existente dentro de una caja."""
 
     selected = words_in_box(
-        words,
-        box,
-        page_number,
+        words=words,
+        box=box,
+        page_number=page_number,
     )
 
-    values = []
-
-    for word in selected:
-
-        text = word.get("text", "").strip()
-
-        if text:
-            values.append(text)
+    values = [
+        str(word.get("text", "")).strip()
+        for word in selected
+        if str(word.get("text", "")).strip()
+    ]
 
     if not values:
         return None
@@ -401,37 +493,49 @@ def text_from_box(
 
 def numeric_text_from_box(
     words: List[Dict[str, Any]],
-    box: tuple[float, float, float, float],
+    box: Box,
     page_number: int,
 ) -> Optional[str]:
-    """
-    Extrae los fragmentos numéricos contenidos dentro de
-    una región espacial y los concatena.
-
-    Se utiliza para valores como la CLABE.
-    """
+    """Concatena únicamente fragmentos completamente numéricos."""
 
     selected = words_in_box(
-        words,
-        box,
-        page_number,
+        words=words,
+        box=box,
+        page_number=page_number,
     )
 
-    parts = []
-
-    for word in selected:
-
-        text = word.get("text", "").strip()
-
-        # Permitimos únicamente fragmentos completamente
-        # numéricos.
-        if text.isdigit():
-            parts.append(text)
+    parts = [
+        str(word.get("text", "")).strip()
+        for word in selected
+        if str(word.get("text", "")).strip().isdigit()
+    ]
 
     if not parts:
         return None
 
     return "".join(parts)
+
+
+def _text_from_region(
+    words: List[Dict[str, Any]],
+    region: FieldRegion,
+) -> Optional[str]:
+    return text_from_box(
+        words=words,
+        box=region.box,
+        page_number=region.page,
+    )
+
+
+def _numeric_text_from_region(
+    words: List[Dict[str, Any]],
+    region: FieldRegion,
+) -> Optional[str]:
+    return numeric_text_from_box(
+        words=words,
+        box=region.box,
+        page_number=region.page,
+    )
 
 
 # ============================================================
@@ -441,122 +545,58 @@ def numeric_text_from_box(
 
 def extract_producto_principal(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae el producto principal.
-
-    Ejemplo:
-
-        MiCuenta
-    """
-
-    return text_from_box(
-        words,
-        BOX_PRODUCTO_PRINCIPAL,
-        PAGE_GENERAL,
-    )
+    profile = _resolve_layout(words, layout)
+    return _text_from_region(words, profile.producto_principal)
 
 
 def extract_periodo_inicio(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae la fecha inicial del periodo.
-
-    Ejemplo:
-
-        09/ENE/2026
-    """
-
-    return text_from_box(
-        words,
-        BOX_PERIODO_INICIO,
-        PAGE_GENERAL,
-    )
+    profile = _resolve_layout(words, layout)
+    return _text_from_region(words, profile.periodo_inicio)
 
 
 def extract_periodo_fin(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae la fecha final del periodo.
-
-    Ejemplo:
-
-        08/FEB/2026
-    """
-
-    return text_from_box(
-        words,
-        BOX_PERIODO_FIN,
-        PAGE_GENERAL,
-    )
+    profile = _resolve_layout(words, layout)
+    return _text_from_region(words, profile.periodo_fin)
 
 
 def extract_fecha_corte(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae la fecha de corte.
-
-    Ejemplo:
-
-        06/FEB/2026
-    """
-
-    return text_from_box(
-        words,
-        BOX_FECHA_CORTE,
-        PAGE_GENERAL,
-    )
+    profile = _resolve_layout(words, layout)
+    return _text_from_region(words, profile.fecha_corte)
 
 
 def extract_numero_cuenta(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae el número de cuenta / contrato.
-
-    """
-
-    return text_from_box(
-        words,
-        BOX_NUMERO_CUENTA,
-        PAGE_GENERAL,
-    )
+    profile = _resolve_layout(words, layout)
+    return _text_from_region(words, profile.numero_cuenta)
 
 
 def extract_numero_cliente(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae el número de cliente.
-
-    Ejemplo:
-    """
-
-    return text_from_box(
-        words,
-        BOX_NUMERO_CLIENTE,
-        PAGE_CLIENTE,
-    )
+    profile = _resolve_layout(words, layout)
+    return _text_from_region(words, profile.numero_cliente)
 
 
 def extract_rfc(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae el RFC.
-
-    Ejemplo:
-
-    """
-
-    value = text_from_box(
-        words,
-        BOX_RFC,
-        PAGE_GENERAL,
-    )
+    profile = _resolve_layout(words, layout)
+    value = _text_from_region(words, profile.rfc)
 
     if value is None:
         return None
@@ -566,23 +606,12 @@ def extract_rfc(
 
 def extract_clabe(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae la CLABE interbancaria.
+    profile = _resolve_layout(words, layout)
+    value = _numeric_text_from_region(words, profile.clabe)
 
-    """
-
-    value = numeric_text_from_box(
-        words,
-        BOX_CLABE,
-        PAGE_GENERAL,
-    )
-
-    if value is None:
-        return None
-
-    # Una CLABE mexicana tiene 18 dígitos.
-    if len(value) != 18:
+    if value is None or len(value) != 18:
         return None
 
     return value
@@ -590,17 +619,10 @@ def extract_clabe(
 
 def extract_nombre_cliente(
     words: List[Dict[str, Any]],
+    layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
-    """
-    Extrae el nombre completo del cliente.
-
-    """
-
-    return text_from_box(
-        words,
-        BOX_NOMBRE_CLIENTE,
-        PAGE_CLIENTE,
-    )
+    profile = _resolve_layout(words, layout)
+    return _text_from_region(words, profile.nombre_cliente)
 
 
 # ============================================================
@@ -612,79 +634,52 @@ def extract_datos_cuenta_words(
     words: List[Dict[str, Any]],
 ) -> DatosCuenta:
     """
-    Extractor espacial de datos generales de cuenta BANAMEX.
+    Extrae los datos generales Banamex con selección previa
+    del perfil espacial adecuado.
 
-    Este extractor NO utiliza etiquetas del documento para
-    encontrar los campos.
+    Layouts soportados:
 
-    Cada dato se obtiene exclusivamente desde la región
-    espacial previamente identificada.
-
-    Campos extraídos:
-
-        - producto_principal
-        - periodo_inicio
-        - periodo_fin
-        - fecha_corte
-        - numero_cuenta
-        - numero_cliente
-        - rfc
-        - clabe
-        - nombre_cliente
+        - MiCuenta (comportamiento histórico)
+        - Cuenta Base Banamex
     """
 
-    producto_principal = extract_producto_principal(
-        words
-    )
-
-    periodo_inicio = extract_periodo_inicio(
-        words
-    )
-
-    periodo_fin = extract_periodo_fin(
-        words
-    )
-
-    fecha_corte = extract_fecha_corte(
-        words
-    )
-
-    numero_cuenta = extract_numero_cuenta(
-        words
-    )
-
-    numero_cliente = extract_numero_cliente(
-        words
-    )
-
-    rfc = extract_rfc(
-        words
-    )
-
-    clabe = extract_clabe(
-        words
-    )
-
-    nombre_cliente = extract_nombre_cliente(
-        words
-    )
+    layout = detect_datos_cuenta_layout(words)
 
     return DatosCuenta(
-        producto_principal=producto_principal,
-
-        periodo_inicio=periodo_inicio,
-
-        periodo_fin=periodo_fin,
-
-        fecha_corte=fecha_corte,
-
-        numero_cuenta=numero_cuenta,
-
-        numero_cliente=numero_cliente,
-
-        rfc=rfc,
-
-        clabe=clabe,
-
-        nombre_cliente=nombre_cliente,
+        producto_principal=extract_producto_principal(
+            words,
+            layout,
+        ),
+        periodo_inicio=extract_periodo_inicio(
+            words,
+            layout,
+        ),
+        periodo_fin=extract_periodo_fin(
+            words,
+            layout,
+        ),
+        fecha_corte=extract_fecha_corte(
+            words,
+            layout,
+        ),
+        numero_cuenta=extract_numero_cuenta(
+            words,
+            layout,
+        ),
+        numero_cliente=extract_numero_cliente(
+            words,
+            layout,
+        ),
+        rfc=extract_rfc(
+            words,
+            layout,
+        ),
+        clabe=extract_clabe(
+            words,
+            layout,
+        ),
+        nombre_cliente=extract_nombre_cliente(
+            words,
+            layout,
+        ),
     )

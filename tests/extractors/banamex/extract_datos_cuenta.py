@@ -6,7 +6,7 @@ from parsers.banamex.extractors.datos import extract_datos_cuenta_words
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "edo_banamex.pdf"
+PDF_PATH = ROOT / "data" / "banamex_cuenta_base_2024.pdf"
 
 
 def main():
