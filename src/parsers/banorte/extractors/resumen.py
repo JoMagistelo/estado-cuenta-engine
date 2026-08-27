@@ -57,6 +57,37 @@ LINE_Y_TOLERANCE = 3.5
 FIELD_Y_TOLERANCE = 4.0
 
 
+# ------------------------------------------------------------
+# ANCLAS SEMÁNTICAS PARA LOCALIZAR LA PÁGINA REAL
+# DEL RESUMEN FINANCIERO
+# ------------------------------------------------------------
+#
+# Algunos estados de cuenta tienen páginas preliminares:
+#
+#     Seguridad
+#     Protección de tu cuenta
+#     Información general
+#     Avisos
+#     etc.
+#
+# Por ello NO asumimos que la página 1 contiene el estado.
+#
+# Estas expresiones se utilizan únicamente para identificar
+# la página candidata donde realmente comienza el resumen.
+#
+# La extracción financiera posterior sigue usando las reglas
+# espaciales existentes.
+#
+# ------------------------------------------------------------
+
+RESUMEN_PAGE_ANCHORS = (
+    "INFORMACION DEL PERIODO",
+    "RESUMEN DEL PERIODO",
+    "RESUMEN DE PERIODO",
+    "RESUMEN INTEGRAL",
+)
+
+
 # ============================================================
 # UTILIDADES BÁSICAS
 # ============================================================
@@ -89,6 +120,40 @@ def normalize_upper(
     value: Any,
 ) -> str:
     return normalize_text(value).upper()
+
+
+def normalize_search_text(
+    value: Any,
+) -> str:
+    """
+    Normalización ligera utilizada únicamente para localizar
+    anclas semánticas.
+
+    Permite que:
+
+        INFORMACIÓN DEL PERIODO
+        INFORMACION DEL PERIODO
+
+    sean consideradas equivalentes.
+
+    No modifica la lógica financiera existente.
+    """
+
+    text = normalize_upper(value)
+
+    replacements = {
+        "Á": "A",
+        "É": "E",
+        "Í": "I",
+        "Ó": "O",
+        "Ú": "U",
+        "Ü": "U",
+    }
+
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+
+    return text
 
 
 def word_top(
@@ -194,7 +259,6 @@ def group_words_into_lines(
     words: List[Dict[str, Any]],
     tolerance: float = LINE_Y_TOLERANCE,
 ) -> List[List[Dict[str, Any]]]:
-
     if not words:
         return []
 
@@ -208,8 +272,8 @@ def group_words_into_lines(
     )
 
     lines: List[List[Dict[str, Any]]] = []
-    current: List[Dict[str, Any]] = []
 
+    current: List[Dict[str, Any]] = []
     current_page: Optional[int] = None
     current_y: Optional[float] = None
 
@@ -268,14 +332,12 @@ def group_words_into_lines(
 def line_text(
     line: List[Dict[str, Any]],
 ) -> str:
-
     values: List[str] = []
 
     for word in sorted(
         line,
         key=word_x0,
     ):
-
         text = normalize_text(
             word.get(
                 "text",
@@ -292,7 +354,6 @@ def line_text(
 def line_top(
     line: List[Dict[str, Any]],
 ) -> float:
-
     if not line:
         return 0.0
 
@@ -305,7 +366,6 @@ def line_top(
 def line_bottom(
     line: List[Dict[str, Any]],
 ) -> float:
-
     if not line:
         return 0.0
 
@@ -318,7 +378,6 @@ def line_bottom(
 def line_page(
     line: List[Dict[str, Any]],
 ) -> int:
-
     if not line:
         return 1
 
@@ -337,6 +396,13 @@ def line_page(
 # El elemento realmente estable es la banda Y y la presencia
 # de la flecha "▼" que forma parte del selector del producto.
 #
+# IMPORTANTE:
+#
+# Ya no se exige page == 1.
+#
+# La función ahora puede trabajar sobre cualquier página,
+# porque la página real del estado se localiza dinámicamente.
+#
 # ============================================================
 
 def is_product_header_line(
@@ -344,9 +410,6 @@ def is_product_header_line(
 ) -> bool:
 
     if not line:
-        return False
-
-    if line_page(line) != 1:
         return False
 
     top = line_top(line)
@@ -398,36 +461,49 @@ def find_product_header(
 
 
 # ============================================================
-# DETECCIÓN DEL RESUMEN DEL PERIODO
+# DETECCIÓN DE PÁGINA DEL RESUMEN
+# ============================================================
+#
+# Esta es la principal protección nueva.
+#
+# El documento puede tener:
+#
+#     página 1 -> seguridad
+#     página 2 -> protección de cuenta
+#     página 3 -> información general
+#     página 4 -> estado de cuenta
+#
+# Antes el parser se quedaba exclusivamente con page == 1.
+#
+# Ahora buscamos primero la página que tenga señales reales
+# de ser la página del resumen financiero.
+#
 # ============================================================
 
-def find_resumen_start(
-    lines: List[List[Dict[str, Any]]],
-    header_index: Optional[int],
-) -> Optional[int]:
+def _page_contains_anchor(
+    page_lines: List[List[Dict[str, Any]]],
+    anchor: str,
+) -> bool:
 
-    if header_index is None:
-        return None
+    for line in page_lines:
 
-    for index in range(
-        header_index + 1,
-        len(lines),
-    ):
+        text = normalize_search_text(
+            line_text(line)
+        )
 
-        line = lines[index]
+        if anchor in text:
+            return True
 
-        if not line:
-            continue
+    return False
 
-        if line_page(line) != 1:
-            continue
 
-        top = line_top(line)
+def _page_has_summary_pattern(
+    page_lines: List[List[Dict[str, Any]]],
+) -> bool:
 
-        if top < RESUMEN_TOP_MIN:
-            continue
+    for line in page_lines:
 
-        text = normalize_upper(
+        text = normalize_search_text(
             line_text(line)
         )
 
@@ -435,6 +511,174 @@ def find_resumen_start(
             "RESUMEN" in text
             and "PERIODO" in text
         ):
+            return True
+
+    return False
+
+
+def _score_summary_page(
+    page_lines: List[List[Dict[str, Any]]],
+) -> int:
+    """
+    Asigna una puntuación a una página candidata.
+
+    Se priorizan las señales más fuertes del estado de cuenta.
+    """
+
+    score = 0
+
+    if _page_contains_anchor(
+        page_lines,
+        "RESUMEN INTEGRAL",
+    ):
+        score += 100
+
+    if _page_contains_anchor(
+        page_lines,
+        "RESUMEN DEL PERIODO",
+    ):
+        score += 95
+
+    if _page_contains_anchor(
+        page_lines,
+        "RESUMEN DE PERIODO",
+    ):
+        score += 90
+
+    if _page_contains_anchor(
+        page_lines,
+        "INFORMACION DEL PERIODO",
+    ):
+        score += 85
+
+    if _page_has_summary_pattern(
+        page_lines
+    ):
+        score += 75
+
+    if find_product_header(
+        page_lines
+    ) is not None:
+        score += 25
+
+    if any(
+        "TOTAL DE USOS"
+        in normalize_search_text(
+            line_text(line)
+        )
+        for line in page_lines
+    ):
+        score += 20
+
+    return score
+
+
+def find_summary_page(
+    lines: List[List[Dict[str, Any]]],
+) -> Optional[int]:
+    """
+    Devuelve el número de página que mejor corresponde al
+    resumen financiero.
+
+    El empate se resuelve conservando la primera página
+    encontrada.
+    """
+
+    if not lines:
+        return None
+
+    pages = sorted(
+        {
+            line_page(line)
+            for line in lines
+            if line
+        }
+    )
+
+    best_page: Optional[int] = None
+    best_score = 0
+
+    for page in pages:
+
+        page_lines = [
+            line
+            for line in lines
+            if line_page(line) == page
+        ]
+
+        score = _score_summary_page(
+            page_lines
+        )
+
+        if score > best_score:
+            best_score = score
+            best_page = page
+
+    return best_page
+
+
+# ============================================================
+# DETECCIÓN DEL RESUMEN DEL PERIODO
+# ============================================================
+
+def find_resumen_start(
+    lines: List[List[Dict[str, Any]]],
+    header_index: Optional[int],
+) -> Optional[int]:
+    """
+    Localiza el inicio del bloque de resumen.
+
+    Se conserva la búsqueda tradicional y se amplía para aceptar
+    las distintas etiquetas observadas en Banorte.
+
+    Si no se encontró encabezado de producto, se permite iniciar
+    la búsqueda desde la primera línea de la página.
+    """
+
+    if header_index is None:
+        start_index = 0
+    else:
+        start_index = header_index + 1
+
+    for index in range(
+        start_index,
+        len(lines),
+    ):
+        line = lines[index]
+
+        if not line:
+            continue
+
+        top = line_top(line)
+
+        if top < RESUMEN_TOP_MIN:
+            continue
+
+        text = normalize_search_text(
+            line_text(line)
+        )
+
+        # ----------------------------------------------------
+        # Variantes conocidas
+        # ----------------------------------------------------
+
+        if (
+            "RESUMEN"
+            in text
+            and "PERIODO"
+            in text
+        ):
+            return index
+
+        if (
+            "INFORMACION"
+            in text
+            and "PERIODO"
+            in text
+        ):
+            return index
+
+        if "RESUMEN INTEGRAL" in text:
             return index
 
     return None
@@ -808,7 +1052,10 @@ def extract_saldo_promedio(
         if "MÍNIMO" in text:
             continue
 
+        # ----------------------------------------------------
         # Primero intentamos la misma línea.
+        # ----------------------------------------------------
+
         amount = extract_same_line_amount(
             lines,
             index,
@@ -817,12 +1064,9 @@ def extract_saldo_promedio(
         if amount is not None:
             return amount
 
+        # ----------------------------------------------------
         # En el layout actual el importe aparece después.
-        #
-        # Buscamos hasta encontrar:
-        #
-        #   En el Periodo ...
-        #
+        # ----------------------------------------------------
 
         for next_index in range(
             index + 1,
@@ -847,6 +1091,7 @@ def extract_saldo_promedio(
 
                 # No tomar el importe del saldo promedio
                 # mínimo.
+
                 if (
                     "SALDO PROMEDIO"
                     in next_text
@@ -1052,42 +1297,118 @@ def extract_resumen_financiero_words(
         return _empty_resumen_financiero()
 
     # --------------------------------------------------------
-    # 1. SOLO PRIMERA PÁGINA
+    # 1. AGRUPAR TODAS LAS PÁGINAS
     # --------------------------------------------------------
-
-    page_one_words = [
-        word
-        for word in words
-        if word_page(word) == 1
-    ]
-
-    if not page_one_words:
-        return _empty_resumen_financiero()
-
-    # --------------------------------------------------------
-    # 2. AGRUPAR LÍNEAS
+    #
+    # ANTES:
+    #
+    #     page_one_words = [...]
+    #
+    #     y únicamente se analizaba page == 1.
+    #
+    # AHORA:
+    #
+    #     se agrupan todas las words.
+    #
+    # Después se identifica cuál es realmente la página
+    # que contiene el resumen financiero.
+    #
     # --------------------------------------------------------
 
     lines = group_words_into_lines(
-        page_one_words
+        words
     )
 
     if not lines:
         return _empty_resumen_financiero()
 
     # --------------------------------------------------------
-    # 3. ENCABEZADO DEL PRODUCTO
+    # 2. LOCALIZAR LA PÁGINA REAL DEL RESUMEN
+    # --------------------------------------------------------
+
+    summary_page = find_summary_page(
+        lines
+    )
+
+    # --------------------------------------------------------
+    # 3. FALLBACK COMPATIBLE
+    # --------------------------------------------------------
+    #
+    # Si no encontramos ninguna de las anclas semánticas,
+    # intentamos localizar directamente el encabezado espacial
+    # del producto.
+    #
+    # Esto conserva el comportamiento anterior para documentos
+    # que no contienen claramente las etiquetas nuevas.
+    #
+    # --------------------------------------------------------
+
+    if summary_page is None:
+
+        header_index_global = find_product_header(
+            lines
+        )
+
+        if header_index_global is not None:
+            summary_page = line_page(
+                lines[header_index_global]
+            )
+
+    # --------------------------------------------------------
+    # Si aun así no existe una página candidata, regresamos
+    # resultado vacío sin lanzar excepción.
+    # --------------------------------------------------------
+
+    if summary_page is None:
+        return _empty_resumen_financiero()
+
+    # --------------------------------------------------------
+    # 4. TRABAJAR ÚNICAMENTE CON LA PÁGINA ENCONTRADA
+    # --------------------------------------------------------
+    #
+    # Esto es equivalente conceptualmente a la antigua:
+    #
+    #     page_one_words
+    #
+    # pero ahora para la página real del estado.
+    #
+    # --------------------------------------------------------
+
+    page_lines = [
+        line
+        for line in lines
+        if line_page(line) == summary_page
+    ]
+
+    if not page_lines:
+        return _empty_resumen_financiero()
+
+    # A partir de aquí se conserva la estructura original.
+
+    lines = page_lines
+
+    # --------------------------------------------------------
+    # 5. ENCABEZADO DEL PRODUCTO
     # --------------------------------------------------------
 
     header_index = find_product_header(
         lines
     )
 
-    if header_index is None:
-        return _empty_resumen_financiero()
-
     # --------------------------------------------------------
-    # 4. INICIO DEL RESUMEN
+    # 6. INICIO DEL RESUMEN
+    # --------------------------------------------------------
+    #
+    # Primero intentamos localizarlo después del encabezado
+    # del producto.
+    #
+    # La función también permite trabajar sin encabezado si
+    # la página contiene directamente una de las anclas:
+    #
+    #     INFORMACION DEL PERIODO
+    #     RESUMEN INTEGRAL
+    #     RESUMEN DEL PERIODO
+    #
     # --------------------------------------------------------
 
     resumen_start = find_resumen_start(
@@ -1099,7 +1420,7 @@ def extract_resumen_financiero_words(
         return _empty_resumen_financiero()
 
     # --------------------------------------------------------
-    # 5. FIN DEL RESUMEN
+    # 7. FIN DEL RESUMEN
     # --------------------------------------------------------
 
     resumen_end = find_resumen_end(
@@ -1108,7 +1429,7 @@ def extract_resumen_financiero_words(
     )
 
     # --------------------------------------------------------
-    # 6. EXTRACCIÓN
+    # 8. EXTRACCIÓN
     # --------------------------------------------------------
 
     saldo_anterior = extract_field_same_line(
@@ -1193,8 +1514,10 @@ def extract_resumen_financiero_words(
     # TOTAL DE DEPÓSITOS — AJUSTADO
     # --------------------------------------------------------
     #
-    # Al total de depósitos reportado por Banorte le restamos
+    # Al total de depósitos reportado por Banorte le sumamos
     # los intereses netos ganados.
+    #
+    # Se conserva exactamente la lógica existente.
     #
     # --------------------------------------------------------
 
@@ -1252,7 +1575,10 @@ def extract_resumen_financiero_words(
         )
     )
 
-    # Localizamos el renglón para conocer su signo.
+    # --------------------------------------------------------
+    # LOCALIZAMOS EL RENGLÓN PARA CONOCER SU SIGNO
+    # --------------------------------------------------------
+
     comisiones_line_index = find_line_by_patterns(
         lines,
         (
@@ -1319,7 +1645,10 @@ def extract_resumen_financiero_words(
         )
     )
 
-    # Localizamos el renglón para conocer su signo.
+    # --------------------------------------------------------
+    # LOCALIZAMOS EL RENGLÓN PARA CONOCER SU SIGNO
+    # --------------------------------------------------------
+
     intereses_cobrados_line_index = (
         find_line_by_patterns(
             lines,
@@ -1480,7 +1809,7 @@ def extract_resumen_financiero_words(
     )
 
     # --------------------------------------------------------
-    # 7. CONSTRUIR MODELO
+    # 9. CONSTRUIR MODELO
     # --------------------------------------------------------
 
     return ResumenFinanciero(

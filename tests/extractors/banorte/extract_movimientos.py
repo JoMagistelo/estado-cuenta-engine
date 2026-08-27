@@ -6,7 +6,7 @@ from parsers.banorte.extractors.movimientos import extract_movimientos_words
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "edo_banorte.pdf"
+PDF_PATH = ROOT / "data" / "edo_banorte3.pdf"
 
 
 
