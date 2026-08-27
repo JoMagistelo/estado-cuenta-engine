@@ -1675,7 +1675,7 @@ def extract_nombre_cliente(
     page_number: int = PAGE_DATOS,
 ) -> Optional[str]:
 
-    value = text_from_box(
+    value = text_from_first_row(
         words,
         BOX_NOMBRE_CLIENTE,
         page_number,
@@ -1864,7 +1864,6 @@ def _extract_rfc_semantic(
             return normalized
 
     # Fallback adicional para OCR donde RFC puede venir unido
-    # al valor:
     #
     #     RFC:ROOM770801B36
 
