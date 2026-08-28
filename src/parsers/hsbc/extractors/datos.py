@@ -202,6 +202,19 @@ DATE_PATTERN = re.compile(
 )
 
 
+# Algunos OCR de HSBC omiten únicamente el primer separador
+# de la segunda fecha del periodo:
+#
+#     31/08/2024  ->  3108/2024
+#
+# El patrón conserva la estructura día/mes/año y exige el
+# separador anterior al año. De esta manera no confunde una
+# cuenta, una tarjeta o una CLABE con una fecha.
+OCR_DATE_PATTERN = re.compile(
+    r"(?<!\d)(\d{2})[/-]?(\d{2})[/-](\d{4})(?!\d)"
+)
+
+
 # ============================================================
 # UTILIDADES DE TEXTO
 # ============================================================
@@ -1384,6 +1397,111 @@ def extract_account_from_anchor(
 
     return None
 
+
+def extract_account_from_movement_header(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+) -> Optional[str]:
+    """
+    Fallback para layouts HSBC que no muestran la etiqueta:
+
+        NUMERO DE CUENTA
+
+    En esos formatos el dato continúa apareciendo de forma
+    explícita en el encabezado semántico de movimientos:
+
+        DETALLE MOVIMIENTOS ... NO. 6426571729
+
+    Solo se consideran los dígitos posteriores a ``NO.``.
+    Esto evita utilizar como cuenta el número de tarjeta que
+    aparece en el bloque de datos generales.
+    """
+
+    candidates = []
+
+    for line in lines:
+
+        normalized = normalized_line_text(
+            line
+        )
+
+        if not (
+            "DETALLE" in normalized
+            and
+            "MOVIMIENTOS" in normalized
+        ):
+            continue
+
+        ordered_words = sorted(
+            line,
+            key=lambda word: float(
+                word.get(
+                    "x0",
+                    0.0,
+                )
+            ),
+        )
+
+        marker_index = None
+
+        for index, word in enumerate(
+            ordered_words
+        ):
+
+            token = normalize_text(
+                word.get(
+                    "text",
+                    "",
+                )
+            )
+
+            token = token.rstrip(
+                ".:"
+            )
+
+            if token == "NO":
+
+                marker_index = index
+                break
+
+        if marker_index is None:
+            continue
+
+        value_words = ordered_words[
+            marker_index + 1:
+        ]
+
+        value = compact_digits_from_words(
+            value_words
+        )
+
+        if not ACCOUNT_PATTERN.fullmatch(
+            value
+        ):
+            continue
+
+        candidates.append(
+            (
+                line_center_y(line),
+                value,
+            )
+        )
+
+    if not candidates:
+        return None
+
+    # En el layout alterno el encabezado se encuentra en la
+    # mitad inferior de la primera página. Si hubiera más de
+    # uno, se conserva el primero en orden de lectura.
+    candidates.sort(
+        key=lambda item: item[0]
+    )
+
+    return candidates[0][1]
+
 # ============================================================
 # EXTRACTOR CLABE
 # ============================================================
@@ -1777,12 +1895,31 @@ def extract_dates(
     text: str,
 ) -> List[str]:
     """
-    Extrae fechas.
+    Extrae fechas completas y tolera la omisión OCR del
+    primer separador.
     """
 
-    return DATE_PATTERN.findall(
+    exact_dates = DATE_PATTERN.findall(
         text
     )
+
+    if len(exact_dates) >= 2:
+
+        return exact_dates
+
+    tolerant_dates = []
+
+    for match in OCR_DATE_PATTERN.finditer(
+        text
+    ):
+
+        day, month, year = match.groups()
+
+        tolerant_dates.append(
+            f"{day}/{month}/{year}"
+        )
+
+    return tolerant_dates
 
 
 def normalize_date(
@@ -1840,48 +1977,152 @@ def extract_periodo(
                 )
             )
 
-    if not candidates:
-
-        return (
-            None,
-            None,
-        )
-
-    best_line = None
-
     best_dates = None
 
-    best_distance = float(
-        "inf"
-    )
+    if candidates:
 
-    expected_y = 277.0
+        expected_y = 277.0
 
-    for line, dates in candidates:
+        best_line, best_dates = min(
+            candidates,
+            key=lambda item: abs(
+                line_center_y(item[0])
+                -
+                expected_y
+            ),
+        )
 
-        y = line_center_y(
+    # --------------------------------------------------------
+    # Fallback para el layout CUENTA FLEXIBLE SIMPLE HSBC.
+    #
+    # En este formato la etiqueta y el valor están en líneas
+    # distintas:
+    #
+    #     Periodo
+    #                  01/08/2024 al 3108/2024
+    #
+    # La relación etiqueta -> línea inmediata posterior es
+    # estable. La segunda fecha puede perder un separador por
+    # OCR, situación atendida por extract_dates().
+    # --------------------------------------------------------
+
+    if best_dates is None:
+
+        anchors = [
             line
-        )
+            for line in lines
+            if "PERIODO" in normalized_line_text(
+                line
+            )
+        ]
 
-        distance = abs(
-            y
-            -
-            expected_y
-        )
+        date_lines = []
 
-        if distance < best_distance:
+        for line in lines:
 
-            best_distance = distance
+            dates = extract_dates(
+                line_text(
+                    line
+                )
+            )
 
-            best_line = line
+            if len(dates) >= 2:
 
-            best_dates = dates
+                date_lines.append(
+                    (
+                        line,
+                        dates[:2],
+                    )
+                )
 
-    if (
-        best_line is None
-        or
-        best_dates is None
-    ):
+        nearby_candidates = []
+
+        for anchor in anchors:
+
+            anchor_y = line_center_y(
+                anchor
+            )
+
+            for date_line, dates in date_lines:
+
+                date_y = line_center_y(
+                    date_line
+                )
+
+                vertical_gap = (
+                    date_y
+                    -
+                    anchor_y
+                )
+
+                if (
+                    vertical_gap
+                    <
+                    -LINE_Y_TOLERANCE
+                ):
+                    continue
+
+                if (
+                    vertical_gap
+                    >
+                    VALUE_MAX_VERTICAL_DISTANCE
+                ):
+                    continue
+
+                # Al menos una de las words con fecha debe
+                # pertenecer a la columna derecha del periodo.
+                date_words = [
+                    word
+                    for word in date_line
+                    if extract_dates(
+                        clean_word_text(
+                            word.get(
+                                "text",
+                                "",
+                            )
+                        )
+                    )
+                ]
+
+                if not any(
+                    word_inside_box(
+                        word,
+                        BOX_PERIODO,
+                        padding_x=30.0,
+                        padding_y=25.0,
+                    )
+                    for word in date_words
+                ):
+                    continue
+
+                nearby_candidates.append(
+                    (
+                        vertical_gap,
+                        abs(
+                            date_y
+                            -
+                            box_center(
+                                BOX_PERIODO
+                            )[1]
+                        ),
+                        dates,
+                    )
+                )
+
+        if nearby_candidates:
+
+            nearby_candidates.sort(
+                key=lambda item: (
+                    item[0],
+                    item[1],
+                )
+            )
+
+            best_dates = (
+                nearby_candidates[0][2]
+            )
+
+    if best_dates is None:
 
         return (
             None,
@@ -1985,6 +2226,74 @@ def extract_producto_principal(
             return "Cuenta Premier"
 
         return text.strip()
+
+    # --------------------------------------------------------
+    # Layout alterno:
+    #
+    #     CUENTA FLEXIBLE SIMPLE HSBC
+    #
+    # Se exige la combinación completa de tokens para no
+    # confundirla con "Estado de Cuenta" ni con encabezados
+    # genéricos. La distancia a la caja superior prioriza el
+    # título principal sobre sus repeticiones en el resumen o
+    # en el encabezado de movimientos.
+    # --------------------------------------------------------
+
+    flexible_candidates = []
+
+    for line in lines:
+
+        normalized = normalized_line_text(
+            line
+        )
+
+        if all(
+            token in normalized
+            for token in (
+                "CUENTA",
+                "FLEXIBLE",
+                "SIMPLE",
+            )
+        ):
+
+            flexible_candidates.append(
+                line
+            )
+
+    if flexible_candidates:
+
+        expected_x, expected_y = (
+            box_center(
+                BOX_PRODUCTO_PRINCIPAL
+            )
+        )
+
+        best = min(
+            flexible_candidates,
+            key=lambda line: (
+                abs(
+                    line_center_x(line)
+                    -
+                    expected_x
+                )
+                +
+                abs(
+                    line_center_y(line)
+                    -
+                    expected_y
+                )
+            ),
+        )
+
+        normalized = normalized_line_text(
+            best
+        )
+
+        if "HSBC" in normalized:
+
+            return "Cuenta Flexible Simple HSBC"
+
+        return "Cuenta Flexible Simple"
 
     # --------------------------------------------------------
     # Fallback espacial.
@@ -2472,6 +2781,14 @@ def extract_datos_cuenta_words(
             data_words,
         )
     )
+
+    if numero_cuenta is None:
+
+        numero_cuenta = (
+            extract_account_from_movement_header(
+                lines
+            )
+        )
 
     numero_cuenta = (
         validate_numero_cuenta(
