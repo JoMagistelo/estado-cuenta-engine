@@ -93,6 +93,15 @@ DAY_MAX = 31
 
 DAY_PATTERN = re.compile(r"^(?:0?[1-9]|[12]\d|3[01])$")
 
+# Tesseract puede conservar puntuación de la cuadrícula junto al
+# día, por ejemplo ``11.`` o ``14|``. La puntuación es tolerable
+# únicamente en la columna Día y nunca se incorpora al concepto.
+DAY_OCR_PATTERN = re.compile(
+    r"^[\s.,;:|]*"
+    r"(?P<day>0?[1-9]|[12]\d|3[01])"
+    r"[\s.,;:|]*$"
+)
+
 # HSBC puede imprimir día y mes con uno o dos dígitos. El patrón
 # conserva tres grupos: día, mes y año.
 DATE_PATTERN = re.compile(
@@ -1320,6 +1329,35 @@ class MovementRow:
 # DÍA Y RECONSTRUCCIÓN DE MOVIMIENTOS
 # ============================================================
 
+
+def parse_day_token(value: Any) -> Optional[int]:
+    """
+    Convierte un token de la columna Día a entero.
+
+    Tesseract puede conservar puntuación de la cuadrícula junto al
+    número, por ejemplo ``11.`` o ``|14``. Solo se toleran signos
+    externos; nunca se eliminan letras ni dígitos adicionales.
+    """
+
+    text = clean_word_text(value)
+    if not text:
+        return None
+
+    match = DAY_OCR_PATTERN.fullmatch(text)
+    if match is None:
+        return None
+
+    try:
+        day = int(match.group("day"))
+    except (TypeError, ValueError):
+        return None
+
+    if not DAY_MIN <= day <= DAY_MAX:
+        return None
+
+    return day
+
+
 def extract_day_from_line(
     line: Sequence[Dict[str, Any]],
 ) -> Optional[int]:
@@ -1327,10 +1365,9 @@ def extract_day_from_line(
     if day_word is None:
         return None
 
-    try:
-        return int(clean_word_text(day_word.get("text", "")))
-    except ValueError:
-        return None
+    return parse_day_token(
+        day_word.get("text", "")
+    )
 
 
 def find_day_word_in_line(
@@ -1353,25 +1390,111 @@ def find_day_word_in_line(
         ):
             continue
 
-        text = clean_word_text(word.get("text", ""))
-        if not DAY_PATTERN.fullmatch(text):
-            continue
+        day = parse_day_token(
+            word.get("text", "")
+        )
 
-        try:
-            day = int(text)
-        except ValueError:
-            continue
-
-        if DAY_MIN <= day <= DAY_MAX:
+        if day is not None:
             return word
 
     return None
 
 
+def line_has_movement_amount(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    Confirma que el renglón contiene un importe dentro de las
+    columnas financieras del detalle.
+
+    Se usa únicamente para validar días con puntuación OCR. Los días
+    que ya cumplían DAY_PATTERN conservan exactamente la conducta
+    anterior del parser.
+    """
+
+    financial_boxes = (
+        BOX_CARGO,
+        BOX_ABONO,
+        BOX_SALDO,
+    )
+
+    for word in line:
+        text = clean_word_text(
+            word.get("text", "")
+        )
+
+        if not text or text == "$":
+            continue
+
+        if not MONEY_PATTERN.fullmatch(text):
+            continue
+
+        if any(
+            word_inside_box(
+                word,
+                box,
+                padding_x=8.0,
+                padding_y=COLUMN_PADDING_Y,
+            )
+            for box in financial_boxes
+        ):
+            return True
+
+    return False
+
+
+def line_has_numeric_reference(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    Busca evidencia numérica en Referencia / Serial.
+
+    Esta segunda señal evita interpretar ``1.``, ``2.`` o ``3.`` de
+    listas informativas como días de movimientos.
+    """
+
+    for word in line:
+        if primary_movement_column(word) != "referencia_serial":
+            continue
+
+        digits = re.sub(
+            r"\D",
+            "",
+            clean_word_text(
+                word.get("text", "")
+            ),
+        )
+
+        if len(digits) >= 4:
+            return True
+
+    return False
+
+
 def line_starts_movement(
     line: Sequence[Dict[str, Any]],
 ) -> bool:
-    return extract_day_from_line(line) is not None
+    day_word = find_day_word_in_line(line)
+    if day_word is None:
+        return False
+
+    raw_day = clean_word_text(
+        day_word.get("text", "")
+    )
+
+    # Ruta histórica: no cambia absolutamente nada para un día
+    # limpio que el parser original ya reconocía.
+    if DAY_PATTERN.fullmatch(raw_day):
+        return True
+
+    # Ruta nueva y limitada: un día como ``11.`` solamente inicia
+    # movimiento cuando el mismo renglón tiene la estructura mínima
+    # de una fila financiera real.
+    return (
+        line_has_movement_amount(line)
+        and
+        line_has_numeric_reference(line)
+    )
 
 
 def is_footer_like_line(
