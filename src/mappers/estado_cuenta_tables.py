@@ -273,6 +273,9 @@ def estado_cuenta_to_tables(
                     "Referencia":
                         mov.referencia,
 
+                    "Clave de Rastreo":
+                        mov.clave_rastreo,         
+
                     "Autorizacion":
                         mov.autorizacion,
 

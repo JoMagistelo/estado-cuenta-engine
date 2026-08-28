@@ -1588,6 +1588,8 @@ def render_digital_result(
 
         "referencia",
 
+        "clave_rastreo",
+
         "autorizacion",
 
         "hora_operacion",
@@ -1669,6 +1671,9 @@ def render_digital_result(
 
         "referencia":
             "Referencia",
+
+        "clave_rastreo":
+            "Clave Rastreo",
 
         "autorizacion":
             "Autorización",

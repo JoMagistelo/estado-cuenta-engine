@@ -104,6 +104,11 @@ def main():
         )
 
         print(
+            "Clave Rastreo:",
+            mov.clave_rastreo
+        )
+
+        print(
             "RFC:",
             mov.rfc
         )

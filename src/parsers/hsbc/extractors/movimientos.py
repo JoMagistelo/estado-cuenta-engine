@@ -1891,6 +1891,7 @@ def movement_row_to_model(
         cargo=cargo,
         abono=abono,
         referencia=referencia_modelo,
+        clave_rastreo=None,
         autorizacion=None,
         beneficiario=None,
         cuenta_beneficiario=None,
@@ -1962,8 +1963,9 @@ def build_spei_match_indexes(
         )
         tracking_key = compact_tracking_key(row.clave_rastreo)
 
-        # La Clave de Rastreo es obligatoria porque sustituye la
-        # Referencia / Serial solamente después de una coincidencia.
+        # La Clave de Rastreo es obligatoria para considerar válida
+        # la fila SPEI y posteriormente almacenarla en el movimiento
+        # cuando se confirme la coincidencia.
         if not reference_key or not tracking_key:
             continue
 
@@ -2182,28 +2184,62 @@ def enrich_movement_from_spei(
     """
     Enriquece únicamente después de confirmar una coincidencia.
 
-    Si no hay coincidencia, esta función no se invoca y la
-    Referencia / Serial original permanece intacta.
+    La Referencia / Serial original del movimiento se conserva
+    siempre intacta.
+
+    La Clave de Rastreo obtenida de la tabla SPEI se almacena
+    exclusivamente en Movimiento.clave_rastreo.
+
+    Si no hay coincidencia, esta función no se invoca y tanto
+    la Referencia / Serial como el resto de los datos originales
+    permanecen intactos.
     """
 
     if spei_row.tipo == "recibidos":
-        enrich_movement_from_received_spei(movement, spei_row)
+        enrich_movement_from_received_spei(
+            movement,
+            spei_row,
+        )
     else:
-        enrich_movement_from_sent_spei(movement, spei_row)
+        enrich_movement_from_sent_spei(
+            movement,
+            spei_row,
+        )
 
     if spei_row.hora:
-        movement.hora_operacion = spei_row.hora
+        movement.hora_operacion = (
+            spei_row.hora
+        )
 
     # Participante Emisor para recibidos y Participante Receptor
     # para enviados comparten la misma posición espacial.
     if spei_row.participante:
-        movement.sucursal = spei_row.participante
+        movement.sucursal = (
+            spei_row.participante
+        )
 
-    # Al existir coincidencia, Referencia conserva la Clave de
-    # Rastreo completa reconstruida desde la tabla SPEI.
-    tracking_key = compact_tracking_key(spei_row.clave_rastreo)
+    # --------------------------------------------------------
+    # CLAVE DE RASTREO
+    # --------------------------------------------------------
+    #
+    # La Clave de Rastreo se obtiene de la fila SPEI que ya fue
+    # confirmada mediante las reglas de cruce existentes.
+    #
+    # IMPORTANTE:
+    #
+    # NO se modifica movement.referencia.
+    #
+    # Referencia / Serial pertenece al movimiento original y
+    # debe conservarse exactamente como fue reconstruida desde
+    # la tabla de movimientos.
+    # --------------------------------------------------------
+
+    tracking_key = compact_tracking_key(
+        spei_row.clave_rastreo
+    )
+
     if tracking_key:
-        movement.referencia = tracking_key
+        movement.clave_rastreo = tracking_key
 
 
 def enrich_movements_from_spei(

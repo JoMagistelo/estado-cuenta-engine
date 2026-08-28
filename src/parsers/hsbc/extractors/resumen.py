@@ -1590,24 +1590,22 @@ def extract_intereses_a_favor(
     ],
 ) -> Optional[float]:
     """
-    En la sección inicial:
-
-        Intereses
-        Netos
-        Sin Capital
-                            $ 0.00
-
-    Este extractor conserva ese campo de la V1.
-
-    En la sección posterior existe además:
+    Extrae exclusivamente:
 
         Pago Interés Nominal en el Mes
 
-    Para el modelo ResumenFinanciero utilizaremos este último
-    como asociación principal cuando esté disponible.
+    Este es el importe que aparece como abono independiente
+    dentro del detalle de movimientos.
+
+    La etiqueta mensual determina el renglón.
+
+    El valor se obtiene respecto a la posición REAL del ancla
+    encontrada para evitar confundirlo con:
+
+        Pago de Interés Nominal en el Año
     """
 
-    anchor_mes = find_best_anchor_line(
+    anchor = find_best_anchor_line(
         lines,
         (
             "PAGO",
@@ -1618,37 +1616,12 @@ def extract_intereses_a_favor(
         expected_y=EXPECTED_Y_PAGO_INTERES_MES,
     )
 
-    if anchor_mes is not None:
-
-        value = extract_value_near_anchor(
-            words,
-            anchor_mes,
-            expected_y=EXPECTED_Y_PAGO_INTERES_MES,
-        )
-
-        parsed = parse_money(
-            value
-        )
-
-        if parsed is not None:
-            return parsed
-
-    anchor = find_best_anchor_line(
-        lines,
-        (
-            "INTERESES",
-            "NETOS",
-        ),
-        expected_y=EXPECTED_Y_INTERESES_NETOS,
-    )
-
     if anchor is None:
         return None
 
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_INTERESES_NETOS,
     )
 
     return parse_money(
@@ -1942,13 +1915,19 @@ def extract_isr_retenido(
     ],
 ) -> Optional[float]:
     """
-    Extrae:
+    Extrae exclusivamente:
 
-        ISR Retenido en el Mes      $ 0.00
+        ISR Retenido en el Mes
 
-    y lo asigna a:
+    Este es el importe que aparece como cargo independiente
+    dentro del detalle de movimientos.
 
-        isr_retenido
+    La etiqueta mensual determina el renglón.
+
+    El valor se obtiene respecto a la posición REAL del ancla
+    encontrada para evitar confundirlo con:
+
+        ISR Retenido en el Año
     """
 
     anchor = find_best_anchor_line(
@@ -1967,7 +1946,6 @@ def extract_isr_retenido(
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_ISR_RETENIDO_MES,
     )
 
     return parse_money(
@@ -2306,7 +2284,48 @@ def extract_resumen_financiero_words(
     )
 
     # ========================================================
-    # 7. MODELO
+    # 7. AJUSTE DE TOTALES PARA VALIDACIÓN DE MOVIMIENTOS
+    # ========================================================
+    #
+    # HSBC presenta en el resumen:
+    #
+    #     Depósitos / Abonos
+    #     Retiros / Cargos
+    #
+    # sin incorporar en esos dos importes los movimientos
+    # separados correspondientes a:
+    #
+    #     Pago Interés Nominal en el Mes
+    #     ISR Retenido en el Mes
+    #
+    # Como dichos conceptos sí aparecen individualmente dentro
+    # del detalle de movimientos, reconstruimos los totales
+    # antes de enviarlos al modelo.
+    #
+    # Ejemplo:
+    #
+    #     3,000.00 + 248.51 = 3,248.51
+    #
+    #     0.00 + 56.96 = 56.96
+    #
+    # No se fabrica ningún total cuando falta alguno de los
+    # componentes requeridos.
+    # ========================================================
+
+    if (
+        depositos_abonos is not None
+        and intereses_a_favor is not None
+    ):
+        depositos_abonos += intereses_a_favor
+
+    if (
+        retiros_cargos is not None
+        and isr_retenido is not None
+    ):
+        retiros_cargos += isr_retenido
+
+    # ========================================================
+    # 8. MODELO
     # ========================================================
 
     return ResumenFinanciero(

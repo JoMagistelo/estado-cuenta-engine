@@ -39,6 +39,8 @@ class Movimiento:
     beneficiario: str | None = None
     cuenta_beneficiario: str | None = None
     clabe_beneficiario: str | None = None
+    clave_rastreo: Optional[str] = None
+
 
     rfc: str | None = None
 

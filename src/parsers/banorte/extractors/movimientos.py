@@ -2382,6 +2382,104 @@ def extract_referencia_from_concepto(
     return None
 
 
+
+def extract_clave_rastreo_from_concepto(
+    concepto: str,
+) -> Optional[str]:
+    """
+    Extrae la clave de rastreo de movimientos SPEI Banorte.
+
+    Formatos soportados:
+
+        CVE RASTREO: 38432P01202606075396752889
+        CVE RAST: 062025101259L0CNKLIYC
+
+    También soporta SPEI RECIBIDO donde la clave aparece
+    al inicio del concepto, antes de:
+
+        SPEI RECIBIDO
+
+    Ejemplos:
+
+        062025101259L0CNKLIYC SPEI RECIBIDO, ...
+        5902081890317359 SPEI RECIBIDO, ...
+        HSBC432658 SPEI RECIBIDO, ...
+
+    Devuelve únicamente la clave de rastreo.
+    """
+
+    if not concepto:
+        return None
+
+    text = normalize_concepto_for_search(
+        concepto
+    )
+
+    # --------------------------------------------------------
+    # CASO 1:
+    #
+    # CVE RASTREO: 38432P01202606075396752889
+    # CVE RAST: 062025101259L0CNKLIYC
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\bCVE\s+RAST(?:REO)?\s*:\s*"
+        r"([A-Z0-9_-]+)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+
+        clave_rastreo = (
+            match.group(1)
+            .strip()
+            .upper()
+        )
+
+        return clave_rastreo or None
+
+    # --------------------------------------------------------
+    # CASO 2:
+    #
+    # 062025101259L0CNKLIYC SPEI RECIBIDO, ...
+    # HSBC432658 SPEI RECIBIDO, ...
+    #
+    # Banorte puede colocar la clave directamente antes
+    # de la firma SPEI RECIBIDO.
+    # --------------------------------------------------------
+
+    if is_spei_recibido_movement(
+        concepto
+    ):
+
+        first_line = get_first_concepto_line(
+            concepto
+        )
+
+        if first_line:
+
+            match = re.search(
+                r"^\s*"
+                r"([A-Z0-9_-]+)"
+                r"\s+SPEI\s+RECIBIDO\b",
+                first_line,
+                re.IGNORECASE,
+            )
+
+            if match:
+
+                clave_rastreo = (
+                    match.group(1)
+                    .strip()
+                    .upper()
+                )
+
+                return clave_rastreo or None
+
+    return None
+
+
 def extract_rfc_from_concepto(
     concepto: str,
 ) -> Optional[str]:
@@ -3009,6 +3107,11 @@ def build_movimiento(
         concepto
     )
 
+    clave_rastreo = extract_clave_rastreo_from_concepto(
+        concepto
+    )
+
+
     beneficiario = extract_beneficiario_from_concepto(
         concepto
     )
@@ -3084,6 +3187,10 @@ def build_movimiento(
 
         referencia=(
             referencia
+        ),
+
+        clave_rastreo=(
+            clave_rastreo
         ),
 
         autorizacion=(

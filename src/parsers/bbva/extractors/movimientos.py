@@ -897,6 +897,8 @@ def build_movimiento(block, cols):
 
         referencia=referencia,
 
+        clave_rastreo=None,
+
         autorizacion=
             extract_auth_from_concepto(
                 concepto

@@ -363,23 +363,17 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Las validaciones son una parte "
-                        "fundamental de la revisión. En "
-                        "particular, las validaciones de "
-                        "\"Total depósitos / abonos\" y "
-                        "\"Total retiros / cargos\" permiten "
-                        "comprobar que los movimientos "
-                        "financieros extraídos mantienen la "
-                        "consistencia esperada con el estado "
-                        "de cuenta."
+                        "Estas validaciones comparan los totales de "
+                        "depósitos / abonos y retiros / cargos contra "
+                        "la suma de los movimientos extraídos."
                     ),
 
                     ft.Text(
-                        "Cuando ambas validaciones pasan "
-                        "correctamente, esto significa que "
-                        "los abonos y cargos extraídos son "
-                        "consistentes con los totales "
-                        "financieros esperados."
+                        "Si una validación falla, revise primero los "
+                        "totales y conceptos del resumen financiero. "
+                        "Algunos estados de cuenta pueden mostrar por "
+                        "separado intereses, ISR, IVA o comisiones que "
+                        "deben considerarse al conciliar los movimientos."
                     ),
 
                     ft.Text(
@@ -389,13 +383,12 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Se recomienda revisar visualmente "
-                        "los montos del estado de cuenta "
-                        "para identificar qué importe pudo "
-                        "haber sido extraído incorrectamente. "
-                        "Después de identificarlo, puede "
-                        "corregirse manualmente en el archivo "
-                        "Excel descargado."
+                        "Primero verifique que los totales del resumen "
+                        "sean correctos y revise si existen intereses, "
+                        "ISR, IVA o comisiones que expliquen la diferencia. "
+                        "Si los totales son correctos, revise después los "
+                        "montos de los movimientos y corrija en Excel "
+                        "cualquier extracción incorrecta."
                     ),
 
                     ft.Divider(),
@@ -1229,6 +1222,7 @@ def main(page: ft.Page):
             "clabe_beneficiario",
             "rfc",
             "referencia",
+            "clave_rastreo",
             "autorizacion",
             "hora_operacion",
         ]
@@ -1328,6 +1322,9 @@ def main(page: ft.Page):
 
             "referencia":
                 "Referencia",
+
+            "clave_rastreo":
+                "Clave Rastreo",
 
             "autorizacion":
                 "Autorización",
