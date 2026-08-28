@@ -437,19 +437,24 @@ def main(page: ft.Page):
 
                     ft.Text(
                         "• Mi Cuenta",
+                        "• Cuenta Base\n"
                     ),
 
                     ft.Text(
-                        "Próximamente:",
+                        "HSBC",
+                        size=10,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "• Ahorro y Debito",
+                    ),
+
+                    ft.Text(
+                        "Próximamente PDFs Escaneados",
                         size=9,
                         weight=ft.FontWeight.BOLD,
                         color=GOB_GOLD,
-                    ),
-
-                    ft.Text(
-                        "• CitiBanamex Cuenta Base\n"
-                        "• Banamex Premium\n"
-                        "• HSBC digital y OCR",
                     ),
 
                     ft.Divider(),
