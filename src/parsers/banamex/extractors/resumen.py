@@ -31,6 +31,9 @@ NA_VALUE = "N/A"
 TOLERANCE_X = 6.0
 TOLERANCE_Y = 4.0
 
+SUMMARY_LINE_Y_TOLERANCE = 4.0
+LABELED_ROW_MAX_VERTICAL_SHIFT = 30.0
+
 
 @dataclass(frozen=True, slots=True)
 class FieldRegion:
@@ -637,6 +640,124 @@ def _integer_from_region(
 
 
 # ============================================================
+# FORTALECIMIENTO SEMÁNTICO — RENGLONES DEL RESUMEN
+# ============================================================
+
+
+def _word_center_y(word: Dict[str, Any]) -> float:
+    return (
+        float(word.get("top", 0))
+        + float(word.get("bottom", 0))
+    ) / 2
+
+
+def _money_from_labeled_row(
+    words: List[Dict[str, Any]],
+    region: FieldRegion,
+    label_options: tuple[tuple[str, ...], ...],
+) -> Optional[float]:
+    """
+    Extrae el importe del mismo renglón que su etiqueta.
+
+    La búsqueda mantiene la página, la columna X y una ventana
+    vertical cercana a la caja del layout. Así absorbe renglones
+    desplazados sin tomar importes de otras tablas.
+    """
+
+    xmin, xmax, _, _ = region.box
+    target_x, target_y = _box_center(region.box)
+    anchor_tokens = {
+        option[0]
+        for option in label_options
+        if option
+    }
+    page_words = [
+        word
+        for word in words
+        if int(word.get("page", PAGE_GENERAL))
+        == region.page
+    ]
+
+    for anchor in page_words:
+        anchor_text = normalize_text(anchor.get("text", ""))
+
+        if anchor_text not in anchor_tokens:
+            continue
+
+        anchor_y = _word_center_y(anchor)
+
+        if (
+            abs(anchor_y - target_y)
+            > LABELED_ROW_MAX_VERTICAL_SHIFT
+        ):
+            continue
+
+        line = sorted(
+            (
+                word
+                for word in page_words
+                if abs(_word_center_y(word) - anchor_y)
+                <= SUMMARY_LINE_Y_TOLERANCE
+            ),
+            key=lambda word: float(word.get("x0", 0)),
+        )
+
+        normalized_line = normalize_text(
+            " ".join(
+                str(word.get("text", "")).strip()
+                for word in line
+                if str(word.get("text", "")).strip()
+            )
+        )
+        line_tokens = set(normalized_line.split())
+
+        if not any(
+            set(option).issubset(line_tokens)
+            for option in label_options
+        ):
+            continue
+
+        candidates = []
+
+        for word in line:
+            text = str(word.get("text", "")).strip()
+            x0 = float(word.get("x0", 0))
+            x1 = float(word.get("x1", 0))
+            center_x = (x0 + x1) / 2
+
+            if (
+                xmin - TOLERANCE_X
+                <= center_x
+                <= xmax + TOLERANCE_X
+                and is_money_text(text)
+            ):
+                candidates.append(word)
+
+        if not candidates:
+            continue
+
+        candidates.sort(
+            key=lambda word: abs(
+                (
+                    float(word.get("x0", 0))
+                    + float(word.get("x1", 0))
+                )
+                / 2
+                - target_x
+            )
+        )
+
+        value = _parse_amount(
+            str(candidates[0].get("text", "")).strip()
+        )
+
+        if value is not None:
+            return value
+
+    return None
+
+
+# ============================================================
 # EXTRACTORES INDIVIDUALES
 # ============================================================
 
@@ -670,6 +791,21 @@ def extract_depositos_abonos(
     layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
     profile = _resolve_layout(words, layout)
+
+    anchored_value = _money_from_labeled_row(
+        words,
+        profile.depositos_abonos,
+        (
+            ("DEPOSITO",),
+            ("DEPOSITOS",),
+            ("ABONO",),
+            ("ABONOS",),
+        ),
+    )
+
+    if anchored_value is not None:
+        return anchored_value
+
     return _money_from_region(words, profile.depositos_abonos)
 
 
@@ -678,6 +814,21 @@ def extract_retiros_cargos(
     layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
     profile = _resolve_layout(words, layout)
+
+    anchored_value = _money_from_labeled_row(
+        words,
+        profile.retiros_cargos,
+        (
+            ("RETIRO",),
+            ("RETIROS",),
+            ("CARGO",),
+            ("CARGOS",),
+        ),
+    )
+
+    if anchored_value is not None:
+        return anchored_value
+
     return _money_from_region(words, profile.retiros_cargos)
 
 
@@ -686,6 +837,16 @@ def extract_saldo_final(
     layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
     profile = _resolve_layout(words, layout)
+
+    anchored_value = _money_from_labeled_row(
+        words,
+        profile.saldo_final,
+        (("SALDO", "AL"),),
+    )
+
+    if anchored_value is not None:
+        return anchored_value
+
     return _money_from_region(words, profile.saldo_final)
 
 

@@ -32,6 +32,14 @@ Box = tuple[float, float, float, float]
 PAGE_GENERAL = 1
 PAGE_CLIENTE = 2
 
+PERIOD_LINE_Y_TOLERANCE = 4.0
+
+_PERIOD_DATE_PATTERN = re.compile(
+    r"\b\d{1,2}\s*/\s*(?:\d{1,2}|[A-ZÁÉÍÓÚÜÑ]{3,12})"
+    r"\s*/\s*\d{4}\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class FieldRegion:
@@ -539,6 +547,86 @@ def _numeric_text_from_region(
 
 
 # ============================================================
+# FORTALECIMIENTO SEMÁNTICO — PERIODO
+# ============================================================
+
+
+def _is_complete_period_date(value: Optional[str]) -> bool:
+    """Valida que una caja haya devuelto únicamente una fecha."""
+
+    if value is None:
+        return False
+
+    return bool(_PERIOD_DATE_PATTERN.fullmatch(value.strip()))
+
+
+def _word_center_y(word: Dict[str, Any]) -> float:
+    return (
+        float(word.get("top", 0))
+        + float(word.get("bottom", 0))
+    ) / 2
+
+
+def _extract_period_dates_from_anchor(
+    words: List[Dict[str, Any]],
+    page_number: int,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Busca el renglón ``RESUMEN DEL <fecha> AL <fecha>``.
+
+    Esta ruta sólo se usa cuando la caja histórica no contiene
+    una fecha completa, por lo que el comportamiento estable se
+    conserva para los layouts que ya coinciden con sus cajas.
+    """
+
+    page_words = [
+        word
+        for word in words
+        if int(word.get("page", PAGE_GENERAL))
+        == page_number
+    ]
+
+    for anchor in page_words:
+        if normalize_text(anchor.get("text", "")) != "RESUMEN":
+            continue
+
+        anchor_y = _word_center_y(anchor)
+        line = sorted(
+            (
+                word
+                for word in page_words
+                if abs(_word_center_y(word) - anchor_y)
+                <= PERIOD_LINE_Y_TOLERANCE
+            ),
+            key=lambda word: float(word.get("x0", 0)),
+        )
+        line_text = " ".join(
+            str(word.get("text", "")).strip()
+            for word in line
+            if str(word.get("text", "")).strip()
+        )
+        normalized_line = normalize_text(line_text)
+        line_tokens = set(normalized_line.split())
+
+        if not {"RESUMEN", "DEL", "AL"}.issubset(
+            line_tokens
+        ):
+            continue
+
+        dates = [
+            re.sub(r"\s*/\s*", "/", match.group(0))
+            for match in _PERIOD_DATE_PATTERN.finditer(
+                line_text
+            )
+        ]
+
+        if len(dates) >= 2:
+            return dates[0], dates[1]
+
+    return None, None
+
+
+# ============================================================
 # EXTRACTORES INDIVIDUALES
 # ============================================================
 
@@ -556,7 +644,17 @@ def extract_periodo_inicio(
     layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
     profile = _resolve_layout(words, layout)
-    return _text_from_region(words, profile.periodo_inicio)
+    value = _text_from_region(words, profile.periodo_inicio)
+
+    if _is_complete_period_date(value):
+        return value
+
+    periodo_inicio, _ = _extract_period_dates_from_anchor(
+        words,
+        profile.periodo_inicio.page,
+    )
+
+    return periodo_inicio
 
 
 def extract_periodo_fin(
@@ -564,7 +662,17 @@ def extract_periodo_fin(
     layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
     profile = _resolve_layout(words, layout)
-    return _text_from_region(words, profile.periodo_fin)
+    value = _text_from_region(words, profile.periodo_fin)
+
+    if _is_complete_period_date(value):
+        return value
+
+    _, periodo_fin = _extract_period_dates_from_anchor(
+        words,
+        profile.periodo_fin.page,
+    )
+
+    return periodo_fin
 
 
 def extract_fecha_corte(

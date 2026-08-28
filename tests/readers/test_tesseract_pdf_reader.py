@@ -7,7 +7,7 @@ from readers.tesseract_pdf_reader import TesseractPDFReader
 
 
 def test_spatial_extraction():
-    ruta_pdf = "data/12. Debito HSBC_ABR25_CAGC940707MDFHRL03.pdf"
+    ruta_pdf = "data/DHSBC_2.pdf"
 
     print("\n========================================================")
     print(" 🛠️ TEST TESSERACT PDF READER (OCR)")

@@ -94,6 +94,11 @@ TERMINAL_LINE_MARKERS = (
     "INFORMACION IMPORTANTE",
 )
 
+TERMINAL_EXACT_LINE_MARKERS = (
+    "MONTOS EN ACLARACION",
+    "CARGOS EN ACLARACION",
+)
+
 
 # ============================================================
 # REGEX
@@ -1038,6 +1043,9 @@ def is_saldo_anterior(
 
 def is_terminal_line(line: List[Dict[str, Any]]) -> bool:
     text = normalize_upper(line_text(line))
+
+    if text in TERMINAL_EXACT_LINE_MARKERS:
+        return True
 
     return any(
         marker in text
