@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from models.resumen_financiero import ResumenFinanciero
@@ -74,6 +75,20 @@ BOX_FINANCIAL_VALUE = (
 )
 
 
+# Columnas monetarias del detalle de movimientos. Se utilizan
+# únicamente como respaldo para los dos conceptos mensuales
+# que HSBC también registra como movimientos independientes.
+MOVEMENT_CARGO_X = (
+    345.0,
+    415.0,
+)
+
+MOVEMENT_ABONO_X = (
+    420.0,
+    505.0,
+)
+
+
 # ============================================================
 # REFERENCIAS ESPACIALES DE LOS VALORES
 # ============================================================
@@ -141,6 +156,11 @@ MONEY_PATTERN = re.compile(
 
 PERCENTAGE_PATTERN = re.compile(
     r"^\d+(?:[.,]\d+)?%?$"
+)
+
+
+PERIOD_DATE_PATTERN = re.compile(
+    r"\b\d{2}[/-]\d{2}[/-]\d{4}\b"
 )
 
 
@@ -1445,6 +1465,444 @@ def extract_value_near_anchor(
 
 
 # ============================================================
+# FALLBACKS SEMÁNTICOS PARA LAYOUTS OCR ALTERNOS
+# ============================================================
+
+
+def extract_money_from_line_column(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+    column: Tuple[
+        float,
+        float,
+    ],
+) -> Optional[float]:
+    """Extrae el importe contenido en una columna del renglón."""
+
+    xmin, xmax = column
+
+    value_words = [
+        word
+        for word in line
+        if (
+            is_numeric_word(word)
+            and
+            xmin
+            <= word_center(word)[0]
+            <= xmax
+        )
+    ]
+
+    value = extract_numeric_text_from_words(
+        value_words
+    )
+
+    return parse_money(
+        value
+    )
+
+
+def extract_movement_total(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    tokens: Sequence[str],
+    column: Tuple[
+        float,
+        float,
+    ],
+) -> Optional[float]:
+    """
+    Suma movimientos que contienen los tokens indicados.
+
+    Se excluyen explícitamente las filas resumen mensuales y
+    anuales; sólo se aceptan importes dentro de la columna del
+    detalle de movimientos.
+    """
+
+    values = []
+
+    for line in lines:
+
+        normalized = normalized_line_text(
+            line
+        )
+
+        if not all(
+            normalize_text(token)
+            in normalized
+            for token in tokens
+        ):
+            continue
+
+        if (
+            "MES" in normalized
+            or
+            "ANO" in normalized
+        ):
+            continue
+
+        value = extract_money_from_line_column(
+            line,
+            column,
+        )
+
+        if value is not None:
+            values.append(
+                value
+            )
+
+    if not values:
+        return None
+
+    return sum(
+        values
+    )
+
+
+def extract_days_from_period(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+) -> Optional[int]:
+    """Calcula los días inclusivos desde el periodo impreso."""
+
+    for line in lines:
+
+        if "PERIODO" not in normalized_line_text(
+            line
+        ):
+            continue
+
+        dates = PERIOD_DATE_PATTERN.findall(
+            line_text(
+                line
+            )
+        )
+
+        if len(dates) < 2:
+            continue
+
+        try:
+
+            start = datetime.strptime(
+                dates[0].replace("-", "/"),
+                "%d/%m/%Y",
+            )
+
+            end = datetime.strptime(
+                dates[1].replace("-", "/"),
+                "%d/%m/%Y",
+            )
+
+        except ValueError:
+            continue
+
+        days = (
+            end - start
+        ).days + 1
+
+        if 1 <= days <= 62:
+            return days
+
+    return None
+
+
+def extract_first_numeric_after_token(
+    line: Sequence[
+        Dict[str, Any]
+    ],
+    token: str,
+) -> Optional[str]:
+    """Toma el primer valor ubicado a la derecha del token."""
+
+    label_words = [
+        word
+        for word in line
+        if normalize_text(token)
+        in normalized_word_text(word)
+    ]
+
+    if not label_words:
+        return None
+
+    label_right = max(
+        safe_float(
+            word.get(
+                "x1",
+                0.0,
+            )
+        )
+        for word in label_words
+    )
+
+    candidates = sorted(
+        (
+            word
+            for word in line
+            if (
+                is_numeric_word(word)
+                and
+                safe_float(
+                    word.get(
+                        "x0",
+                        0.0,
+                    )
+                )
+                >= label_right - 1.0
+            )
+        ),
+        key=lambda word: safe_float(
+            word.get(
+                "x0",
+                0.0,
+            )
+        ),
+    )
+
+    if not candidates:
+        return None
+
+    value_words = [
+        candidates[0]
+    ]
+
+    if (
+        clean_word_text(
+            candidates[0].get(
+                "text",
+                "",
+            )
+        )
+        == "$"
+        and
+        len(candidates) > 1
+        and
+        abs(
+            word_center(candidates[1])[1]
+            - word_center(candidates[0])[1]
+        )
+        <= LINE_Y_TOLERANCE
+    ):
+
+        value_words.append(
+            candidates[1]
+        )
+
+    return extract_numeric_text_from_words(
+        value_words
+    )
+
+
+def extract_saldo_promedio_by_order(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    words: Sequence[
+        Dict[str, Any]
+    ],
+) -> Optional[float]:
+    """
+    Recupera el saldo promedio cuando su etiqueta no fue OCR.
+
+    HSBC imprime el saldo promedio antes del pago de interés
+    mensual. Sólo se usa este respaldo cuando el mismo importe
+    mensual también fue confirmado en movimientos.
+    """
+
+    monthly_interest = extract_movement_total(
+        lines,
+        (
+            "PAGO",
+            "INTERES",
+            "NOMINAL",
+        ),
+        MOVEMENT_ABONO_X,
+    )
+
+    if monthly_interest is None:
+        return None
+
+    annual_anchor = find_best_anchor_line(
+        lines,
+        (
+            "PAGO",
+            "INTERES",
+            "NOMINAL",
+            "ANO",
+        ),
+        expected_y=EXPECTED_Y_PAGO_INTERES_MES,
+    )
+
+    if annual_anchor is None:
+        return None
+
+    annual_y = line_center_y(
+        annual_anchor
+    )
+
+    rows = []
+
+    for word in sorted(
+        value_column_words(words),
+        key=lambda item: word_center(item)[1],
+    ):
+
+        _, center_y = word_center(
+            word
+        )
+
+        if not (
+            annual_y - 85.0
+            <= center_y
+            <= annual_y - LINE_Y_TOLERANCE
+        ):
+            continue
+
+        matching_row = next(
+            (
+                row
+                for row in rows
+                if abs(
+                    row[0]
+                    - center_y
+                )
+                <= LINE_Y_TOLERANCE
+            ),
+            None,
+        )
+
+        if matching_row is None:
+            rows.append(
+                [
+                    center_y,
+                    [word],
+                ]
+            )
+        else:
+            matching_row[1].append(
+                word
+            )
+
+    parsed_rows = []
+
+    for center_y, row_words in rows:
+
+        value = parse_money(
+            extract_numeric_text_from_words(
+                row_words
+            )
+        )
+
+        if value is not None:
+            parsed_rows.append(
+                (
+                    center_y,
+                    value,
+                )
+            )
+
+    monthly_rows = [
+        row
+        for row in parsed_rows
+        if abs(
+            row[1]
+            - monthly_interest
+        )
+        <= 0.01
+    ]
+
+    if not monthly_rows:
+        return None
+
+    monthly_y = max(
+        row[0]
+        for row in monthly_rows
+    )
+
+    previous_rows = [
+        row
+        for row in parsed_rows
+        if (
+            row[0]
+            < monthly_y - LINE_Y_TOLERANCE
+            and
+            abs(row[1])
+            > abs(monthly_interest) + 0.01
+        )
+    ]
+
+    if not previous_rows:
+        return None
+
+    previous_rows.sort(
+        key=lambda row: row[0],
+        reverse=True,
+    )
+
+    return previous_rows[0][1]
+
+
+def is_producto_basico_general_summary(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+) -> bool:
+    """
+    Confirma el layout cuyo título es PRODUCTO BASICO GENERAL.
+
+    En este formato Tesseract puede omitir por completo los ``$0.00``
+    de la tabla inferior aunque las etiquetas mensuales sí estén
+    presentes. La marca de producto limita el respaldo a ese layout
+    y evita convertir ausencias de otros productos en ceros.
+    """
+
+    return any(
+        all(
+            token in normalized_line_text(line)
+            for token in (
+                "PRODUCTO",
+                "BASICO",
+                "GENERAL",
+            )
+        )
+        for line in lines
+    )
+
+
+def zero_for_missing_basic_product_value(
+    lines: Sequence[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+    anchor: Optional[
+        Sequence[
+            Dict[str, Any]
+        ]
+    ],
+) -> Optional[float]:
+    """Devuelve cero sólo para una etiqueta existente del layout."""
+
+    if anchor is None:
+        return None
+
+    if not is_producto_basico_general_summary(lines):
+        return None
+
+    return 0.0
+
+
+# ============================================================
 # EXTRACTORES EXISTENTES
 # ============================================================
 
@@ -1605,6 +2063,19 @@ def extract_intereses_a_favor(
         Pago de Interés Nominal en el Año
     """
 
+    movement_value = extract_movement_total(
+        lines,
+        (
+            "PAGO",
+            "INTERES",
+            "NOMINAL",
+        ),
+        MOVEMENT_ABONO_X,
+    )
+
+    if movement_value is not None:
+        return movement_value
+
     anchor = find_best_anchor_line(
         lines,
         (
@@ -1624,8 +2095,16 @@ def extract_intereses_a_favor(
         anchor,
     )
 
-    return parse_money(
+    parsed_value = parse_money(
         value
+    )
+
+    if parsed_value is not None:
+        return parsed_value
+
+    return zero_for_missing_basic_product_value(
+        lines,
+        anchor,
     )
 
 
@@ -1642,6 +2121,10 @@ def extract_dias_periodo(
     """
     Días Transcurridos en el mes -> dias_periodo
     """
+
+    period_days = extract_days_from_period(
+        lines
+    )
 
     anchor = find_best_anchor_line(
         lines,
@@ -1665,7 +2148,7 @@ def extract_dias_periodo(
         )
 
     if anchor is None:
-        return None
+        return period_days
 
     value = extract_value_near_anchor(
         words,
@@ -1673,9 +2156,18 @@ def extract_dias_periodo(
         expected_y=EXPECTED_Y_DIAS_PERIODO,
     )
 
-    return parse_integer(
+    parsed_days = parse_integer(
         value
     )
+
+    if (
+        period_days is not None
+        and
+        parsed_days != period_days
+    ):
+        return period_days
+
+    return parsed_days
 
 
 def extract_saldo_final(
@@ -1703,6 +2195,18 @@ def extract_saldo_final(
 
     if anchor is None:
         return None
+
+    same_line_value = extract_first_numeric_after_token(
+        anchor,
+        "FINAL",
+    )
+
+    parsed_same_line_value = parse_money(
+        same_line_value
+    )
+
+    if parsed_same_line_value is not None:
+        return parsed_same_line_value
 
     value = extract_value_near_anchor(
         words,
@@ -1753,17 +2257,33 @@ def extract_saldo_promedio(
         expected_y=EXPECTED_Y_SALDO_PROMEDIO,
     )
 
-    if anchor is None:
-        return None
+    if anchor is not None:
 
-    value = extract_value_near_anchor(
+        value = extract_value_near_anchor(
+            words,
+            anchor,
+        )
+
+        parsed_value = parse_money(
+            value
+        )
+
+        if parsed_value is not None:
+            return parsed_value
+
+        basic_product_zero = (
+            zero_for_missing_basic_product_value(
+                lines,
+                anchor,
+            )
+        )
+
+        if basic_product_zero is not None:
+            return basic_product_zero
+
+    return extract_saldo_promedio_by_order(
+        lines,
         words,
-        anchor,
-        expected_y=EXPECTED_Y_SALDO_PROMEDIO,
-    )
-
-    return parse_money(
-        value
     )
 
 
@@ -1930,6 +2450,17 @@ def extract_isr_retenido(
         ISR Retenido en el Año
     """
 
+    movement_value = extract_movement_total(
+        lines,
+        (
+            "RETENIDO",
+        ),
+        MOVEMENT_CARGO_X,
+    )
+
+    if movement_value is not None:
+        return movement_value
+
     anchor = find_best_anchor_line(
         lines,
         (
@@ -1948,8 +2479,16 @@ def extract_isr_retenido(
         anchor,
     )
 
-    return parse_money(
+    parsed_value = parse_money(
         value
+    )
+
+    if parsed_value is not None:
+        return parsed_value
+
+    return zero_for_missing_basic_product_value(
+        lines,
+        anchor,
     )
 
 

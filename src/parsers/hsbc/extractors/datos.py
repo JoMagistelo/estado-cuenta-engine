@@ -1714,6 +1714,71 @@ def extract_numero_cliente_from_anchor(
         ):
             return value
 
+    # --------------------------------------------------------
+    # Fallback por word individual.
+    #
+    # Algunos OCR encadenan en un solo renglón lógico el valor
+    # del cliente, la etiqueta RFC y el periodo. En ese caso la
+    # concatenación del renglón deja de ser válida, aunque la
+    # word inmediata posterior a NUMERO DE CLIENTE sí lo sea.
+    # --------------------------------------------------------
+
+    direct_candidates = []
+
+    for word in words:
+
+        center_x, center_y = word_center(
+            word
+        )
+
+        if not (
+            xmin - BOX_PADDING_X
+            <= center_x
+            <= xmax + BOX_PADDING_X
+        ):
+            continue
+
+        if not (
+            anchor_y
+            < center_y
+            <= anchor_y + 25.0
+        ):
+            continue
+
+        candidate = re.sub(
+            r"\D",
+            "",
+            clean_word_text(
+                word.get(
+                    "text",
+                    "",
+                )
+            ),
+        )
+
+        if CLIENT_PATTERN.fullmatch(
+            candidate
+        ):
+
+            direct_candidates.append(
+                (
+                    center_y,
+                    center_x,
+                    candidate,
+                )
+            )
+
+    if direct_candidates:
+
+        direct_candidates.sort(
+            key=lambda item: (
+                item[0],
+                item[1],
+            )
+        )
+
+        return direct_candidates[0][2]
+
     return None
 
 
@@ -1881,6 +1946,108 @@ def extract_rfc_from_anchor(
                 candidate,
             )
         )
+
+    # --------------------------------------------------------
+    # Fallback por ancla RFC individual.
+    #
+    # Se activa cuando el agrupador OCR fusiona RFC, CURP y
+    # periodo en un mismo renglón lógico. La relación espacial
+    # entre la word RFC y su valor continúa siendo estable.
+    # --------------------------------------------------------
+
+    rfc_anchors = [
+        word
+        for word in words
+        if normalize_text(
+            word.get(
+                "text",
+                "",
+            )
+        ).rstrip(".:")
+        == "RFC"
+    ]
+
+    if rfc_anchors:
+
+        expected_x, expected_y = box_center(
+            BOX_RFC
+        )
+
+        best_word_anchor = min(
+            rfc_anchors,
+            key=lambda word: (
+                abs(
+                    word_center(word)[0]
+                    - expected_x
+                )
+                +
+                abs(
+                    word_center(word)[1]
+                    - expected_y
+                )
+            ),
+        )
+
+        _, word_anchor_y = word_center(
+            best_word_anchor
+        )
+
+        direct_candidates = []
+
+        for word in words:
+
+            center_x, center_y = word_center(
+                word
+            )
+
+            if not (
+                xmin - BOX_PADDING_X
+                <= center_x
+                <= xmax + BOX_PADDING_X
+            ):
+                continue
+
+            if not (
+                word_anchor_y
+                < center_y
+                <= word_anchor_y
+                + VALUE_MAX_VERTICAL_DISTANCE
+            ):
+                continue
+
+            candidate = re.sub(
+                r"[^A-Z0-9Ñ&]",
+                "",
+                clean_word_text(
+                    word.get(
+                        "text",
+                        "",
+                    )
+                ).upper(),
+            )
+
+            if RFC_PATTERN.fullmatch(
+                candidate
+            ):
+
+                direct_candidates.append(
+                    (
+                        center_y,
+                        center_x,
+                        candidate,
+                    )
+                )
+
+        if direct_candidates:
+
+            direct_candidates.sort(
+                key=lambda item: (
+                    item[0],
+                    item[1],
+                )
+            )
+
+            return direct_candidates[0][2]
 
     return None
 
@@ -2296,6 +2463,55 @@ def extract_producto_principal(
         return "Cuenta Flexible Simple"
 
     # --------------------------------------------------------
+    # Layout AHORRO FLEXIBLE HSBC.
+    #
+    # La misma leyenda puede repetirse en el resumen y en el
+    # encabezado de movimientos. Se conserva la selección por
+    # distancia a la caja superior para elegir el título.
+    # --------------------------------------------------------
+
+    ahorro_flexible_candidates = []
+
+    for line in lines:
+
+        normalized = normalized_line_text(
+            line
+        )
+
+        if (
+            "AHORRO" in normalized
+            and
+            "FLEXIBLE" in normalized
+        ):
+
+            ahorro_flexible_candidates.append(
+                line
+            )
+
+    if ahorro_flexible_candidates:
+
+        expected_x, expected_y = box_center(
+            BOX_PRODUCTO_PRINCIPAL
+        )
+
+        best = min(
+            ahorro_flexible_candidates,
+            key=lambda line: (
+                abs(
+                    line_center_x(line)
+                    - expected_x
+                )
+                +
+                abs(
+                    line_center_y(line)
+                    - expected_y
+                )
+            ),
+        )
+
+        return "Ahorro Flexible HSBC"
+
+    # --------------------------------------------------------
     # Fallback espacial.
     # --------------------------------------------------------
 
@@ -2422,9 +2638,31 @@ def extract_nombre_cliente(
 
     for line in lines:
 
+        # El nombre vive en la columna izquierda. Se descartan
+        # marcas OCR de los códigos de barras que aparecen a
+        # ambos lados, sin modificar la agrupación general.
+        name_line = [
+            word
+            for word in line
+            if (
+                BOX_NOMBRE_CLIENTE[0]
+                <= float(
+                    word.get(
+                        "x0",
+                        0.0,
+                    )
+                )
+                <= BOX_NOMBRE_CLIENTE[1]
+                + BOX_PADDING_X
+            )
+        ]
+
+        if not name_line:
+            continue
+
         xmin, xmax, ymin, ymax = (
             line_bounds(
-                line
+                name_line
             )
         )
 
@@ -2451,11 +2689,11 @@ def extract_nombre_cliente(
         ):
 
             if is_probable_person_name(
-                line
+                name_line
             ):
 
                 candidates.append(
-                    line
+                    name_line
                 )
 
     if candidates:
@@ -2510,12 +2748,28 @@ def extract_nombre_cliente(
 
     for line in selected_lines:
 
+        name_line = [
+            word
+            for word in line
+            if (
+                BOX_NOMBRE_CLIENTE[0]
+                <= float(
+                    word.get(
+                        "x0",
+                        0.0,
+                    )
+                )
+                <= BOX_NOMBRE_CLIENTE[1]
+                + BOX_PADDING_X
+            )
+        ]
+
         if is_probable_person_name(
-            line
+            name_line
         ):
 
             return line_text(
-                line
+                name_line
             )
 
     return None
