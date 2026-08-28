@@ -102,6 +102,18 @@ DAY_OCR_PATTERN = re.compile(
     r"[\s.,;:|]*$"
 )
 
+# En OCR deteriorado, el día puede quedar unido al primer token
+# del concepto. El caso observado es ``30_1.S.R.``. Se limita el
+# respaldo al guion bajo para no interpretar referencias, fechas
+# u otros números del concepto como días de movimiento.
+DAY_WITH_INLINE_CONCEPT_PATTERN = re.compile(
+    r"^[\s.,;:|]*"
+    r"(?P<day>0?[1-9]|[12]\d|3[01])"
+    r"_+"
+    r"(?P<concept>\S.*)$",
+    re.IGNORECASE,
+)
+
 # HSBC puede imprimir día y mes con uno o dos dígitos. El patrón
 # conserva tres grupos: día, mes y año.
 DATE_PATTERN = re.compile(
@@ -1319,6 +1331,12 @@ class MovementRow:
     page: int
     lines: List[List[Dict[str, Any]]]
 
+    # Sólo se activa cuando existe evidencia estructural de una
+    # fila real, pero Tesseract omitió alguno de sus campos. Los
+    # movimientos normales conservan exactamente la ruta histórica.
+    partial_recovery: bool = False
+    movement_header_confirmed: bool = False
+
     referencia_serial_superior: Optional[str] = None
     referencia_serial_inferior: Optional[str] = None
     referencia_serial_completo: Optional[str] = None
@@ -1330,30 +1348,47 @@ class MovementRow:
 # ============================================================
 
 
-def parse_day_token(value: Any) -> Optional[int]:
+def split_day_and_inline_concept(
+    value: Any,
+) -> Tuple[Optional[int], Optional[str]]:
     """
-    Convierte un token de la columna Día a entero.
+    Separa el día y, si existe, el concepto unido por OCR.
 
     Tesseract puede conservar puntuación de la cuadrícula junto al
-    número, por ejemplo ``11.`` o ``|14``. Solo se toleran signos
-    externos; nunca se eliminan letras ni dígitos adicionales.
+    número, por ejemplo ``11.`` o ``|14``. También puede producir
+    ``30_1.S.R.``; en ese único formato se conserva ``1.S.R.`` como
+    parte del concepto.
     """
 
     text = clean_word_text(value)
     if not text:
-        return None
+        return None, None
 
     match = DAY_OCR_PATTERN.fullmatch(text)
+    inline_concept: Optional[str] = None
+
     if match is None:
-        return None
+        match = DAY_WITH_INLINE_CONCEPT_PATTERN.fullmatch(text)
+        if match is None:
+            return None, None
+
+        inline_concept = clean_word_text(
+            match.group("concept")
+        ) or None
 
     try:
         day = int(match.group("day"))
     except (TypeError, ValueError):
-        return None
+        return None, None
 
     if not DAY_MIN <= day <= DAY_MAX:
-        return None
+        return None, None
+
+    return day, inline_concept
+
+
+def parse_day_token(value: Any) -> Optional[int]:
+    day, _ = split_day_and_inline_concept(value)
 
     return day
 
@@ -1400,6 +1435,189 @@ def find_day_word_in_line(
     return None
 
 
+def is_plausible_money_token(value: Any) -> bool:
+    """
+    Reconoce una word que puede representar un importe real.
+
+    Los dígitos aislados que Tesseract genera sobre el borde derecho
+    de la tabla (``3``, ``5``, ``8``) no se consideran dinero. Sí se
+    conservan importes con decimales, separador de miles, símbolo de
+    moneda o enteros de al menos dos dígitos.
+    """
+
+    text = clean_word_text(value)
+    if not text or text == "$":
+        return False
+
+    normalized = (
+        text
+        .replace(",", "")
+        .replace("$", "")
+        .strip()
+    )
+
+    if not re.fullmatch(r"\d+(?:\.\d{1,2})?", normalized):
+        return False
+
+    digits = re.sub(r"\D", "", normalized)
+
+    return (
+        "." in normalized
+        or "," in text
+        or "$" in text
+        or len(digits) >= 2
+        or normalized == "0"
+    )
+
+
+def line_has_primary_money(
+    line: Sequence[Dict[str, Any]],
+    column_name: str,
+) -> bool:
+    return any(
+        primary_movement_column(word) == column_name
+        and is_plausible_money_token(
+            word.get("text", "")
+        )
+        for word in line
+    )
+
+
+def line_has_transaction_amount(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    return (
+        line_has_primary_money(line, "cargo")
+        or line_has_primary_money(line, "abono")
+    )
+
+
+def line_has_balance_amount(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    return line_has_primary_money(line, "saldo")
+
+
+def row_has_transaction_amount(row: MovementRow) -> bool:
+    return any(
+        line_has_transaction_amount(line)
+        for line in row.lines
+    )
+
+
+def line_has_orphan_financial_evidence(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    Detecta una fila financiera cuyo día/concepto desapareció.
+
+    La señal es deliberadamente estricta: deben coexistir un importe
+    de cargo/abono y el saldo. Así no se convierten referencias o
+    números corruptos aislados en movimientos parciales.
+    """
+
+    if find_day_word_in_line(line) is not None:
+        return False
+
+    if not line_has_transaction_amount(line):
+        return False
+
+    return line_has_balance_amount(line)
+
+
+def line_is_reference_continuation(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    return (
+        find_day_word_in_line(line) is None
+        and line_has_numeric_reference(line)
+        and not line_has_transaction_amount(line)
+        and not line_has_balance_amount(line)
+    )
+
+
+def line_is_low_information_noise(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    meaningful_tokens = [
+        normalize_text(
+            word.get("text", "")
+        )
+        for word in line
+        if re.search(
+            r"[A-Z0-9]{3,}",
+            normalize_text(
+                word.get("text", "")
+            ),
+        )
+    ]
+
+    return not meaningful_tokens
+
+
+def line_is_concept_continuation(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    if (
+        find_day_word_in_line(line) is not None
+        or line_has_transaction_amount(line)
+        or line_has_balance_amount(line)
+    ):
+        return False
+
+    meaningful_words = [
+        word
+        for word in line
+        if re.search(
+            r"[A-Z0-9]{3,}",
+            normalize_text(
+                word.get("text", "")
+            ),
+        )
+    ]
+
+    if not meaningful_words:
+        return False
+
+    return all(
+        primary_movement_column(word)
+        in (
+            "concepto",
+            "referencia_serial",
+            None,
+        )
+        for word in meaningful_words
+    )
+
+
+def should_attach_continuation_line(
+    row: MovementRow,
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    if not row.lines:
+        return False
+
+    vertical_gap = (
+        line_center_y(line)
+        - line_center_y(row.lines[0])
+    )
+
+    if vertical_gap < 0.0 or vertical_gap > MOVEMENT_ROW_MAX_GAP:
+        return False
+
+    if line_is_reference_continuation(line):
+        return True
+
+    # Algunos OCR separan el importe del renglón que contiene el día.
+    if (
+        not row_has_transaction_amount(row)
+        and line_has_transaction_amount(line)
+    ):
+        return True
+
+    return line_is_concept_continuation(line)
+
+
 def line_has_movement_amount(
     line: Sequence[Dict[str, Any]],
 ) -> bool:
@@ -1412,31 +1630,18 @@ def line_has_movement_amount(
     anterior del parser.
     """
 
-    financial_boxes = (
-        BOX_CARGO,
-        BOX_ABONO,
-        BOX_SALDO,
-    )
-
     for word in line:
         text = clean_word_text(
             word.get("text", "")
         )
 
-        if not text or text == "$":
+        if not is_plausible_money_token(text):
             continue
 
-        if not MONEY_PATTERN.fullmatch(text):
-            continue
-
-        if any(
-            word_inside_box(
-                word,
-                box,
-                padding_x=8.0,
-                padding_y=COLUMN_PADDING_Y,
-            )
-            for box in financial_boxes
+        if primary_movement_column(word) in (
+            "cargo",
+            "abono",
+            "saldo",
         ):
             return True
 
@@ -1562,7 +1767,43 @@ def split_page_into_movement_rows(
     lines = group_words_into_lines(words)
     rows: List[MovementRow] = []
     current_row: Optional[MovementRow] = None
+    pending_orphan_lines: List[List[Dict[str, Any]]] = []
+    pending_orphan_page: Optional[int] = None
     table_started = False
+    movement_header_confirmed = False
+
+    def flush_current_row() -> None:
+        nonlocal current_row
+
+        if current_row is not None:
+            rows.append(current_row)
+            current_row = None
+
+    def flush_pending_orphan() -> None:
+        nonlocal pending_orphan_lines
+        nonlocal pending_orphan_page
+
+        if (
+            pending_orphan_lines
+            and movement_header_confirmed
+        ):
+            rows.append(
+                MovementRow(
+                    page=(
+                        pending_orphan_page
+                        if pending_orphan_page is not None
+                        else 1
+                    ),
+                    lines=pending_orphan_lines,
+                    partial_recovery=True,
+                    movement_header_confirmed=(
+                        movement_header_confirmed
+                    ),
+                )
+            )
+
+        pending_orphan_lines = []
+        pending_orphan_page = None
 
     for line in lines:
         if not line:
@@ -1571,7 +1812,10 @@ def split_page_into_movement_rows(
         page = safe_page(line[0])
 
         if is_movement_header_line(line):
+            flush_current_row()
+            flush_pending_orphan()
             table_started = True
+            movement_header_confirmed = True
             continue
 
         if is_column_header_line(line):
@@ -1579,45 +1823,117 @@ def split_page_into_movement_rows(
             continue
 
         if is_footer_like_line(line):
-            if current_row is not None:
-                rows.append(current_row)
-                current_row = None
+            flush_current_row()
+            flush_pending_orphan()
             break
 
         if table_started and (
             is_table_breaker_line(line)
             or is_spei_information_header_line(line)
         ):
-            if current_row is not None:
-                rows.append(current_row)
-                current_row = None
+            flush_current_row()
+            flush_pending_orphan()
             break
 
         if line_starts_movement(line):
-            if current_row is not None:
-                rows.append(current_row)
+            if pending_orphan_lines:
+                if (
+                    line_has_transaction_amount(line)
+                    or line_has_balance_amount(line)
+                ):
+                    # La fila pendiente ya contiene un movimiento
+                    # financiero completo; el día actual pertenece
+                    # al siguiente movimiento.
+                    flush_pending_orphan()
+                else:
+                    # El OCR adelantó importe/saldo respecto al día.
+                    # Se unen sin alterar el orden semántico: la línea
+                    # con día queda al frente para construir la fecha.
+                    flush_current_row()
+                    current_row = MovementRow(
+                        page=page,
+                        lines=[
+                            list(line),
+                            *pending_orphan_lines,
+                        ],
+                        movement_header_confirmed=(
+                            movement_header_confirmed
+                        ),
+                    )
+                    pending_orphan_lines = []
+                    pending_orphan_page = None
+                    table_started = True
+                    continue
+
+            flush_current_row()
 
             current_row = MovementRow(
                 page=page,
                 lines=[list(line)],
+                movement_header_confirmed=(
+                    movement_header_confirmed
+                ),
             )
             table_started = True
+            continue
+
+        if line_has_orphan_financial_evidence(line):
+            if (
+                current_row is not None
+                and not row_has_transaction_amount(current_row)
+            ):
+                current_row.lines.append(list(line))
+                continue
+
+            flush_current_row()
+            flush_pending_orphan()
+            pending_orphan_lines = [list(line)]
+            pending_orphan_page = page
             continue
 
         if not table_started:
             continue
 
-        if current_row is not None:
-            # La siguiente línea con día delimita la próxima fila.
-            # Mientras no aparezca ese inicio ni un cierre explícito
-            # de tabla, toda línea pertenece al movimiento actual.
-            #
-            # No se usa una distancia vertical máxima: HSBC puede
-            # imprimir Referencia y Serial con separaciones variables.
-            current_row.lines.append(list(line))
+        if pending_orphan_lines:
+            vertical_gap = (
+                line_center_y(line)
+                - line_center_y(pending_orphan_lines[0])
+            )
 
-    if current_row is not None:
-        rows.append(current_row)
+            if (
+                0.0 <= vertical_gap <= MOVEMENT_ROW_MAX_GAP
+                and (
+                    line_is_reference_continuation(line)
+                    or line_is_concept_continuation(line)
+                )
+            ):
+                pending_orphan_lines.append(list(line))
+                continue
+
+            if line_is_low_information_noise(line):
+                continue
+
+            flush_pending_orphan()
+            continue
+
+        if current_row is not None:
+            if should_attach_continuation_line(
+                current_row,
+                line,
+            ):
+                current_row.lines.append(list(line))
+                continue
+
+            if line_is_low_information_noise(line):
+                continue
+
+            # Una línea ajena ya no contamina el movimiento vigente.
+            # La tabla permanece activa para que un día posterior pueda
+            # iniciar otra fila en la misma página.
+            flush_current_row()
+
+    flush_current_row()
+    flush_pending_orphan()
 
     return rows
 
@@ -1673,25 +1989,49 @@ def text_from_box(
 
 
 def extract_concepto(row: MovementRow) -> str:
-    words = words_from_rows_in_box(
-        row,
-        BOX_CONCEPTO,
-        padding_x=5.0,
-    )
     parts = []
 
-    day_word = (
-        find_day_word_in_line(row.lines[0])
-        if row.lines
-        else None
+    # Se respeta primero el orden de renglones y después el orden X.
+    # Ordenar todas las words por ``top`` mezclaba palabras de una
+    # misma línea cuando el OCR las entregaba ligeramente inclinadas.
+    ordered_lines = sorted(
+        row.lines,
+        key=line_center_y,
     )
 
-    for word in words:
-        if day_word is not None and word is day_word:
-            continue
+    for line in ordered_lines:
+        day_word = find_day_word_in_line(line)
 
-        text = clean_word_text(word.get("text", ""))
-        if text:
+        for word in sorted(
+            line,
+            key=lambda item: safe_float(
+                item.get("x0", 0.0)
+            ),
+        ):
+            if not word_inside_box(
+                word,
+                BOX_CONCEPTO,
+                padding_x=5.0,
+                padding_y=COLUMN_PADDING_Y,
+            ):
+                continue
+
+            text = clean_word_text(
+                word.get("text", "")
+            )
+            if not text:
+                continue
+
+            if day_word is not None and word is day_word:
+                _, inline_concept = (
+                    split_day_and_inline_concept(text)
+                )
+
+                if inline_concept:
+                    parts.append(inline_concept)
+
+                continue
+
             parts.append(text)
 
     return " ".join(parts).strip()
@@ -1895,23 +2235,34 @@ def extract_referencia_completa(
 # IMPORTE
 # ============================================================
 
-def parse_money_words(
-    row: MovementRow,
+def movement_column_name_from_box(
     box: Tuple[float, float, float, float],
-) -> float:
-    words = words_from_rows_in_box(
-        row,
-        box,
-        padding_x=8.0,
-    )
-    if not words:
-        return 0.0
+) -> Optional[str]:
+    if box == BOX_CARGO:
+        return "cargo"
+    if box == BOX_ABONO:
+        return "abono"
+    if box == BOX_SALDO:
+        return "saldo"
 
-    parts = []
+    return None
 
-    for word in words:
-        text = clean_word_text(word.get("text", ""))
-        if not text or text == "$":
+
+def parse_money_from_primary_line(
+    line: Sequence[Dict[str, Any]],
+    column_name: str,
+) -> Optional[float]:
+    candidates = []
+
+    for word in line:
+        if primary_movement_column(word) != column_name:
+            continue
+
+        text = clean_word_text(
+            word.get("text", "")
+        )
+
+        if not is_plausible_money_token(text):
             continue
 
         normalized = (
@@ -1921,20 +2272,78 @@ def parse_money_words(
             .strip()
         )
 
-        if re.fullmatch(r"\d+(?:\.\d{1,2})?", normalized):
-            parts.append(normalized)
+        try:
+            value = float(normalized)
+        except ValueError:
+            continue
 
-    if not parts:
-        return 0.0
+        digits = re.sub(r"\D", "", normalized)
+        score = (
+            1 if "." in normalized else 0,
+            1 if "," in text else 0,
+            1 if "$" in text else 0,
+            len(digits),
+        )
 
-    value = "".join(parts)
-    if not re.fullmatch(r"\d+(?:\.\d{1,2})?", value):
-        return 0.0
+        candidates.append(
+            (
+                score,
+                safe_float(
+                    word.get("x0", 0.0)
+                ),
+                value,
+            )
+        )
 
-    try:
-        return float(value)
-    except ValueError:
-        return 0.0
+    if not candidates:
+        return None
+
+    # Un importe con centavos y separador de miles tiene prioridad
+    # sobre los dígitos espurios que aparecen al borde de la tabla.
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            -item[1],
+        ),
+        reverse=True,
+    )
+
+    return candidates[0][2]
+
+
+def parse_money_words_optional(
+    row: MovementRow,
+    box: Tuple[float, float, float, float],
+) -> Optional[float]:
+    column_name = movement_column_name_from_box(box)
+    if column_name is None:
+        return None
+
+    for line in sorted(
+        row.lines,
+        key=line_center_y,
+    ):
+        value = parse_money_from_primary_line(
+            line,
+            column_name,
+        )
+
+        if value is not None:
+            return value
+
+    return None
+
+
+def parse_money_words(
+    row: MovementRow,
+    box: Tuple[float, float, float, float],
+) -> float:
+    value = parse_money_words_optional(
+        row,
+        box,
+    )
+
+    return value if value is not None else 0.0
 
 
 # ============================================================
@@ -1992,11 +2401,19 @@ def movement_row_to_model(
     populate_reference_serial_data(row)
 
     day = extract_day_from_row(row)
-    fecha_operacion = build_operation_date(day, periodo_inicio)
     concepto = extract_concepto(row)
-    cargo = parse_money_words(row, BOX_CARGO)
-    abono = parse_money_words(row, BOX_ABONO)
-    saldo_operacion = parse_money_words(row, BOX_SALDO)
+    raw_cargo = parse_money_words_optional(
+        row,
+        BOX_CARGO,
+    )
+    raw_abono = parse_money_words_optional(
+        row,
+        BOX_ABONO,
+    )
+    raw_saldo = parse_money_words_optional(
+        row,
+        BOX_SALDO,
+    )
 
     referencia_principal = extract_referencia(row)
     referencia_completa = extract_referencia_completa(row)
@@ -2006,10 +2423,59 @@ def movement_row_to_model(
         or None
     )
 
+    # Un movimiento con día, concepto y referencia es recuperable
+    # aunque Tesseract haya omitido por completo sus importes. Esta
+    # vía exige que el encabezado real de movimientos haya sido visto,
+    # por lo que no afecta renglones numéricos del resumen financiero.
+    if (
+        row.movement_header_confirmed
+        and day is not None
+        and concepto
+        and referencia_modelo
+        and raw_cargo is None
+        and raw_abono is None
+    ):
+        row.partial_recovery = True
+
+    if row.partial_recovery:
+        fecha_operacion = (
+            build_operation_date(
+                day,
+                periodo_inicio,
+            )
+            if day is not None
+            else None
+        )
+        concepto_modelo = concepto or None
+        cargo = raw_cargo
+        abono = raw_abono
+        saldo_operacion = raw_saldo
+    else:
+        fecha_operacion = build_operation_date(
+            day,
+            periodo_inicio,
+        )
+        concepto_modelo = concepto
+        cargo = (
+            raw_cargo
+            if raw_cargo is not None
+            else 0.0
+        )
+        abono = (
+            raw_abono
+            if raw_abono is not None
+            else 0.0
+        )
+        saldo_operacion = (
+            raw_saldo
+            if raw_saldo is not None
+            else 0.0
+        )
+
     return Movimiento(
         fecha_operacion=fecha_operacion,
         fecha_liquidacion=None,
-        concepto=concepto,
+        concepto=concepto_modelo,
         tipo_operacion=None,
         cargo=cargo,
         abono=abono,
@@ -2025,11 +2491,48 @@ def movement_row_to_model(
         hora_operacion=None,
         saldo_operacion=saldo_operacion,
         saldo_liquidacion=0.0,
-        concepto_original=concepto,
+        concepto_original=concepto_modelo,
     )
 
 
-def is_valid_movement(movement: Movimiento) -> bool:
+def is_valid_movement(
+    movement: Movimiento,
+    allow_partial: bool = False,
+) -> bool:
+    if allow_partial:
+        has_financial_data = any(
+            value is not None
+            for value in (
+                movement.cargo,
+                movement.abono,
+                movement.saldo_operacion,
+            )
+        )
+
+        has_complete_identity = all(
+            (
+                movement.fecha_operacion,
+                movement.concepto,
+                movement.referencia,
+            )
+        )
+
+        has_any_identity = any(
+            (
+                movement.fecha_operacion,
+                movement.concepto,
+                movement.referencia,
+            )
+        )
+
+        return (
+            has_complete_identity
+            or (
+                has_financial_data
+                and has_any_identity
+            )
+        )
+
     if not movement.fecha_operacion:
         return False
     if not movement.concepto:
@@ -2038,6 +2541,136 @@ def is_valid_movement(movement: Movimiento) -> bool:
         return False
 
     return True
+
+
+def movement_accounting_delta(
+    movement: Movimiento,
+) -> Optional[float]:
+    """Devuelve Abono - Cargo cuando el sentido es recuperable."""
+
+    cargo = movement.cargo
+    abono = movement.abono
+
+    if cargo is None and abono is None:
+        return None
+
+    return float(abono or 0.0) - float(cargo or 0.0)
+
+
+def balance_is_obviously_truncated(
+    observed: float,
+    expected: float,
+) -> bool:
+    """
+    Detecta únicamente pérdidas claras de uno o más dígitos.
+
+    No se corrigen diferencias ordinarias con una sola evidencia;
+    se exige que ambos saldos difieran por más de un orden práctico
+    de magnitud (menos de 20 % o más de cinco veces).
+    """
+
+    if abs(expected) < 0.01:
+        return False
+
+    ratio = abs(observed) / abs(expected)
+
+    return ratio < 0.20 or ratio > 5.0
+
+
+def repair_corrupted_balances(
+    movements: Sequence[Movimiento],
+) -> None:
+    """
+    Repara un saldo OCR sólo cuando la contabilidad lo demuestra.
+
+    - Si el saldo anterior y el posterior producen exactamente el
+      mismo valor, ambas evidencias permiten corregir centavos OCR.
+    - Con una sola evidencia, únicamente se corrige un saldo que
+      perdió claramente varios dígitos.
+    - Nunca se inventa el saldo de un movimiento parcial sin valor.
+    """
+
+    for index, movement in enumerate(movements):
+        observed = movement.saldo_operacion
+        if observed is None:
+            continue
+
+        try:
+            observed_value = float(observed)
+        except (TypeError, ValueError):
+            continue
+
+        expected_values: List[float] = []
+        current_delta = movement_accounting_delta(movement)
+
+        if index > 0 and current_delta is not None:
+            previous_balance = movements[
+                index - 1
+            ].saldo_operacion
+
+            if previous_balance is not None:
+                try:
+                    expected_values.append(
+                        round(
+                            float(previous_balance)
+                            + current_delta,
+                            2,
+                        )
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+        if index + 1 < len(movements):
+            next_movement = movements[index + 1]
+            next_balance = next_movement.saldo_operacion
+            next_delta = movement_accounting_delta(
+                next_movement
+            )
+
+            if (
+                next_balance is not None
+                and next_delta is not None
+            ):
+                try:
+                    expected_values.append(
+                        round(
+                            float(next_balance)
+                            - next_delta,
+                            2,
+                        )
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+        if not expected_values:
+            continue
+
+        replacement: Optional[float] = None
+
+        if (
+            len(expected_values) >= 2
+            and abs(
+                expected_values[0]
+                - expected_values[1]
+            ) < 0.01
+        ):
+            replacement = expected_values[0]
+        elif len(expected_values) == 1:
+            candidate = expected_values[0]
+
+            if balance_is_obviously_truncated(
+                observed_value,
+                candidate,
+            ):
+                replacement = candidate
+
+        if (
+            replacement is not None
+            and abs(
+                observed_value - replacement
+            ) >= 0.01
+        ):
+            movement.saldo_operacion = replacement
 
 
 # ============================================================
@@ -2450,8 +3083,13 @@ def extract_movimientos_words(
             periodo_inicio,
         )
 
-        if is_valid_movement(movement):
+        if is_valid_movement(
+            movement,
+            allow_partial=row.partial_recovery,
+        ):
             movements.append(movement)
+
+    repair_corrupted_balances(movements)
 
     enrich_movements_from_spei(
         movements,
