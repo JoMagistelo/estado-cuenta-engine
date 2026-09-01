@@ -134,18 +134,32 @@ BANK_SIGNATURES = {
     },
 
     "mifel": {
-            "display_name": "Mifel",
-            "clabe_prefixes": [], # No aplica por ser plataforma de firma
-            "rfcs": [], # Se omite o se puede agregar el RFC corporativo si se requiere
-            "keywords": [
-                "MIFEL",
-                "FIRMA ELECTRONICA",
-            ],
-            "filename_keywords": [
-                "MIFEL",
-                "FIRMA",
-            ],
-        },
+        "display_name": "Mifel",
+        "clabe_prefixes": ["042"],
+        "rfcs": [],
+        "keywords": [
+            "MIFEL",
+            "FIRMA ELECTRONICA",
+        ],
+        "filename_keywords": [
+            "MIFEL",
+            "FIRMA",
+        ],
+    },
+
+    "mercado_pago": {
+        "display_name": "Mercado Pago",
+        "clabe_prefixes": ["722"],
+        "rfcs": ["MAG2105031W3"],
+        "keywords": [
+            "MERCADO PAGO",
+            "MP AGREGADOR",
+        ],
+        "filename_keywords": [
+            "MERCADO PAGO",
+            "MERCADOPAGO",
+        ],
+    },
 
     "cetes": {
         "display_name": "Cetes Directo",
