@@ -133,6 +133,40 @@ BANK_SIGNATURES = {
         ],
     },
 
+    "mifiel": {
+            "display_name": "Mifiel",
+            "clabe_prefixes": [], # No aplica por ser plataforma de firma
+            "rfcs": [], # Se omite o se puede agregar el RFC corporativo si se requiere
+            "keywords": [
+                "MIFIEL",
+                "FIRMA ELECTRONICA",
+            ],
+            "filename_keywords": [
+                "MIFIEL",
+                "FIRMA",
+            ],
+        },
+
+    "cetes": {
+        "display_name": "Cetes Directo",
+        "clabe_prefixes": ["111"], # NAFIN (Nacional Financiera)
+        "rfcs": [
+            "NFI3407024T2", # Nacional Financiera S.N.C.
+        ],
+        "keywords": [
+            "CETESDIRECTO",
+            "NACIONAL FINANCIERA",
+            "NAFINSA",
+            "BONDDIA",
+            "CETES",
+        ],
+        "filename_keywords": [
+            "CETES",
+            "CETESDIRECTO",
+            "NAFIN",
+        ],
+    },
+
     "invex": {
         "display_name": "Banco Invex",
         "clabe_prefixes": ["059"],
