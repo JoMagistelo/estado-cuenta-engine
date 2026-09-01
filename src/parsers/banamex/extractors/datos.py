@@ -309,10 +309,126 @@ LAYOUT_CUENTA_BASE = DatosCuentaLayout(
 )
 
 
+
+# ============================================================
+# LAYOUT NUEVO — CUENTA PRIORITY
+# ============================================================
+#
+# Este perfil se activa únicamente cuando el documento declara
+# explícitamente "Cuenta Priority". Las cajas fueron medidas en
+# las variantes raw_words y tesseract_words del nuevo estado de
+# cuenta, conservando intactos MiCuenta y Cuenta Base.
+#
+# ============================================================
+
+
+BOX_PRODUCTO_PRINCIPAL_CUENTA_PRIORITY: Box = (
+    295.0,
+    420.0,
+    98.0,
+    116.0,
+)
+
+BOX_PERIODO_CUENTA_PRIORITY: Box = (
+    120.0,
+    285.0,
+    187.0,
+    203.0,
+)
+
+BOX_FECHA_CORTE_CUENTA_PRIORITY: Box = (
+    160.0,
+    285.0,
+    156.0,
+    174.0,
+)
+
+BOX_NUMERO_CUENTA_CUENTA_PRIORITY: Box = (
+    170.0,
+    240.0,
+    251.0,
+    268.0,
+)
+
+BOX_NUMERO_CLIENTE_CUENTA_PRIORITY: Box = (
+    170.0,
+    240.0,
+    288.0,
+    306.0,
+)
+
+BOX_RFC_CUENTA_PRIORITY: Box = (
+    170.0,
+    250.0,
+    277.0,
+    294.0,
+)
+
+BOX_CLABE_CUENTA_PRIORITY: Box = (
+    170.0,
+    275.0,
+    264.0,
+    281.0,
+)
+
+BOX_NOMBRE_CLIENTE_CUENTA_PRIORITY: Box = (
+    30.0,
+    205.0,
+    72.0,
+    84.0,
+)
+
+
+LAYOUT_CUENTA_PRIORITY = DatosCuentaLayout(
+    key="cuenta_priority",
+    markers=(
+        (PAGE_GENERAL, "CUENTA PRIORITY"),
+        (PAGE_CLIENTE, "RESUMEN DEL 01 AL 30 DE JUNIO"),
+    ),
+    producto_principal=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PRODUCTO_PRINCIPAL_CUENTA_PRIORITY,
+    ),
+    periodo_inicio=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PERIODO_CUENTA_PRIORITY,
+    ),
+    periodo_fin=FieldRegion(
+        PAGE_GENERAL,
+        BOX_PERIODO_CUENTA_PRIORITY,
+    ),
+    fecha_corte=FieldRegion(
+        PAGE_GENERAL,
+        BOX_FECHA_CORTE_CUENTA_PRIORITY,
+    ),
+    numero_cuenta=FieldRegion(
+        PAGE_GENERAL,
+        BOX_NUMERO_CUENTA_CUENTA_PRIORITY,
+    ),
+    numero_cliente=FieldRegion(
+        PAGE_GENERAL,
+        BOX_NUMERO_CLIENTE_CUENTA_PRIORITY,
+    ),
+    rfc=FieldRegion(
+        PAGE_GENERAL,
+        BOX_RFC_CUENTA_PRIORITY,
+    ),
+    clabe=FieldRegion(
+        PAGE_GENERAL,
+        BOX_CLABE_CUENTA_PRIORITY,
+    ),
+    nombre_cliente=FieldRegion(
+        PAGE_GENERAL,
+        BOX_NOMBRE_CLIENTE_CUENTA_PRIORITY,
+    ),
+)
+
+
 # Los perfiles específicos se evalúan primero. Si ningún
 # marcador conocido aparece, el fallback sigue siendo el
 # layout histórico para preservar el comportamiento anterior.
 BANAMEX_LAYOUTS = (
+    LAYOUT_CUENTA_PRIORITY,
     LAYOUT_CUENTA_BASE,
     LAYOUT_MICUENTA,
 )
@@ -626,6 +742,119 @@ def _extract_period_dates_from_anchor(
     return None, None
 
 
+
+_NATURAL_PERIOD_PATTERN = re.compile(
+    r"\bPERIODO\s+DEL\s+(\d{1,2})\s+AL\s+(\d{1,2})"
+    r"\s+DE\s+([A-Z]{3,12})\s+(?:DE|DEL)\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+
+
+def _line_words_from_anchor(
+    words: List[Dict[str, Any]],
+    page_number: int,
+    anchor_text: str,
+) -> Optional[List[Dict[str, Any]]]:
+    page_words = [
+        word
+        for word in words
+        if int(word.get("page", PAGE_GENERAL)) == page_number
+    ]
+
+    expected = normalize_text(anchor_text)
+
+    for anchor in page_words:
+        if normalize_text(anchor.get("text", "")) != expected:
+            continue
+
+        anchor_y = _word_center_y(anchor)
+
+        return sorted(
+            (
+                word
+                for word in page_words
+                if abs(_word_center_y(word) - anchor_y)
+                <= PERIOD_LINE_Y_TOLERANCE
+            ),
+            key=lambda word: float(word.get("x0", 0)),
+        )
+
+    return None
+
+
+def _extract_cuenta_priority_period(
+    words: List[Dict[str, Any]],
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extrae ``Del 1 al 30 de junio del 2026`` del layout Priority.
+
+    El renglón se reconstruye por cercanía vertical y luego por X,
+    evitando que pequeñas diferencias de ``top`` de Tesseract
+    intercalen valores pertenecientes a otras columnas.
+    """
+
+    line = _line_words_from_anchor(
+        words,
+        PAGE_GENERAL,
+        "Periodo",
+    )
+
+    if not line:
+        return None, None
+
+    line_text = " ".join(
+        str(word.get("text", "")).strip()
+        for word in line
+        if str(word.get("text", "")).strip()
+    )
+    normalized = normalize_text(line_text)
+    match = _NATURAL_PERIOD_PATTERN.search(normalized)
+
+    if match is None:
+        return None, None
+
+    start_day, end_day, month, year = match.groups()
+    month = month.lower()
+
+    return (
+        f"{int(start_day):02d}/{month}/{year}",
+        f"{int(end_day):02d}/{month}/{year}",
+    )
+
+
+def _extract_cuenta_priority_cut_date(
+    words: List[Dict[str, Any]],
+) -> Optional[str]:
+    line = _line_words_from_anchor(
+        words,
+        PAGE_GENERAL,
+        "Fecha",
+    )
+
+    if not line:
+        return None
+
+    line_text = " ".join(
+        str(word.get("text", "")).strip()
+        for word in line
+        if str(word.get("text", "")).strip()
+    )
+    normalized = normalize_text(line_text)
+
+    match = re.search(
+        r"\bFECHA\s+DE\s+CORTE\s+"
+        r"(\d{1,2})\s+DE\s+([A-Z]{3,12})\s+DE\s+(\d{4})\b",
+        normalized,
+    )
+
+    if match is None:
+        return None
+
+    day, month, year = match.groups()
+
+    return f"{int(day):02d} de {month.lower()} de {year}"
+
+
 # ============================================================
 # EXTRACTORES INDIVIDUALES
 # ============================================================
@@ -644,6 +873,11 @@ def extract_periodo_inicio(
     layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
     profile = _resolve_layout(words, layout)
+
+    if profile.key == "cuenta_priority":
+        periodo_inicio, _ = _extract_cuenta_priority_period(words)
+        return periodo_inicio
+
     value = _text_from_region(words, profile.periodo_inicio)
 
     if _is_complete_period_date(value):
@@ -662,6 +896,11 @@ def extract_periodo_fin(
     layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
     profile = _resolve_layout(words, layout)
+
+    if profile.key == "cuenta_priority":
+        _, periodo_fin = _extract_cuenta_priority_period(words)
+        return periodo_fin
+
     value = _text_from_region(words, profile.periodo_fin)
 
     if _is_complete_period_date(value):
@@ -680,6 +919,10 @@ def extract_fecha_corte(
     layout: Optional[DatosCuentaLayout] = None,
 ) -> Optional[str]:
     profile = _resolve_layout(words, layout)
+
+    if profile.key == "cuenta_priority":
+        return _extract_cuenta_priority_cut_date(words)
+
     return _text_from_region(words, profile.fecha_corte)
 
 
@@ -749,6 +992,7 @@ def extract_datos_cuenta_words(
 
         - MiCuenta (comportamiento histórico)
         - Cuenta Base Banamex
+        - Cuenta Priority
     """
 
     layout = detect_datos_cuenta_layout(words)

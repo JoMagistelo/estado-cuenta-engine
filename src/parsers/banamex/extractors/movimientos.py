@@ -1474,6 +1474,662 @@ def build_movimiento(
     )
 
 
+
+# ============================================================
+# FORTALECIMIENTO ESPECÍFICO — CUENTA PRIORITY
+# ============================================================
+#
+# El layout Priority conserva las mismas cinco columnas, pero
+# presenta dos particularidades que requieren una ruta aislada:
+#
+#   1. Tesseract puede perder el día o deformar la fecha aunque
+#      conserve JUN en la columna FECHA.
+#   2. Más adelante aparece AHORRO FACIL con una segunda tabla de
+#      movimientos que no pertenece a la Cuenta Priority.
+#
+# La ruta siguiente sólo se activa con CUENTA PRIORITY. El flujo
+# histórico permanece literalmente como fallback en
+# extract_movimientos_words.
+#
+# ============================================================
+
+
+PRIORITY_MARKER = "CUENTA PRIORITY"
+PRIORITY_SECONDARY_PRODUCT = "AHORRO FACIL"
+
+PRIORITY_HEADER_FALLBACK_TOP = 145.0
+PRIORITY_AMOUNT_CONFIDENCE = 90.0
+PRIORITY_BALANCE_CONFIDENCE = 85.0
+
+
+def _is_cuenta_priority(
+    words: List[Dict[str, Any]],
+) -> bool:
+    page_one_text = normalize_upper(
+        " ".join(
+            str(word.get("text", ""))
+            for word in sorted(
+                (
+                    word
+                    for word in words
+                    if word_page(word) == 1
+                ),
+                key=lambda word: (
+                    _safe_float(word.get("top", 0)),
+                    _safe_float(word.get("x0", 0)),
+                ),
+            )
+        )
+    )
+
+    return PRIORITY_MARKER in page_one_text
+
+
+def _priority_secondary_product_page(
+    lines: List[List[Dict[str, Any]]],
+) -> Optional[int]:
+    """
+    Localiza la primera línea exactamente igual a AHORRO FACIL.
+
+    Se exige igualdad de línea completa para no confundir las
+    menciones promocionales del producto en la página 1 con el
+    comienzo real de la segunda cuenta.
+    """
+
+    for line in lines:
+        if not line:
+            continue
+
+        if normalize_upper(line_text(line)) != PRIORITY_SECONDARY_PRODUCT:
+            continue
+
+        page = word_page(line[0])
+
+        if page > 1:
+            return page
+
+    return None
+
+
+def _priority_header_y_by_page(
+    lines: List[List[Dict[str, Any]]],
+) -> Dict[int, float]:
+    result: Dict[int, float] = {}
+
+    for line in lines:
+        if not line or not is_movements_header(line):
+            continue
+
+        page = word_page(line[0])
+        center_y = line_center_y(line)
+        previous = result.get(page)
+
+        if previous is None or center_y < previous:
+            result[page] = center_y
+
+    return result
+
+
+def _priority_column_config(
+    lines: List[List[Dict[str, Any]]],
+) -> Optional[ColumnConfig]:
+    """
+    Obtiene una sola geometría estable desde la primera cabecera
+    completa. Se propaga a todas las páginas Priority para evitar
+    que una cabecera OCR sin SALDO sustituya columnas correctas
+    por el fallback histórico.
+    """
+
+    pages: Dict[int, List[List[Dict[str, Any]]]] = {}
+
+    for line in lines:
+        if line:
+            pages.setdefault(word_page(line[0]), []).append(line)
+
+    for line in lines:
+        header = detect_header(line)
+
+        if header is None:
+            continue
+
+        if not all(
+            name in header
+            for name in (
+                "FECHA",
+                "CONCEPTO",
+                "RETIROS",
+                "DEPOSITOS",
+                "SALDO",
+            )
+        ):
+            continue
+
+        initial = build_config_from_header(header)
+
+        return _calibrate_config_from_amounts(
+            page_lines=pages.get(word_page(line[0]), []),
+            config=initial,
+            header_y=line_center_y(line),
+        )
+
+    return None
+
+
+def _priority_configs(
+    lines: List[List[Dict[str, Any]]],
+    config: ColumnConfig,
+) -> Dict[int, ColumnConfig]:
+    return {
+        word_page(line[0]): config
+        for line in lines
+        if line
+    }
+
+
+def _priority_date_from_line(
+    line: List[Dict[str, Any]],
+    config: ColumnConfig,
+    last_date: Optional[str],
+) -> Optional[str]:
+    """
+    Lee fechas Priority tolerando:
+        01 JUN
+        01_ JUN
+        JUN          (día perdido por OCR)
+
+    Cuando Tesseract convierte 30 JUN en 50 JUN, la corrección
+    50 -> 30 sólo se admite al final del mes y después de un día
+    29/30 ya reconocido.
+    """
+
+    raw = normalize_upper(
+        extract_fecha_operacion(line, config)
+    )
+    normalized = re.sub(r"[^A-Z0-9]+", " ", raw).strip()
+
+    full_match = re.search(
+        r"\b(\d{1,2})\s+"
+        r"(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\b",
+        normalized,
+    )
+
+    if full_match is not None:
+        day = int(full_match.group(1))
+        month = full_match.group(2)
+
+        if 1 <= day <= 31:
+            return f"{day:02d} {month}"
+
+        if (
+            day == 50
+            and last_date is not None
+            and last_date.endswith(f" {month}")
+        ):
+            try:
+                previous_day = int(last_date[:2])
+            except ValueError:
+                previous_day = 0
+
+            if previous_day >= 29:
+                return f"30 {month}"
+
+    month_match = re.search(
+        r"\b(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\b",
+        normalized,
+    )
+
+    if month_match is not None and last_date is not None:
+        return f"{last_date[:2]} {month_match.group(1)}"
+
+    return None
+
+
+def _priority_financial_words(
+    line: List[Dict[str, Any]],
+    config: ColumnConfig,
+) -> List[tuple[str, Dict[str, Any]]]:
+    result: List[tuple[str, Dict[str, Any]]] = []
+
+    for word in line:
+        text = normalize_text(word.get("text", ""))
+
+        if not is_money(text):
+            continue
+
+        for column_name in (
+            "retiros",
+            "depositos",
+            "saldo",
+        ):
+            if money_word_inside_column(
+                word,
+                getattr(config, column_name),
+            ):
+                result.append((column_name, word))
+                break
+
+    return result
+
+
+def _priority_block_is_complete(
+    block: List[List[Dict[str, Any]]],
+    config: ColumnConfig,
+) -> bool:
+    return any(
+        _priority_financial_words(line, config)
+        for line in block
+    )
+
+
+def _priority_line_has_concept(
+    line: List[Dict[str, Any]],
+    config: ColumnConfig,
+) -> bool:
+    return bool(column_text(line, config.concepto))
+
+
+def _priority_should_skip_line(
+    line: List[Dict[str, Any]],
+) -> bool:
+    if not line:
+        return True
+
+    if is_movements_header(line):
+        return True
+
+    normalized = normalize_upper(line_text(line))
+
+    if not normalized:
+        return True
+
+    if normalized.startswith("000181.B13INDL002"):
+        return True
+
+    return any(
+        marker in normalized
+        for marker in SKIP_LINE_MARKERS
+    )
+
+
+def _priority_build_blocks(
+    lines: List[List[Dict[str, Any]]],
+    config: ColumnConfig,
+    secondary_product_page: Optional[int],
+) -> List[
+    tuple[
+        str,
+        List[List[Dict[str, Any]]],
+    ]
+]:
+    """
+    Construye bloques sin exigir que OCR conserve siempre el día.
+
+    Una fila financiera completa seguida por nuevo contenido de
+    CONCEPTO inicia el siguiente movimiento aun cuando FECHA haya
+    quedado vacía. Si JUN sobrevivió, se conserva el último día
+    conocido en vez de descartar el movimiento.
+    """
+
+    header_y_by_page = _priority_header_y_by_page(lines)
+    blocks: List[
+        tuple[
+            str,
+            List[List[Dict[str, Any]]],
+        ]
+    ] = []
+
+    current: List[List[Dict[str, Any]]] = []
+    current_date: Optional[str] = None
+    last_date: Optional[str] = None
+
+    for line in lines:
+        if not line:
+            continue
+
+        page = word_page(line[0])
+
+        if secondary_product_page is not None:
+            if page >= secondary_product_page:
+                break
+
+        if page < 2:
+            continue
+
+        header_y = header_y_by_page.get(page)
+        center_y = line_center_y(line)
+
+        if header_y is not None:
+            if center_y <= header_y + LINE_Y_TOLERANCE:
+                continue
+        elif (
+            page >= 3
+            and center_y < PRIORITY_HEADER_FALLBACK_TOP
+        ):
+            continue
+
+        if is_terminal_line(line):
+            break
+
+        if _priority_should_skip_line(line):
+            continue
+
+        next_date = _priority_date_from_line(
+            line,
+            config,
+            last_date,
+        )
+
+        current_complete = (
+            bool(current)
+            and _priority_block_is_complete(
+                current,
+                config,
+            )
+        )
+
+        starts_new = next_date is not None
+
+        if (
+            not starts_new
+            and current_complete
+            and _priority_line_has_concept(line, config)
+        ):
+            starts_new = True
+            next_date = last_date
+
+        if starts_new:
+            if current and current_date is not None:
+                blocks.append((current_date, current))
+
+            current = [line]
+            current_date = next_date or last_date
+
+            if next_date is not None:
+                last_date = next_date
+
+            continue
+
+        if current:
+            current.append(line)
+
+    if current and current_date is not None:
+        blocks.append((current_date, current))
+
+    return blocks
+
+
+def _priority_amount_candidate(
+    block: List[List[Dict[str, Any]]],
+    column_name: str,
+    config: ColumnConfig,
+) -> tuple[float, float]:
+    """
+    Devuelve importe y confianza OCR del último candidato.
+
+    En raw_words no existe confidence; se considera evidencia
+    espacial confiable y se asigna 100 internamente.
+    """
+
+    candidate: Optional[Dict[str, Any]] = None
+
+    for line in block:
+        for word in line:
+            text = normalize_text(word.get("text", ""))
+
+            if (
+                is_money(text)
+                and money_word_inside_column(
+                    word,
+                    getattr(config, column_name),
+                )
+            ):
+                candidate = word
+
+    if candidate is None:
+        return 0.0, 0.0
+
+    confidence_value = candidate.get("confidence")
+
+    if confidence_value is None:
+        confidence = 100.0
+    else:
+        confidence = _safe_float(confidence_value, 0.0)
+
+    return (
+        parse_amount(candidate.get("text", "")),
+        confidence,
+    )
+
+
+def _priority_initial_balance(
+    lines: List[List[Dict[str, Any]]],
+    config: ColumnConfig,
+) -> Optional[float]:
+    """Obtiene SALDO ANTERIOR de la propia tabla de movimientos."""
+
+    for line in lines:
+        if not line or word_page(line[0]) < 2:
+            continue
+
+        if normalize_upper(
+            column_text(line, config.concepto)
+        ) != "SALDO ANTERIOR":
+            continue
+
+        for column_name, word in _priority_financial_words(
+            line,
+            config,
+        ):
+            if column_name == "saldo":
+                return parse_amount(word.get("text", ""))
+
+    return None
+
+
+def _priority_reconcile_amounts(
+    block: List[List[Dict[str, Any]]],
+    config: ColumnConfig,
+    previous_balance: Optional[float],
+    concepto: str,
+) -> tuple[float, float, float]:
+    """
+    Corrige sólo contradicciones OCR respaldadas por aritmética.
+
+    raw_words permanece esencialmente directo. En Tesseract:
+      - si el importe tiene baja confianza y el saldo es sólido,
+        se deriva el importe por diferencia;
+      - si el importe es sólido y el saldo es peor, se conserva
+        el importe y se reconstruye el saldo;
+      - si falta el importe, sólo se deriva cuando dos saldos
+        confiables y la dirección semántica no se contradicen.
+    """
+
+    cargo, cargo_conf = _priority_amount_candidate(
+        block,
+        "retiros",
+        config,
+    )
+    abono, abono_conf = _priority_amount_candidate(
+        block,
+        "depositos",
+        config,
+    )
+    saldo, saldo_conf = _priority_amount_candidate(
+        block,
+        "saldo",
+        config,
+    )
+
+    if previous_balance is None:
+        return cargo, abono, saldo
+
+    direct_conf = max(cargo_conf, abono_conf)
+    has_direct = cargo != 0.0 or abono != 0.0
+    has_saldo = saldo_conf > 0.0
+
+    if has_direct:
+        expected = round(
+            previous_balance - cargo + abono,
+            2,
+        )
+
+        if not has_saldo:
+            return cargo, abono, expected
+
+        if abs(expected - saldo) <= 0.02:
+            return cargo, abono, saldo
+
+        if (
+            saldo_conf >= PRIORITY_AMOUNT_CONFIDENCE
+            and direct_conf < PRIORITY_AMOUNT_CONFIDENCE
+        ):
+            delta = round(saldo - previous_balance, 2)
+
+            if delta < 0:
+                return abs(delta), 0.0, saldo
+
+            if delta > 0:
+                return 0.0, delta, saldo
+
+            return 0.0, 0.0, saldo
+
+        if direct_conf >= PRIORITY_AMOUNT_CONFIDENCE:
+            return cargo, abono, expected
+
+        return cargo, abono, saldo
+
+    if not has_saldo:
+        return 0.0, 0.0, previous_balance
+
+    if saldo_conf < PRIORITY_BALANCE_CONFIDENCE:
+        return 0.0, 0.0, saldo
+
+    delta = round(saldo - previous_balance, 2)
+    semantic_type = extract_tipo_operacion(
+        0.0,
+        0.0,
+        concepto,
+    )
+
+    if delta < 0 and semantic_type != "ABONO":
+        return abs(delta), 0.0, saldo
+
+    if delta > 0 and semantic_type != "CARGO":
+        return 0.0, delta, saldo
+
+    if delta == 0:
+        return 0.0, 0.0, saldo
+
+    # El saldo OCR contradice el sentido explícito del concepto.
+    # Se conserva el saldo leído, pero no se inventa un importe.
+    return 0.0, 0.0, saldo
+
+
+def _priority_build_movimiento(
+    date: str,
+    block: List[List[Dict[str, Any]]],
+    configs: Dict[int, ColumnConfig],
+    config: ColumnConfig,
+    previous_balance: Optional[float],
+) -> Movimiento:
+    concepto = extract_concepto(block, configs)
+    cargo, abono, saldo = _priority_reconcile_amounts(
+        block,
+        config,
+        previous_balance,
+        concepto,
+    )
+
+    return Movimiento(
+        fecha_operacion=date,
+        fecha_liquidacion=None,
+        concepto=concepto,
+        tipo_operacion=extract_tipo_operacion(
+            cargo,
+            abono,
+            concepto,
+        ),
+        cargo=cargo,
+        abono=abono,
+        referencia=extract_referencia_from_concepto(concepto),
+        autorizacion=extract_auth_from_concepto(concepto),
+        beneficiario=extract_beneficiario_from_concepto(concepto),
+        cuenta_beneficiario=(
+            extract_cuenta_beneficiario_from_concepto(concepto)
+        ),
+        clabe_beneficiario=(
+            extract_clabe_beneficiario_from_concepto(concepto)
+        ),
+        rfc=extract_rfc_from_concepto(concepto),
+        sucursal=extract_sucursal_from_concepto(concepto),
+        caja=extract_caja_from_concepto(concepto),
+        hora_operacion=extract_hora_from_concepto(concepto),
+        clave_rastreo=extract_clave_rastreo_from_concepto(concepto),
+        saldo_operacion=saldo,
+        saldo_liquidacion=0.0,
+        concepto_original=concepto,
+    )
+
+
+def _extract_movimientos_cuenta_priority(
+    words: List[Dict[str, Any]],
+) -> List[Movimiento]:
+    lines = group_words_into_lines(words)
+
+    if not lines:
+        return []
+
+    secondary_product_page = (
+        _priority_secondary_product_page(lines)
+    )
+
+    main_lines = [
+        line
+        for line in lines
+        if line
+        and (
+            secondary_product_page is None
+            or word_page(line[0]) < secondary_product_page
+        )
+    ]
+
+    config = _priority_column_config(main_lines)
+
+    if config is None:
+        # Si ni siquiera existe una cabecera completa, no se
+        # arriesga una interpretación Priority agresiva.
+        return []
+
+    configs = _priority_configs(main_lines, config)
+    blocks = _priority_build_blocks(
+        main_lines,
+        config,
+        secondary_product_page,
+    )
+
+    previous_balance = _priority_initial_balance(
+        main_lines,
+        config,
+    )
+
+    movimientos: List[Movimiento] = []
+
+    for date, block in blocks:
+        movimiento = _priority_build_movimiento(
+            date,
+            block,
+            configs,
+            config,
+            previous_balance,
+        )
+        movimientos.append(movimiento)
+
+        if movimiento.saldo_operacion != 0.0:
+            previous_balance = movimiento.saldo_operacion
+
+    return movimientos
+
+
 # ============================================================
 # FUNCIÓN PRINCIPAL
 # ============================================================
@@ -1486,6 +2142,9 @@ def extract_movimientos_words(
 
     if not words:
         return []
+
+    if _is_cuenta_priority(words):
+        return _extract_movimientos_cuenta_priority(words)
 
     filtered_words = remove_after_grafico_transaccional(words)
     filtered_words = remove_banamex_header(filtered_words)

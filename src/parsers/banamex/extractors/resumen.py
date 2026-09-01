@@ -26,6 +26,7 @@ from models.resumen_financiero import ResumenFinanciero
 Box = tuple[float, float, float, float]
 
 PAGE_GENERAL = 1
+PAGE_RESUMEN_PRIORITY = 2
 NA_VALUE = "N/A"
 
 TOLERANCE_X = 6.0
@@ -242,7 +243,99 @@ LAYOUT_CUENTA_BASE = ResumenLayout(
 )
 
 
+
+# ============================================================
+# LAYOUT NUEVO — CUENTA PRIORITY
+# ============================================================
+#
+# El resumen principal de Cuenta Priority vive en la página 2.
+# El perfil se activa sólo con marcadores propios del producto;
+# las cajas históricas de MiCuenta y Cuenta Base no cambian.
+#
+# ============================================================
+
+
+BOX_SALDO_ANTERIOR_CUENTA_PRIORITY: Box = (
+    225.0,
+    286.0,
+    165.0,
+    180.0,
+)
+
+BOX_DEPOSITOS_ABONOS_CUENTA_PRIORITY: Box = (
+    235.0,
+    286.0,
+    179.0,
+    192.0,
+)
+
+BOX_RETIROS_CARGOS_CUENTA_PRIORITY: Box = (
+    235.0,
+    286.0,
+    191.0,
+    205.0,
+)
+
+BOX_SALDO_FINAL_CUENTA_PRIORITY: Box = (
+    228.0,
+    286.0,
+    217.0,
+    230.0,
+)
+
+BOX_SALDO_PROMEDIO_CUENTA_PRIORITY: Box = (
+    185.0,
+    230.0,
+    241.0,
+    256.0,
+)
+
+BOX_DIAS_PERIODO_CUENTA_PRIORITY: Box = (
+    202.0,
+    230.0,
+    253.0,
+    268.0,
+)
+
+
+LAYOUT_CUENTA_PRIORITY = ResumenLayout(
+    key="cuenta_priority",
+    markers=(
+        (PAGE_GENERAL, "CUENTA PRIORITY"),
+        (
+            PAGE_RESUMEN_PRIORITY,
+            "RESUMEN DEL 01 AL 30 DE JUNIO",
+        ),
+    ),
+    saldo_promedio=FieldRegion(
+        PAGE_RESUMEN_PRIORITY,
+        BOX_SALDO_PROMEDIO_CUENTA_PRIORITY,
+    ),
+    dias_periodo=FieldRegion(
+        PAGE_RESUMEN_PRIORITY,
+        BOX_DIAS_PERIODO_CUENTA_PRIORITY,
+    ),
+    saldo_anterior=FieldRegion(
+        PAGE_RESUMEN_PRIORITY,
+        BOX_SALDO_ANTERIOR_CUENTA_PRIORITY,
+    ),
+    depositos_abonos=FieldRegion(
+        PAGE_RESUMEN_PRIORITY,
+        BOX_DEPOSITOS_ABONOS_CUENTA_PRIORITY,
+    ),
+    retiros_cargos=FieldRegion(
+        PAGE_RESUMEN_PRIORITY,
+        BOX_RETIROS_CARGOS_CUENTA_PRIORITY,
+    ),
+    saldo_final=FieldRegion(
+        PAGE_RESUMEN_PRIORITY,
+        BOX_SALDO_FINAL_CUENTA_PRIORITY,
+    ),
+)
+
+
 BANAMEX_LAYOUTS = (
+    LAYOUT_CUENTA_PRIORITY,
     LAYOUT_CUENTA_BASE,
     LAYOUT_MICUENTA,
 )
@@ -850,6 +943,82 @@ def extract_saldo_final(
     return _money_from_region(words, profile.saldo_final)
 
 
+
+def _priority_percentage_from_labeled_row(
+    words: List[Dict[str, Any]],
+    label_tokens: tuple[str, ...],
+) -> Optional[float]:
+    """Extrae un porcentaje inequívoco del resumen Priority."""
+
+    if detect_resumen_layout(words).key != "cuenta_priority":
+        return None
+
+    page_words = [
+        word
+        for word in words
+        if int(word.get("page", PAGE_GENERAL))
+        == PAGE_RESUMEN_PRIORITY
+    ]
+
+    for anchor in page_words:
+        if normalize_text(anchor.get("text", "")) != label_tokens[0]:
+            continue
+
+        anchor_y = _word_center_y(anchor)
+        line = sorted(
+            (
+                word
+                for word in page_words
+                if abs(_word_center_y(word) - anchor_y)
+                <= SUMMARY_LINE_Y_TOLERANCE
+            ),
+            key=lambda word: float(word.get("x0", 0)),
+        )
+
+        line_text = normalize_text(
+            " ".join(
+                str(word.get("text", "")).strip()
+                for word in line
+                if str(word.get("text", "")).strip()
+            )
+        )
+        line_token_set = set(line_text.split())
+
+        if not set(label_tokens).issubset(line_token_set):
+            continue
+
+        for word in reversed(line):
+            text = str(word.get("text", "")).strip()
+            match = re.fullmatch(
+                r"([+-]?(?:\d+(?:\.\d+)?))\s*%",
+                text,
+            )
+            if match is not None:
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    return None
+
+    return None
+
+
+def _priority_money_from_labeled_row(
+    words: List[Dict[str, Any]],
+    label_options: tuple[tuple[str, ...], ...],
+    box: Box,
+) -> Optional[float]:
+    """Reutiliza la extracción por renglón sólo para Priority."""
+
+    if detect_resumen_layout(words).key != "cuenta_priority":
+        return None
+
+    return _money_from_labeled_row(
+        words,
+        FieldRegion(PAGE_RESUMEN_PRIORITY, box),
+        label_options,
+    )
+
+
 # ============================================================
 # CAMPOS NO DISPONIBLES EN LOS LAYOUTS OBSERVADOS
 # ============================================================
@@ -863,6 +1032,14 @@ def extract_saldo_final(
 def extract_tasa_bruta_anual(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
+    value = _priority_percentage_from_labeled_row(
+        words,
+        ("TASA", "DE", "INTERES"),
+    )
+
+    if value is not None:
+        return value
+
     return None
 
 
@@ -875,12 +1052,33 @@ def extract_saldo_promedio_gravable(
 def extract_intereses_a_favor(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
+    value = _priority_money_from_labeled_row(
+        words,
+        (("INTERESES",),),
+        (190.0, 232.0, 277.0, 291.0),
+    )
+
+    if value is not None:
+        return value
+
     return None
 
 
 def extract_isr_retenido(
     words: List[Dict[str, Any]],
 ) -> Optional[float]:
+    value = _priority_money_from_labeled_row(
+        words,
+        (
+            ("IMPUESTO", "SOBRE", "LA", "RENTA", "RETENIDO"),
+            ("ISR", "RETENIDO"),
+        ),
+        (190.0, 232.0, 289.0, 303.0),
+    )
+
+    if value is not None:
+        return value
+
     return None
 
 
@@ -936,6 +1134,7 @@ def extract_resumen_financiero_words(
 
         - MiCuenta (comportamiento histórico)
         - Cuenta Base Banamex
+        - Cuenta Priority
     """
 
     layout = detect_resumen_layout(words)
