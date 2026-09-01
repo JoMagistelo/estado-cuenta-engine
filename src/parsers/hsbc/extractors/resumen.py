@@ -2052,16 +2052,134 @@ def extract_intereses_a_favor(
 
         Pago Interés Nominal en el Mes
 
-    Este es el importe que aparece como abono independiente
-    dentro del detalle de movimientos.
+    Prioridad de extracción:
 
-    La etiqueta mensual determina el renglón.
+        1. renglón explícito del resumen mensual;
+        2. variante OCR degradada del mismo renglón;
+        3. movimiento individual como respaldo legacy.
 
-    El valor se obtiene respecto a la posición REAL del ancla
-    encontrada para evitar confundirlo con:
+    El resumen mensual tiene prioridad porque el importe de un
+    movimiento llamado "PAGO DE INTERES NOMINAL" no necesariamente
+    coincide con el total mensual impreso por HSBC.
 
-        Pago de Interés Nominal en el Año
+    Se conserva el respaldo por movimientos para layouts donde la
+    fila mensual no exista o no pueda reconstruirse.
     """
+
+    # --------------------------------------------------------
+    # 1. ANCLA MENSUAL EXACTA
+    # --------------------------------------------------------
+
+    anchor = find_best_anchor_line(
+        lines,
+        (
+            "PAGO",
+            "INTERES",
+            "NOMINAL",
+            "MES",
+        ),
+        expected_y=EXPECTED_Y_PAGO_INTERES_MES,
+    )
+
+    # --------------------------------------------------------
+    # 2. ANCLA MENSUAL OCR DEGRADADA
+    # --------------------------------------------------------
+    #
+    # En algunos estados Tesseract puede leer:
+    #
+    #     Pago Int el Mes
+    #
+    # omitiendo "erés Nominal en". La combinación PAGO + MES,
+    # junto con evidencia inequívoca de interés (INTERES,
+    # NOMINAL o el token OCR "INT"), permite recuperar esa fila
+    # sin abrir la búsqueda a movimientos ordinarios.
+    # --------------------------------------------------------
+
+    if anchor is None:
+
+        relaxed_candidates = []
+
+        for line in lines:
+
+            normalized = normalized_line_text(
+                line
+            )
+
+            if "PAGO" not in normalized:
+                continue
+
+            if "MES" not in normalized:
+                continue
+
+            if "ANO" in normalized:
+                continue
+
+            has_interest_evidence = (
+                "INTERES" in normalized
+                or
+                "NOMINAL" in normalized
+                or
+                re.search(
+                    r"\bINT\b",
+                    normalized,
+                )
+                is not None
+            )
+
+            if not has_interest_evidence:
+                continue
+
+            relaxed_candidates.append(
+                list(line)
+            )
+
+        if relaxed_candidates:
+
+            anchor = min(
+                relaxed_candidates,
+                key=lambda line: abs(
+                    line_center_y(line)
+                    -
+                    EXPECTED_Y_PAGO_INTERES_MES
+                ),
+            )
+
+    # --------------------------------------------------------
+    # 3. VALOR DEL RESUMEN MENSUAL
+    # --------------------------------------------------------
+
+    if anchor is not None:
+
+        value = extract_value_near_anchor(
+            words,
+            anchor,
+        )
+
+        parsed_value = parse_money(
+            value
+        )
+
+        if parsed_value is not None:
+            return parsed_value
+
+        missing_basic_value = (
+            zero_for_missing_basic_product_value(
+                lines,
+                anchor,
+            )
+        )
+
+        if missing_basic_value is not None:
+            return missing_basic_value
+
+    # --------------------------------------------------------
+    # 4. RESPALDO LEGACY: MOVIMIENTO INDIVIDUAL
+    # --------------------------------------------------------
+    #
+    # Se mantiene exactamente como fallback para no romper
+    # layouts anteriores en los que el resumen mensual no fue
+    # detectado.
+    # --------------------------------------------------------
 
     movement_value = extract_movement_total(
         lines,
@@ -2076,36 +2194,7 @@ def extract_intereses_a_favor(
     if movement_value is not None:
         return movement_value
 
-    anchor = find_best_anchor_line(
-        lines,
-        (
-            "PAGO",
-            "INTERES",
-            "NOMINAL",
-            "MES",
-        ),
-        expected_y=EXPECTED_Y_PAGO_INTERES_MES,
-    )
-
-    if anchor is None:
-        return None
-
-    value = extract_value_near_anchor(
-        words,
-        anchor,
-    )
-
-    parsed_value = parse_money(
-        value
-    )
-
-    if parsed_value is not None:
-        return parsed_value
-
-    return zero_for_missing_basic_product_value(
-        lines,
-        anchor,
-    )
+    return None
 
 
 def extract_dias_periodo(

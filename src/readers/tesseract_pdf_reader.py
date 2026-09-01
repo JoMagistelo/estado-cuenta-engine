@@ -49,16 +49,14 @@ class TesseractPDFReader:
 
     RENDER_DPI = 300
 
-    LANGUAGE = "spa+eng"
+    LANGUAGE = "spa"
 
-    CONFIG = "--oem 3 --psm 3"
+    CONFIG = "--oem 3 --psm 11"
 
     TIMEOUT_SECONDS = 90
 
     REQUIRED_LANGUAGES = (
         "spa.traineddata",
-        "eng.traineddata",
-        "osd.traineddata",
     )
 
     # ============================================================
@@ -605,13 +603,18 @@ class TesseractPDFReader:
         # OCR
         # --------------------------------------------------------
 
-        data = pytesseract.image_to_data(
-            image,
-            lang=cls.LANGUAGE,
-            config=config,
-            output_type=Output.DICT,
-            timeout=cls.TIMEOUT_SECONDS,
-        )
+        try:
+            data = pytesseract.image_to_data(
+                image,
+                lang=cls.LANGUAGE,
+                config=config,
+                output_type=Output.DICT,
+                timeout=cls.TIMEOUT_SECONDS,
+            )
+        except RuntimeError as e:
+            if 'timeout' in str(e).lower():
+                return [], ""
+            raise e
 
         # --------------------------------------------------------
         # CONVERSIÓN PIXEL -> PDF
