@@ -1,6 +1,6 @@
-from .parser import parse_mifiel
+from .parser import parse_mifel
 
 
 __all__ = [
-    "parse_mifiel"
+    "parse_mifel"
 ]
