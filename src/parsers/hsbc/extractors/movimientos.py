@@ -2557,6 +2557,138 @@ def movement_accounting_delta(
     return float(abono or 0.0) - float(cargo or 0.0)
 
 
+def malformed_money_token_matches_expected(
+    row: MovementRow,
+    column_name: str,
+    expected_amount: float,
+) -> bool:
+    """
+    Detecta únicamente el OCR anómalo con cuatro dígitos después de
+    la coma de miles, por ejemplo ``1,6563.20``.
+
+    No corrige por formato solamente: el valor esperado debe poder
+    obtenerse eliminando exactamente un único dígito OCR del entero,
+    conservando intactos los centavos.
+    """
+
+    expected_text = f"{abs(expected_amount):.2f}"
+    expected_integer, expected_fraction = expected_text.split(".")
+
+    pattern = re.compile(
+        r"^\$?\s*(\d{1,3}),(\d{4})\.(\d{2})$"
+    )
+
+    for line in row.lines:
+        for word in line:
+            if primary_movement_column(word) != column_name:
+                continue
+
+            match = pattern.fullmatch(
+                clean_word_text(word.get("text", ""))
+            )
+            if match is None:
+                continue
+
+            raw_integer = match.group(1) + match.group(2)
+
+            if match.group(3) != expected_fraction:
+                continue
+            if len(raw_integer) != len(expected_integer) + 1:
+                continue
+
+            if any(
+                raw_integer[:index] + raw_integer[index + 1:]
+                == expected_integer
+                for index in range(len(raw_integer))
+            ):
+                return True
+
+    return False
+
+
+def repair_malformed_transaction_amounts(
+    movements: Sequence[Movimiento],
+    rows: Sequence[MovementRow],
+) -> None:
+    """
+    Repara un importe sólo cuando coinciden tres evidencias:
+
+      1. el token monetario tiene la agrupación OCR imposible;
+      2. los saldos anterior/actual determinan el importe correcto;
+      3. el movimiento siguiente confirma independientemente el saldo
+         actual.
+
+    Los importes con formato válido conservan la ruta histórica.
+    """
+
+    limit = min(len(movements), len(rows))
+
+    for index in range(1, limit - 1):
+        movement = movements[index]
+        previous = movements[index - 1]
+        following = movements[index + 1]
+
+        if (
+            movement.saldo_operacion is None
+            or previous.saldo_operacion is None
+            or following.saldo_operacion is None
+        ):
+            continue
+
+        try:
+            current_balance = float(movement.saldo_operacion)
+            previous_balance = float(previous.saldo_operacion)
+            cargo = float(movement.cargo or 0.0)
+            abono = float(movement.abono or 0.0)
+        except (TypeError, ValueError):
+            continue
+
+        if cargo > 0.0 and abono == 0.0:
+            column_name = "cargo"
+            expected_amount = round(
+                previous_balance - current_balance,
+                2,
+            )
+        elif abono > 0.0 and cargo == 0.0:
+            column_name = "abono"
+            expected_amount = round(
+                current_balance - previous_balance,
+                2,
+            )
+        else:
+            continue
+
+        if expected_amount <= 0.0:
+            continue
+
+        if not malformed_money_token_matches_expected(
+            rows[index],
+            column_name,
+            expected_amount,
+        ):
+            continue
+
+        following_delta = movement_accounting_delta(following)
+        if following_delta is None:
+            continue
+
+        try:
+            confirmed_current_balance = round(
+                float(following.saldo_operacion) - following_delta,
+                2,
+            )
+        except (TypeError, ValueError):
+            continue
+
+        if abs(confirmed_current_balance - current_balance) >= 0.01:
+            continue
+
+        if column_name == "cargo":
+            movement.cargo = expected_amount
+        else:
+            movement.abono = expected_amount
+
+
 def balance_is_obviously_truncated(
     observed: float,
     expected: float,
@@ -3076,6 +3208,7 @@ def extract_movimientos_words(
         return []
 
     movements: List[Movimiento] = []
+    accepted_rows: List[MovementRow] = []
 
     for row in movement_rows:
         movement = movement_row_to_model(
@@ -3088,6 +3221,12 @@ def extract_movimientos_words(
             allow_partial=row.partial_recovery,
         ):
             movements.append(movement)
+            accepted_rows.append(row)
+
+    repair_malformed_transaction_amounts(
+        movements,
+        accepted_rows,
+    )
 
     repair_corrupted_balances(movements)
 
