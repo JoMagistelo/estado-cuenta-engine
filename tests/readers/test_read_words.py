@@ -7,7 +7,7 @@ from readers.pdf_word_reader import PDFWordReader
 
 
 def test_spatial_extraction():
-    ruta_pdf = "data/BANAMEX_3.pdf"
+    ruta_pdf = "data/12 Inversion Cetes_Jul25_OOMM851003HJCRLR08.pdf"
 
     print("\n========================================================")
     print(" 🛠️ TEST PDF WORD READER (RAW)")

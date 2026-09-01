@@ -8,6 +8,7 @@ from parsers.bbva import parse_bbva
 from parsers.banamex import parse_banamex
 from parsers.banorte import parse_banorte
 from parsers.hsbc import parse_hsbc
+from parsers.scotiabank import parse_scotiabank
 
 
 # ============================================================
@@ -21,6 +22,7 @@ PARSER_REGISTRY = {
     "banamex": parse_banamex,
     "banorte": parse_banorte,
     "hsbc": parse_hsbc,
+    "scotiabank": parse_scotiabank,
 
 
 }
