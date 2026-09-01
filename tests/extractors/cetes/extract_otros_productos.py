@@ -4,7 +4,7 @@ from pathlib import Path
 
 from readers.reader_manager import ReaderManager
 
-from parsers.scotiabank.extractors.productos import (
+from parsers.cetes.extractors.productos import (
     extract_otros_productos_words
 )
 
@@ -19,7 +19,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER OTROS PRODUCTOS BANAMEX (WORDS)")
+    print("PRUEBA PARSER OTROS PRODUCTOS CETES (WORDS)")
     print("=" * 60)
 
 

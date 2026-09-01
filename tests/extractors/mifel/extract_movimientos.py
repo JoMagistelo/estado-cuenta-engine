@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from readers.reader_manager import ReaderManager
-from parsers.scotiabank.extractors.movimientos import extract_movimientos_words
+from parsers.mifel.extractors.movimientos import extract_movimientos_words
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -14,7 +14,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER MOVIMIENTOS BANAMEX (WORDS)")
+    print("PRUEBA PARSER MOVIMIENTOS MIFEL (WORDS)")
     print("=" * 60)
 
 

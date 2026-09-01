@@ -1,19 +1,19 @@
 from pathlib import Path
 
 from readers.reader_manager import ReaderManager
-from parsers.scotiabank.extractors.datos import extract_datos_cuenta_words
+from parsers.cetes.extractors.datos import extract_datos_cuenta_words
 
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "12.Nomina Scotiabank_Dic24_ROME810622HDFMRD02.pdf"
+PDF_PATH = ROOT / "data" / "12 Inversion Cetes_Dic24_OOMM851003HJCRLR08.pdf"
 
 
 def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER DATOS CUENTA SCOTIABANK (WORDS)")
+    print("PRUEBA PARSER DATOS CUENTA CETES (WORDS)")
     print("=" * 60)
 
     print()

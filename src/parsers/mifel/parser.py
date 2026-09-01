@@ -10,7 +10,7 @@ from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
 
 
-def parse_mifiel(document: DocumentData) -> EstadoCuenta:
+def parse_mifel(document: DocumentData) -> EstadoCuenta:
     """
     Parser principal de estados de cuenta BBVA.
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from readers.reader_manager import ReaderManager
-from parsers.mifiel.extractors.resumen import (
+from parsers.mifel.extractors.resumen import (
     extract_resumen_financiero_words
 )
 
@@ -15,7 +15,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER RESUMEN FINANCIERO MIFIEL (WORDS)")
+    print("PRUEBA PARSER RESUMEN FINANCIERO MIFEL (WORDS)")
     print("=" * 60)
 
     print()

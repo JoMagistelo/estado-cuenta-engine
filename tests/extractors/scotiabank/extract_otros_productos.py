@@ -19,7 +19,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER OTROS PRODUCTOS BANAMEX (WORDS)")
+    print("PRUEBA PARSER OTROS PRODUCTOS SCOTIABANK (WORDS)")
     print("=" * 60)
 
 

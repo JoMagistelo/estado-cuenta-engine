@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from readers.reader_manager import ReaderManager
-from parsers.scotiabank.extractors.resumen import (
+from parsers.cetes.extractors.resumen import (
     extract_resumen_financiero_words
 )
 
@@ -15,7 +15,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER RESUMEN FINANCIERO BANAMEX (WORDS)")
+    print("PRUEBA PARSER RESUMEN FINANCIERO CETES (WORDS)")
     print("=" * 60)
 
     print()

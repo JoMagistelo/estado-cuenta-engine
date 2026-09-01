@@ -10,7 +10,7 @@ from parsers.banorte import parse_banorte
 from parsers.hsbc import parse_hsbc
 from parsers.scotiabank import parse_scotiabank
 from parsers.cetes import parse_cetes
-from parsers.mifiel import parse_mifiel
+from parsers.mifel import parse_mifel
 
 
 # ============================================================
@@ -26,7 +26,7 @@ PARSER_REGISTRY = {
     "hsbc": parse_hsbc,
     "scotiabank": parse_scotiabank,
     "cetes": parse_cetes,
-    "mifiel": parse_mifiel
+    "mifel": parse_mifel
 
 
 }

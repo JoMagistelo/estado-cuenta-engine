@@ -15,7 +15,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("PRUEBA PARSER RESUMEN FINANCIERO BANAMEX (WORDS)")
+    print("PRUEBA PARSER RESUMEN FINANCIERO SCOTIABANK (WORDS)")
     print("=" * 60)
 
     print()
