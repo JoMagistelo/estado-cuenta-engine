@@ -803,12 +803,106 @@ def _amounts_from_block(
     return deposit or 0.0, withdrawal or 0.0, balance or 0.0
 
 
+def _concept_lines(concept: str) -> List[str]:
+    return [normalize_text(line) for line in concept.splitlines() if normalize_text(line)]
+
+
+def _is_spei_header_line(value: str) -> bool:
+    compact = compact_text(value)
+    return any(
+        marker in compact
+        for marker in (
+            "SWEBTRANSFINTERBSPEI",
+            "TRANSFINTERBANCARIASPEI",
+            "TRANSINTERBANCARIASPEI",
+        )
+    )
+
+
+def _is_operation_date_line(value: str) -> bool:
+    normalized = normalize_upper(value)
+
+    if "FECHA OPERACION" in normalized or "DIA-HORA ABONO" in normalized:
+        return True
+
+    return bool(
+        re.search(
+            rf"\b(?:0?[1-9]|[12]\d|3[01])\s+(?:{MONTH_PATTERN})"
+            rf"(?:\s+\d{{2,4}})?(?:\s+(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d)?\b",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _account_identifier_from_line(
+    value: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Devuelve (texto_sin_cuenta, identificador) para cuentas al final de línea."""
+
+    text = normalize_text(value)
+    if not text:
+        return None, None
+
+    compact = re.sub(r"\s+", "", text)
+
+    # Casos observados en Scotiabank:
+    # /021180040625952696
+    # //135180330003310294
+    # OPE/02118004066944
+    slash_match = re.search(r"(?:OPE)?/{1,2}(\d{10,18})$", compact, re.IGNORECASE)
+    if slash_match:
+        identifier = slash_match.group(1)
+        prefix = re.sub(
+            r"(?:OPE\s*)?/{1,2}\s*\d(?:[\s-]*\d){9,17}\s*$",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip(" /-")
+        return prefix or None, identifier
+
+    # En algunos abonos la cuenta viene sola, sin diagonal.
+    if re.fullmatch(r"\d{16}|\d{18}", compact):
+        return None, compact
+
+    return text, None
+
+
+def _extract_account_identifiers(
+    concept: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    account: Optional[str] = None
+    clabe: Optional[str] = None
+
+    for line in _concept_lines(concept)[1:]:
+        _, identifier = _account_identifier_from_line(line)
+        if not identifier:
+            continue
+
+        if len(identifier) == 18:
+            if clabe is None:
+                clabe = identifier
+        elif account is None:
+            account = identifier
+
+    return account, clabe
+
+
 def _extract_time(concept: str) -> Optional[str]:
     match = re.search(r"\b([01]\d|2[0-3]):[0-5]\d:[0-5]\d\b", concept)
     return match.group(0) if match else None
 
 
 def _extract_authorization(concept: str) -> Optional[str]:
+    # Forma explícita, si alguna variante del estado de cuenta la incluye.
+    explicit = re.search(
+        r"\bAUT(?:ORIZACION)?\s*[:#-]?\s*([A-Z0-9]{6,12})\b",
+        normalize_upper(concept),
+    )
+    if explicit:
+        return explicit.group(1)
+
+    # SPEI Scotiabank: /98438868 12:09:49 o 53902899 08:11:04.
     match = re.search(
         r"(?:^|\s)[/|I]?([0-9O]{8,10})\s+(?=[0-2]\d:[0-5]\d:[0-5]\d)",
         concept,
@@ -821,54 +915,246 @@ def _extract_authorization(concept: str) -> Optional[str]:
     return value[-8:]
 
 
-def _extract_tracking_key(concept: str) -> Optional[str]:
-    for line in concept.splitlines():
-        compact = re.sub(r"[^A-Za-z0-9]", "", line).upper()
-        match = re.search(r"20\d{2}[A-Z0-9]{18,}", compact)
-        if match:
-            return match.group(0)
+def _tracking_key_from_line(value: str) -> Optional[str]:
+    text = normalize_text(value)
+    if not text:
+        return None
+
+    compact = re.sub(r"[^A-Za-z0-9]", "", text).upper()
+
+    # Clave SPEI larga: 2024122340044B36L0000342455606, etc.
+    match = re.search(r"20\d{2}[A-Z0-9]{18,}", compact)
+    if match:
+        return match.group(0)
+
+    # Variantes que Scotiabank imprime como folio/clave del banco receptor.
+    if re.fullmatch(r"MBAN[A-Z0-9]{10,}", compact):
+        return compact
+    if re.fullmatch(r"HSBC[A-Z0-9]{6,}", compact):
+        return compact
+
+    # Casos NAFIN observados: 2411275058167 / 2511285059207.
+    # Se limita a 12-15 dígitos para no confundir cuentas de 16/18 dígitos.
+    # Una línea que contiene hora no puede convertirse en clave al quitar ":".
+    if not re.search(r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d", text):
+        if re.fullmatch(r"\d{12,15}", compact):
+            return compact
+
     return None
 
 
+def _extract_tracking_key(concept: str) -> Optional[str]:
+    for line in _concept_lines(concept):
+        candidate = _tracking_key_from_line(line)
+        if candidate:
+            return candidate
+    return None
+
+
+_BANK_ALIASES: Tuple[Tuple[str, str], ...] = (
+    ("BBVA MEXICO", "BBVA MEXICO"),
+    ("SANTANDER", "SANTANDER"),
+    ("BANAMEX", "BANAMEX"),
+    ("BANCO AZTECA", "AZTECA"),
+    ("AZTECA", "AZTECA"),
+    ("NAFIN", "NAFIN"),
+    ("HSBC", "HSBC"),
+)
+
+
+def _bank_from_line(value: str) -> Optional[str]:
+    normalized = normalize_upper(value).strip(" /:-")
+    compact = compact_text(normalized)
+    if not compact:
+        return None
+
+    for alias, canonical in _BANK_ALIASES:
+        if compact == compact_text(alias):
+            return canonical
+
+    return None
+
+
+def _extract_sucursal(concept: str) -> Optional[str]:
+    """En estos SPEI, `sucursal` representa el banco mostrado en el concepto."""
+
+    lines = _concept_lines(concept)
+
+    # Primero exactos, incluyendo formas /HSBC y /NAFIN.
+    for line in lines:
+        bank = _bank_from_line(line)
+        if bank:
+            return bank
+
+    # Algunas variantes no imprimen "HSBC" en una línea independiente,
+    # pero sí en el folio/clave (HSBC243629, HSBC062243).
+    for line in lines:
+        compact = re.sub(r"[^A-Za-z0-9]", "", line).upper()
+        if re.fullmatch(r"HSBC[A-Z0-9]{6,}", compact):
+            return "HSBC"
+
+    return None
+
+
+def _is_beneficiary_boundary(value: str) -> bool:
+    normalized = normalize_upper(value)
+    compact = compact_text(value)
+
+    if not normalized:
+        return True
+    if _is_spei_header_line(value):
+        return True
+    if _bank_from_line(value):
+        return True
+    if _is_operation_date_line(value):
+        return True
+    if normalized.startswith("TRANSFERENCIA A "):
+        return True
+    if re.match(r"^/?O\s*:\s*", normalized):
+        return True
+    if re.match(r"^/(?:PAGO|TC|VIATICO\b)", normalized):
+        return True
+    if re.fullmatch(r"[/|I]?[0-9O]{8,10}\s+(?:[0-2]\d:[0-5]\d:[0-5]\d)", normalized):
+        return True
+    if _tracking_key_from_line(value):
+        return True
+    if compact and compact.isdigit():
+        return True
+
+    return False
+
+
+def _beneficiary_piece(value: str) -> Optional[str]:
+    prefix, identifier = _account_identifier_from_line(value)
+    candidate = prefix if identifier else normalize_text(value)
+    if not candidate or _is_beneficiary_boundary(candidate):
+        return None
+    return normalize_upper(candidate)
+
+
 def _extract_beneficiary(concept: str) -> Optional[str]:
-    for line in concept.splitlines():
+    lines = _concept_lines(concept)
+    if not lines:
+        return None
+
+    # Regla principal para SPEI: el beneficiario completo está al final del
+    # bloque, inmediatamente antes de la cuenta/CLABE. Puede ocupar más de
+    # un renglón, como "PARA LA EDUCACION CAPACITACI T" + "IC4US /<CLABE>".
+    account_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if _account_identifier_from_line(line)[1] is not None
+    ]
+
+    if account_indexes:
+        account_index = account_indexes[-1]
+        date_indexes = [
+            index
+            for index in range(account_index)
+            if _is_operation_date_line(lines[index])
+        ]
+
+        if date_indexes:
+            start = date_indexes[-1] + 1
+            pieces = [
+                piece
+                for piece in (
+                    _beneficiary_piece(line)
+                    for line in lines[start : account_index + 1]
+                )
+                if piece
+            ]
+            if pieces:
+                return " ".join(pieces)
+
+        # Layouts como BANAMEX pueden no traer una línea de fecha separada.
+        # Recorremos hacia atrás desde la cuenta hasta encontrar un límite.
+        reverse_pieces: List[str] = []
+        for index in range(account_index, -1, -1):
+            line = lines[index]
+            prefix, identifier = _account_identifier_from_line(line)
+            candidate_source = prefix if identifier else line
+
+            if not candidate_source:
+                continue
+            if _is_beneficiary_boundary(candidate_source):
+                if reverse_pieces:
+                    break
+                continue
+
+            piece = _beneficiary_piece(candidate_source)
+            if piece:
+                reverse_pieces.append(piece)
+
+        if reverse_pieces:
+            return " ".join(reversed(reverse_pieces))
+
+    # Fallback: alias corto impreso en "TRANSFERENCIA A ...". Se usa sólo
+    # cuando no existe el nombre completo posterior.
+    for line in lines:
         normalized = normalize_upper(line)
         match = re.search(r"\bTRANSFERENCIA\s+A\s+(.+)$", normalized)
         if match and match.group(1).strip():
             return match.group(1).strip()
+
     return None
 
 
-def _extract_account_identifiers(
-    concept: str,
-) -> Tuple[Optional[str], Optional[str]]:
-    account: Optional[str] = None
-    clabe: Optional[str] = None
+def _extract_rfc(concept: str) -> Optional[str]:
+    normalized = normalize_upper(concept)
 
-    for line in concept.splitlines()[1:]:
-        compact = re.sub(r"\s+", "", line)
-        slash_match = re.search(r"/(\d{16,18})$", compact)
-        plain_match = re.fullmatch(r"\d{16}|\d{18}", compact)
+    # RFC etiquetado: RFC: XAXX010101000
+    match = re.search(
+        r"\bRFC\s*[:#-]?\s*([A-Z&]{3,4}\d{6}[A-Z0-9]{3})\b",
+        normalized,
+    )
+    if match:
+        return match.group(1)
 
-        if slash_match:
-            value = slash_match.group(1)
-        elif plain_match:
-            value = plain_match.group(0)
-        else:
+    # Fallback conservador: una línea que sea exclusivamente un RFC válido
+    # por estructura, para no confundirlo con claves de rastreo SPEI.
+    for line in normalized.splitlines():
+        candidate = re.sub(r"[^A-Z0-9&]", "", line)
+        if re.fullmatch(r"[A-Z&]{3,4}\d{6}[A-Z0-9]{3}", candidate):
+            return candidate
+
+    return None
+
+
+def _extract_reference_from_concept(concept: str) -> Optional[str]:
+    normalized = normalize_upper(concept)
+    match = re.search(
+        r"\b(?:REFERENCIA|REF)\s*[:#-]?\s*([A-Z0-9]{3,32})\b",
+        normalized,
+    )
+    return match.group(1) if match else None
+
+
+def _reference_from_block(
+    block: MovementBlock,
+    layout: ColumnLayout,
+) -> Optional[str]:
+    candidates: List[Tuple[int, int, str]] = []
+
+    for index, line in enumerate(block.lines):
+        value = _reference_text_from_line(line, layout)
+        if not value:
             continue
 
-        if len(value) == 18:
-            clabe = value
-        else:
-            account = value
+        # Mantiene prioridad por el primer renglón (comportamiento actual),
+        # pero permite recuperar referencias que OCR desplazó a otra línea.
+        score = (12 if index == 0 else 0) + min(len(value), 40)
+        candidates.append((score, -index, value))
 
-    return account, clabe
+    if candidates:
+        return max(candidates)[2]
+
+    return _extract_reference_from_concept(_concept_from_block(block, layout))
 
 
 def _extract_caja(concept: str) -> Optional[str]:
     match = re.search(r"\bI\d{5}\b", normalize_upper(concept))
     return match.group(0) if match else None
-
 
 def _movement_from_block(
     block: MovementBlock,
@@ -878,7 +1164,7 @@ def _movement_from_block(
 ) -> Movimiento:
     concept = _concept_from_block(block, layout)
     deposit, withdrawal, balance = _amounts_from_block(block, layout)
-    reference = _reference_text_from_line(block.first_line, layout)
+    reference = _reference_from_block(block, layout)
     account, clabe = _extract_account_identifiers(concept)
 
     operation_type: Optional[str]
@@ -906,8 +1192,8 @@ def _movement_from_block(
         cuenta_beneficiario=account,
         clabe_beneficiario=clabe,
         clave_rastreo=_extract_tracking_key(concept),
-        rfc=None,
-        sucursal=None,
+        rfc=_extract_rfc(concept),
+        sucursal=_extract_sucursal(concept),
         caja=_extract_caja(concept),
         hora_operacion=_extract_time(concept),
         saldo_operacion=balance,

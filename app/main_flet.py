@@ -406,7 +406,7 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "BBVA",
+                        "BBVA Digital",
                         size=10,
                         weight=ft.FontWeight.BOLD,
                     ),
@@ -418,7 +418,7 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Banorte",
+                        "Banorte Digital y Escaneado",
                         size=10,
                         weight=ft.FontWeight.BOLD,
                     ),
@@ -430,24 +430,56 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
-                        "Banamex",
+                        "Banamex Digital",
                         size=10,
                         weight=ft.FontWeight.BOLD,
                     ),
 
                     ft.Text(
-                        "• Mi Cuenta",
+                        "• Mi Cuenta\n"
                         "• Cuenta Base\n"
+                        "• Cuenta Prioriti",
                     ),
 
                     ft.Text(
-                        "HSBC",
+                        "HSBC Digital y Escaneado",
                         size=10,
                         weight=ft.FontWeight.BOLD,
                     ),
 
                     ft.Text(
                         "• Ahorro y Debito",
+                    ),
+
+                    ft.Text(
+                        "Scotiabank Digital",
+                        size=10,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "• Nomina Clasic\n",
+                    ),
+
+
+                    ft.Text(
+                        "Banca Mifel",
+                        size=10,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "• Cuenta Alavista\n",
+                    ),
+
+                    ft.Text(
+                        "CETESDIRECTO Digital",
+                        size=10,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "• cetesdirecto\n",
                     ),
 
                     ft.Text(

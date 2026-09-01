@@ -10,6 +10,7 @@ from utils.text_normalizer import normalize_text
 from parsers.bbva import parse_bbva
 from parsers.banamex import parse_banamex
 from parsers.banorte import parse_banorte
+from parsers.banorte_ocr import parse_banorte_ocr
 from parsers.hsbc import parse_hsbc
 from parsers.scotiabank import parse_scotiabank
 from parsers.cetes import parse_cetes
@@ -35,6 +36,7 @@ PARSER_REGISTRY = {
     "bbva": parse_bbva,
     "banamex": parse_banamex,
     "banorte": parse_banorte,
+    "banorte_ocr": parse_banorte_ocr,
     "hsbc": parse_hsbc,
     "scotiabank": parse_scotiabank,
     "cetes": parse_cetes,

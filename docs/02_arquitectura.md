@@ -2,7 +2,7 @@
 
 ## Estado Cuenta Engine
 
-Versión: 1.0
+Versión: 1.1
 
 ---
 
