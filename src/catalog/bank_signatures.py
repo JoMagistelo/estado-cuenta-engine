@@ -133,16 +133,16 @@ BANK_SIGNATURES = {
         ],
     },
 
-    "mifiel": {
-            "display_name": "Mifiel",
+    "mifel": {
+            "display_name": "Mifel",
             "clabe_prefixes": [], # No aplica por ser plataforma de firma
             "rfcs": [], # Se omite o se puede agregar el RFC corporativo si se requiere
             "keywords": [
-                "MIFIEL",
+                "MIFEL",
                 "FIRMA ELECTRONICA",
             ],
             "filename_keywords": [
-                "MIFIEL",
+                "MIFEL",
                 "FIRMA",
             ],
         },

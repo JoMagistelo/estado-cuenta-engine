@@ -8,7 +8,7 @@ from parsers.cetes.extractors.resumen import (
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "12.Nomina Scotiabank_Dic24_ROME810622HDFMRD02.pdf"
+PDF_PATH = ROOT / "data" / "12 Inversion Cetes_Jul25_OOMM851003HJCRLR08.pdf"
 
 
 def main():

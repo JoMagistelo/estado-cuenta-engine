@@ -6,7 +6,7 @@ from parsers.cetes.extractors.datos import extract_datos_cuenta_words
 
 ROOT = Path(__file__).resolve().parents[3]
 
-PDF_PATH = ROOT / "data" / "12 Inversion Cetes_Dic24_OOMM851003HJCRLR08.pdf"
+PDF_PATH = ROOT / "data" / "12 Inversion Cetes_Jul25_OOMM851003HJCRLR08.pdf"
 
 
 def main():
