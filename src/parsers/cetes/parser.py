@@ -12,7 +12,7 @@ from .extractors.movimientos import extract_movimientos_words
 
 def parse_cetes(document: DocumentData) -> EstadoCuenta:
     """
-    Parser principal de estados de cuenta BBVA.
+    Parser principal de estados de cuenta CETESDIRECTO.
 
     Todos los extractores utilizan exclusivamente spatial_words.
 
@@ -49,37 +49,29 @@ def parse_cetes(document: DocumentData) -> EstadoCuenta:
     # DATOS DE CUENTA
     # ============================================================
 
-    datos_cuenta = extract_datos_cuenta_words(
-        spatial_words
-    )
+    datos_cuenta = extract_datos_cuenta_words(spatial_words)
 
     # ============================================================
     # RESUMEN FINANCIERO
     # ============================================================
 
-    resumen_financiero = extract_resumen_financiero_words(
-        spatial_words
-    )
+    resumen_financiero = extract_resumen_financiero_words(spatial_words)
 
     # ============================================================
     # OTROS PRODUCTOS
     # ============================================================
 
-    otros_productos = extract_otros_productos_words(
-        spatial_words
-    )
+    otros_productos = extract_otros_productos_words(spatial_words)
 
     # ============================================================
     # MOVIMIENTOS
     # ============================================================
     #
-    # Este extractor ya funciona correctamente y se conserva
-    # exactamente con el mismo mecanismo.
+    # El extractor reconstruye renglones digitales y OCR usando las mismas
+    # palabras espaciales que el resto de los bloques.
     #
 
-    movimientos = extract_movimientos_words(
-        spatial_words
-    )
+    movimientos = extract_movimientos_words(spatial_words)
 
     # ============================================================
     # CONSTRUCCIÓN DEL ESTADO DE CUENTA

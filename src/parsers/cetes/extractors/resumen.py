@@ -146,7 +146,7 @@ def _build_summary_values(words: List[SpatialWord]) -> SummaryValues:
 
     deposits = round(sum(item.abono or 0.0 for item in movements), 2)
     withdrawals = round(sum(item.cargo or 0.0 for item in movements), 2)
-    final = movements[-1].saldo_operacion if movements else None
+    movement_final = movements[-1].saldo_operacion if movements else None
 
     initial = _movement_initial(lines, width)
     if initial is None:
@@ -163,34 +163,45 @@ def _build_summary_values(words: List[SpatialWord]) -> SummaryValues:
         page=1,
         x_min=width * 0.90,
     )
-    if final is None:
-        final = statement_final or 0.0
+    if statement_final is not None and (
+        movement_final is None or abs(movement_final - statement_final) > 0.011
+    ):
+        # Un saldo impreso es el control de calidad del OCR. En particular,
+        # evita publicar como saldo final una acumulacion de glifos dudosos de
+        # paginas invertidas.
+        final = statement_final
+    else:
+        final = movement_final or 0.0
 
     if initial is None and movements:
-        initial = round(final - deposits + withdrawals, 2)
+        first = movements[0]
+        initial = round(
+            first.saldo_operacion - (first.abono or 0.0) + (first.cargo or 0.0),
+            2,
+        )
 
     interest = _labeled_money(
         lines,
-        ("INTERESESDELPERIODO",),
+        ("INTERESESDEL",),
         page=1,
         excludes=("ACUMULADOS",),
-        x_min=width * 0.61,
-        x_max=width * 0.72,
+        x_min=width * 0.60,
+        x_max=width * 0.75,
     )
     isr = _labeled_money(
         lines,
-        ("ISRDELPERIODO",),
+        ("ISR",),
         page=1,
         excludes=("ACUMULADO",),
-        x_min=width * 0.61,
-        x_max=width * 0.72,
+        x_min=width * 0.60,
+        x_max=width * 0.75,
     )
     commissions = _labeled_money(
         lines,
         ("SERVICIOSDECOMISIONMERCANTIL",),
         page=1,
-        x_min=width * 0.61,
-        x_max=width * 0.72,
+        x_min=width * 0.60,
+        x_max=width * 0.75,
     )
     global_balance = _labeled_money(
         lines,
@@ -219,9 +230,7 @@ def _build_summary_values(words: List[SpatialWord]) -> SummaryValues:
         saldo_promedio_minimo_mensual=0.0,
         # saldo_global representa efectivo + cartera valuada; saldo_final se
         # conserva como efectivo para reconciliar la bitacora de movimientos.
-        saldo_global=(
-            global_balance if global_balance is not None else final
-        ),
+        saldo_global=(global_balance if global_balance is not None else final),
     )
 
 
