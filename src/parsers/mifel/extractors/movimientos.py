@@ -42,6 +42,7 @@ TERMINAL_MARKERS = (
     "SUMADERETIROSYDEPOSITOS",
     "SALDOAFECHADECORTE",
     "CARGOSOBJETADOS",
+    "SPEIENVIADOS",
     "SPEIRECIBIDOS",
 )
 
@@ -97,6 +98,36 @@ class ParsedMovement:
     withdrawal: float
     deposit: float
     balance: Optional[float]
+
+
+@dataclass(slots=True)
+class SpeiDetailLayout:
+    """Limites de las columnas de las tablas informativas SPEI de Mifel."""
+
+    bank_right: float = 104.0
+    date_right: float = 145.0
+    amount_right: float = 212.0
+    account_right: float = 325.0
+    beneficiary_right: float = 410.0
+    tracking_right: float = 460.0
+    reference_right: float = 500.0
+
+
+@dataclass(slots=True)
+class SpeiDetail:
+    """Contraparte y metadatos publicados fuera de la tabla de movimientos."""
+
+    direction: str
+    operation_date: str
+    amount: Optional[float]
+    bank: Optional[str]
+    beneficiary: Optional[str]
+    account: Optional[str]
+    clabe: Optional[str]
+    tracking_key: Optional[str]
+    reference: Optional[str]
+    concept: Optional[str]
+    operation_time: Optional[str]
 
 
 # ============================================================
@@ -550,6 +581,447 @@ def _reconcile_amounts(
         previous = item.balance
 
 
+# ============================================================
+# TABLAS INFORMATIVAS SPEI Y ENRIQUECIMIENTO
+# ============================================================
+
+
+SPEI_DETAIL_TERMINAL_MARKERS = (
+    "FONDOSDEINVERSION",
+    "INVERSIONESAPLAZO",
+    "MESADEDINERO",
+    "ACLARACIONES",
+    "REFERENCIADEABREVIATURAS",
+    "INFORMACIONIMPORTANTE",
+    "COMPROBANTEFISCAL",
+)
+
+
+_BANK_ALIASES: Tuple[Tuple[str, str], ...] = (
+    ("BBVABANCOMER", "BBVA MEXICO"),
+    ("BBVAMEXICO", "BBVA MEXICO"),
+    ("SANTANDER", "SANTANDER"),
+    ("CITIBANAMEX", "BANAMEX"),
+    ("BANCONACIONALDEMEXICO", "BANAMEX"),
+    ("BANAMEX", "BANAMEX"),
+    ("BANCOAZTECA", "AZTECA"),
+    ("SCOTIABANK", "SCOTIABANK"),
+    ("BANORTE", "BANORTE"),
+    ("HSBC", "HSBC"),
+    ("INBURSA", "INBURSA"),
+    ("BANBAJIO", "BANBAJIO"),
+    ("BANCODELBAJIO", "BANBAJIO"),
+    ("AFIRME", "AFIRME"),
+    ("FONDEADORA", "FONDEADORA"),
+    ("MONEX", "MONEX"),
+    ("STP", "STP"),
+    ("NUBANCO", "NU MEXICO"),
+    ("NUMEXICO", "NU MEXICO"),
+    ("MIFEL", "MIFEL"),
+)
+
+
+def _detail_layout(
+    words: Sequence[SpatialWord],
+    direction: str,
+) -> SpeiDetailLayout:
+    """Escala limites conservadores para PDFs carta digitales u OCR."""
+
+    max_x = max((safe_float(word.get("x1")) for word in words), default=594.0)
+    page_width = max(594.0, min(673.0, max_x + 18.0))
+    scale = page_width / 612.0
+
+    # La tabla de recibidos usa menos columnas opcionales (sin tarjeta ni
+    # telefono), por lo que banco, contraparte y claves empiezan mas a la
+    # izquierda que en la tabla de enviados.
+    if direction == "received":
+        return SpeiDetailLayout(
+            bank_right=90.0 * scale,
+            date_right=140.0 * scale,
+            amount_right=195.0 * scale,
+            account_right=275.0 * scale,
+            beneficiary_right=350.0 * scale,
+            tracking_right=410.0 * scale,
+            reference_right=465.0 * scale,
+        )
+
+    return SpeiDetailLayout(
+        bank_right=104.0 * scale,
+        date_right=145.0 * scale,
+        amount_right=212.0 * scale,
+        account_right=325.0 * scale,
+        beneficiary_right=410.0 * scale,
+        tracking_right=460.0 * scale,
+        reference_right=500.0 * scale,
+    )
+
+
+def _spei_section_kind(line: SpatialLine) -> Optional[str]:
+    compact = compact_text(line.text)
+    if compact in {"SPEIENVIADO", "SPEIENVIADOS"}:
+        return "sent"
+    if compact in {"SPEIRECIBIDO", "SPEIRECIBIDOS"}:
+        return "received"
+    return None
+
+
+def _is_spei_detail_terminal(line: SpatialLine) -> bool:
+    compact = compact_text(line.text)
+    return any(marker in compact for marker in SPEI_DETAIL_TERMINAL_MARKERS)
+
+
+def _detail_operation_date(
+    line: SpatialLine,
+    layout: SpeiDetailLayout,
+) -> Optional[str]:
+    value = _text_in_range(line, layout.bank_right, layout.date_right)
+    dates = dates_from_text(value)
+    return dates[0].strftime("%d/%m/%Y") if dates else None
+
+
+def _block_text(
+    block: Sequence[SpatialLine],
+    left: float,
+    right: float,
+) -> str:
+    values = [_text_in_range(line, left, right) for line in block]
+    return " ".join(value for value in values if value).strip()
+
+
+def _block_amount(
+    block: Sequence[SpatialLine],
+    layout: SpeiDetailLayout,
+) -> Optional[float]:
+    for line in block:
+        amount = _money_in_range(line, layout.date_right, layout.amount_right)
+        if amount is not None:
+            return abs(amount)
+    return None
+
+
+def _canonical_bank(value: str) -> Optional[str]:
+    normalized = normalize_upper(value).strip(" /,.-")
+    compact = compact_text(normalized)
+    if not compact:
+        return None
+
+    for alias, canonical in _BANK_ALIASES:
+        if alias in compact:
+            return canonical
+    return normalized or None
+
+
+def _clean_counterparty(value: str) -> Optional[str]:
+    normalized = normalize_upper(value)
+    if not normalized:
+        return None
+
+    # Mifel agrega esta leyenda al nombre, dentro de la misma celda.
+    marker = re.search(
+        r"/?\s*DATO\s+NO\s+VERIFICADO\s+POR\s+ESTA\s+INSTITUCION\b",
+        normalized,
+    )
+    if marker:
+        normalized = normalized[: marker.start()]
+    normalized = normalized.strip(" /,.-")
+    return normalize_text(normalized) or None
+
+
+def _account_identifiers(value: str) -> Tuple[Optional[str], Optional[str]]:
+    contiguous = re.findall(r"(?<!\d)\d{10,18}(?!\d)", value)
+    if contiguous:
+        identifier = max(contiguous, key=len)
+        if len(identifier) == 18:
+            return None, identifier
+        return identifier, None
+
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 18:
+        return None, digits
+    if 10 <= len(digits) <= 17:
+        return digits, None
+    return None, None
+
+
+def _counterparty_from_cells(
+    account_text: str,
+    beneficiary_text: str,
+) -> Optional[str]:
+    """Recupera el nombre cuando PDFium pega su inicio a la CLABE."""
+
+    suffix = ""
+    match = re.search(r"(?<!\d)\d{10,18}(?!\d)", account_text)
+    if match:
+        suffix = account_text[match.end() :]
+    return _clean_counterparty(
+        " ".join(value for value in (suffix, beneficiary_text) if value)
+    )
+
+
+def _compact_identifier(value: str, minimum: int = 1) -> Optional[str]:
+    compact = re.sub(r"[^A-Z0-9]", "", normalize_upper(value))
+    if len(compact) < minimum or not re.search(r"\d", compact):
+        return None
+    return compact
+
+
+def _extract_time(value: str) -> Optional[str]:
+    match = re.search(r"\b(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\b", value)
+    return match.group(0) if match else None
+
+
+def _detail_from_block(
+    direction: str,
+    block: Sequence[SpatialLine],
+    layout: SpeiDetailLayout,
+) -> Optional[SpeiDetail]:
+    if not block:
+        return None
+
+    operation_date = _detail_operation_date(block[0], layout)
+    if operation_date is None:
+        return None
+
+    bank_text = _block_text(block, 0.0, layout.bank_right)
+    date_text = _block_text(block, layout.bank_right, layout.date_right)
+    account_text = _block_text(
+        block,
+        layout.amount_right,
+        layout.account_right,
+    )
+    beneficiary_text = _block_text(
+        block,
+        layout.account_right,
+        layout.beneficiary_right,
+    )
+    tracking_text = _block_text(
+        block,
+        layout.beneficiary_right,
+        layout.tracking_right,
+    )
+    reference_text = _block_text(
+        block,
+        layout.tracking_right,
+        layout.reference_right,
+    )
+    concept = _block_text(block, layout.reference_right, float("inf"))
+    account, clabe = _account_identifiers(account_text)
+
+    return SpeiDetail(
+        direction=direction,
+        operation_date=operation_date,
+        amount=_block_amount(block, layout),
+        bank=_canonical_bank(bank_text),
+        beneficiary=_counterparty_from_cells(account_text, beneficiary_text),
+        account=account,
+        clabe=clabe,
+        tracking_key=_compact_identifier(tracking_text, minimum=8),
+        reference=_compact_identifier(reference_text),
+        concept=normalize_text(concept) or None,
+        operation_time=_extract_time(date_text),
+    )
+
+
+def _extract_spei_details(
+    lines: Sequence[SpatialLine],
+    words: Sequence[SpatialWord],
+) -> List[SpeiDetail]:
+    """Lee las tablas `SPEI enviados/recibidos`, incluso entre paginas."""
+
+    layouts = {
+        direction: _detail_layout(words, direction)
+        for direction in ("sent", "received")
+    }
+    result: List[SpeiDetail] = []
+    direction: Optional[str] = None
+    block: List[SpatialLine] = []
+
+    def flush() -> None:
+        nonlocal block
+        if direction is not None and block:
+            detail = _detail_from_block(direction, block, layouts[direction])
+            if detail is not None:
+                result.append(detail)
+        block = []
+
+    for line in lines:
+        section_kind = _spei_section_kind(line)
+        if section_kind is not None:
+            flush()
+            direction = section_kind
+            continue
+
+        if direction is None:
+            continue
+
+        if _is_spei_detail_terminal(line):
+            flush()
+            direction = None
+            continue
+
+        if _is_footer_or_page_header(line):
+            continue
+
+        layout = layouts[direction]
+        if _detail_operation_date(line, layout) is not None:
+            flush()
+            block = [line]
+        elif block and line.text:
+            block.append(line)
+
+    flush()
+    return result
+
+
+def _extract_tracking_key(value: str) -> Optional[str]:
+    compact = re.sub(r"[^A-Z0-9]", "", normalize_upper(value))
+    match = re.search(r"20\d{2}[A-Z0-9]{18,}", compact)
+    return match.group(0) if match else None
+
+
+_MATCH_NOISE = {
+    "A",
+    "AL",
+    "DE",
+    "DEL",
+    "EL",
+    "EN",
+    "LA",
+    "PAGO",
+    "R",
+    "RT",
+    "RTG",
+    "RTGS",
+    "SPEI",
+    "TRANSFERENCIA",
+    "Y",
+}
+
+
+def _match_tokens(value: str) -> List[str]:
+    return [
+        token
+        for token in re.findall(r"[A-Z0-9]+", normalize_upper(value))
+        if len(token) >= 2 and token not in _MATCH_NOISE
+    ]
+
+
+def _detail_similarity(movement: Movimiento, detail: SpeiDetail) -> int:
+    movement_tokens = set(_match_tokens(movement.concepto or ""))
+    detail_tokens = set(_match_tokens(detail.concept or ""))
+    overlap = len(movement_tokens & detail_tokens)
+
+    movement_compact = "".join(_match_tokens(movement.concepto or ""))
+    detail_compact = "".join(_match_tokens(detail.concept or ""))
+    substring_bonus = 0
+    if movement_compact and detail_compact:
+        if movement_compact in detail_compact or detail_compact in movement_compact:
+            substring_bonus = 20
+    return overlap * 10 + substring_bonus
+
+
+def _movement_direction(movement: Movimiento) -> Optional[str]:
+    if movement.cargo:
+        return "sent"
+    if movement.abono:
+        return "received"
+    return None
+
+
+def _movement_amount(movement: Movimiento) -> float:
+    return abs(movement.cargo or movement.abono or 0.0)
+
+
+def _apply_spei_detail(movement: Movimiento, detail: SpeiDetail) -> None:
+    movement.beneficiario = movement.beneficiario or detail.beneficiary
+    movement.cuenta_beneficiario = (
+        movement.cuenta_beneficiario or detail.account
+    )
+    movement.clabe_beneficiario = movement.clabe_beneficiario or detail.clabe
+
+    # La tabla informativa es la fuente autoritativa. El concepto de la tabla
+    # principal puede contener otra clave como texto o una version truncada.
+    if detail.tracking_key:
+        movement.clave_rastreo = detail.tracking_key
+
+    movement.sucursal = movement.sucursal or detail.bank
+    movement.hora_operacion = movement.hora_operacion or detail.operation_time
+    movement.rfc = movement.rfc or _extract_rfc(
+        " ".join(
+            value
+            for value in (detail.beneficiary, detail.concept)
+            if value
+        )
+    )
+
+    if detail.concept and compact_text(detail.concept) != compact_text(
+        detail.reference
+    ):
+        movement.concepto_original = detail.concept
+
+    # `referencia` ya contiene el folio SMF que el parser historicamente
+    # entrega. Se conserva para no romper consumidores; la referencia SPEI
+    # secundaria se guarda en `autorizacion`, campo antes vacio en Mifel.
+    if detail.reference:
+        if not movement.referencia:
+            movement.referencia = detail.reference
+        elif not movement.autorizacion:
+            movement.autorizacion = detail.reference
+
+
+def _enrich_spei_movements(
+    movements: Sequence[Movimiento],
+    details: Sequence[SpeiDetail],
+) -> None:
+    """Concilia por sentido, fecha e importe y consume cada detalle una vez."""
+
+    used: set[int] = set()
+
+    for movement in movements:
+        if "SPEI" not in compact_text(movement.concepto):
+            continue
+
+        direction = _movement_direction(movement)
+        if direction is None:
+            continue
+
+        amount = _movement_amount(movement)
+        candidates = [
+            index
+            for index, detail in enumerate(details)
+            if index not in used
+            and detail.direction == direction
+            and detail.operation_date == movement.fecha_operacion
+            and detail.amount is not None
+            and abs(detail.amount - amount) <= 0.02
+        ]
+
+        # Si OCR perdio exclusivamente el importe de la tabla informativa,
+        # conciliamos solo cuando la fecha/sentido dejan un candidato claro.
+        if not candidates:
+            partial = [
+                index
+                for index, detail in enumerate(details)
+                if index not in used
+                and detail.direction == direction
+                and detail.operation_date == movement.fecha_operacion
+                and detail.amount is None
+                and _detail_similarity(movement, detail) >= 10
+            ]
+            if len(partial) == 1:
+                candidates = partial
+
+        if not candidates:
+            continue
+
+        best = max(
+            candidates,
+            key=lambda index: (_detail_similarity(movement, details[index]), -index),
+        )
+        _apply_spei_detail(movement, details[best])
+        used.add(best)
+
+
 def _extract_rfc(concept: str) -> Optional[str]:
     match = re.search(r"\b[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}\b", normalize_upper(concept))
     return match.group(0) if match else None
@@ -574,11 +1046,11 @@ def _to_model(item: ParsedMovement) -> Movimiento:
         beneficiario=None,
         cuenta_beneficiario=None,
         clabe_beneficiario=None,
-        clave_rastreo=None,
+        clave_rastreo=_extract_tracking_key(item.concept),
         rfc=_extract_rfc(item.concept),
         sucursal=None,
         caja=None,
-        hora_operacion=None,
+        hora_operacion=_extract_time(item.concept),
         saldo_operacion=round(item.balance or 0.0, 2),
         saldo_liquidacion=0.0,
         concepto_original=item.concept,
@@ -599,7 +1071,12 @@ def extract_movimientos_words(words: List[SpatialWord]) -> List[Movimiento]:
     layout = _header_layout(lines)
     parsed = _parse_blocks(section, layout)
     _reconcile_amounts(parsed, _initial_balance(lines))
-    return [_to_model(item) for item in parsed]
+    movements = [_to_model(item) for item in parsed]
+    _enrich_spei_movements(
+        movements,
+        _extract_spei_details(lines, words),
+    )
+    return movements
 
 
 __all__ = [
