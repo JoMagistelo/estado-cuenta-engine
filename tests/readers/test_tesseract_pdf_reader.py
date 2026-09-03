@@ -7,7 +7,7 @@ from readers.tesseract_pdf_reader import TesseractPDFReader
 
 
 def test_spatial_extraction():
-    ruta_pdf = "data/nafin/INVERSION NAFIN/12.1_Nómina_HSBC México 9004_dic_25_BALM890924MPLZPR00.pdf"
+    ruta_pdf = "data/nafin/INVERSION NAFIN/12.1_Nómina_HSBC  México 9004_dic_24_BALM890924MPLZPR00.pdf"
 
     print("\n========================================================")
     print(" 🛠️ TEST TESSERACT PDF READER (OCR)")

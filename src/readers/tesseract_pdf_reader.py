@@ -47,11 +47,11 @@ class TesseractPDFReader:
 
     MAX_TEXT_PAGES = 5
 
-    RENDER_DPI = 300
+    RENDER_DPI = 450
 
     LANGUAGE = "spa"
 
-    CONFIG = "--oem 3 --psm 11"
+    CONFIG = "--oem 3 --psm 3"
 
     TIMEOUT_SECONDS = 90
 
