@@ -16,6 +16,23 @@ from utils.text_digit_cleaner import clean_digits
 #
 
 CLABE_PATTERNS = [
+    # Caso CETESDIRECTO / NAFIN:
+    # "CONTRATO CUENTA CLABE 111..."
+    r"CONTRATO\s+CUENTA\s+CLABE\s*[:#-]?\s*"
+    r"((?:111[\s-]*)(?:\d[\s-]*){15})",
+
+    # Caso Mifel:
+    # "NÚMERO DE CUENTA CLABE: 042..."
+    r"(?:N[ÚU]MERO\s+DE\s+)?(?:CUENTA\s+)?CLABE\s*[:#-]?\s*"
+    r"((?:042[\s-]*)(?:\d[\s-]*){15})",
+
+    # Caso Mercado Pago W:
+    # "CLABE interbancaria: 722..."
+    # El prefijo evita confundir una CLABE beneficiaria de un movimiento
+    # con la CLABE propia de la cuenta que identifica el documento.
+    r"(?:CUENTA\s+CLABE|CLABE(?:\s+INTERBANCARIA)?)\s*[:#-]?\s*"
+    r"((?:722[\s-]*)(?:\d[\s-]*){15})",
+
     # Caso BBVA:
     # "No. Cuenta CLABE 012 180 01576395513 3"
     r"CLABE\s+((?:\d{3}\s+\d{3}\s+\d{11}\s+\d))",
@@ -73,6 +90,14 @@ _RE_BANORTE_GENERIC = re.compile(
     r"\b(?:\d[\s-]*){18}\b",
 )
 
+_TRANSACTION_CLABE_CONTEXT = re.compile(
+    r"(?:"
+    r"BENEFICIARI[AO]|ORDENANTE|DESTINO|ORIGEN|"
+    r"CTA\s*/\s*CLABE|CUENTA\s+(?:DE\s+)?(?:BENEFICIARI[AO]|ORDENANTE)"
+    r")",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # HELPERS
@@ -122,6 +147,31 @@ def _is_numeric_after_clabe(
     return after_clabe[0].isdigit()
 
 
+def _is_transaction_clabe_context(
+    text: str,
+    clabe_start: int,
+) -> bool:
+    """
+    Evita usar como identidad del estado una CLABE de contraparte.
+
+    Los detalles SPEI pueden incluir etiquetas como ``CLABE beneficiaria``
+    o ``CTA/CLABE``. Esas cuentas se extraen después por el parser de
+    movimientos y no deben decidir qué institución emitió el documento.
+    """
+    line_start = text.rfind("\n", 0, clabe_start) + 1
+    line_end = text.find("\n", clabe_start)
+    if line_end < 0:
+        line_end = len(text)
+
+    # La clasificación se limita al mismo renglón. De lo contrario una
+    # CLABE propia podría descartarse sólo porque el movimiento anterior
+    # terminó con la palabra "beneficiaria".
+    context_start = max(line_start, clabe_start - 15)
+    context_end = min(line_end, clabe_start + 70)
+    context = text[context_start:context_end]
+    return bool(_TRANSACTION_CLABE_CONTEXT.search(context))
+
+
 def _extract_banorte_clabe(text: str) -> str | None:
     """
     Intenta extraer exclusivamente la CLABE del formato Banorte.
@@ -153,6 +203,12 @@ def _extract_banorte_clabe(text: str) -> str | None:
     clabe_match = _first_clabe_match(text)
 
     if not clabe_match:
+        return None
+
+    if _is_transaction_clabe_context(
+        text,
+        clabe_match.start(),
+    ):
         return None
 
     # ---------------------------------------------------------------
@@ -241,17 +297,29 @@ def _extract_first_generic_clabe(text: str) -> str | None:
 
     for pattern in _CLABE_PATTERNS_COMPILED:
 
-        match = pattern.search(text)
+        for match in pattern.finditer(text):
 
-        if not match:
-            continue
+            clabe_anchor = _RE_FIRST_CLABE.search(
+                text,
+                match.start(),
+                match.end(),
+            )
 
-        candidate = match.group(1)
+            if (
+                clabe_anchor
+                and _is_transaction_clabe_context(
+                    text,
+                    clabe_anchor.start(),
+                )
+            ):
+                continue
 
-        clean = _normalize_clabe_candidate(candidate)
+            candidate = match.group(1)
 
-        if clean:
-            return clean
+            clean = _normalize_clabe_candidate(candidate)
+
+            if clean:
+                return clean
 
     return None
 

@@ -15,6 +15,7 @@ from parsers.hsbc import parse_hsbc
 from parsers.scotiabank import parse_scotiabank
 from parsers.cetes import parse_cetes
 from parsers.mifel import parse_mifel
+from parsers.mercado_pago import parse_mercado_pago
 
 
 # ============================================================
@@ -41,6 +42,7 @@ PARSER_REGISTRY = {
     "scotiabank": parse_scotiabank,
     "cetes": parse_cetes,
     "mifel": parse_mifel,
+    "mercado_pago": parse_mercado_pago,
 }
 
 
