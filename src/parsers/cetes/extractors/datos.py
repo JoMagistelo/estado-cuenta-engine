@@ -43,8 +43,12 @@ def extract_producto_principal(words: List[SpatialWord]) -> Optional[str]:
     """
 
     lines = _page_one_lines(words)
-    has_account = any("CONTRATOCUENTACLABE" in compact_text(line.text) for line in lines)
-    has_portfolio = any("RESUMENDELPORTAFOLIO" in compact_text(line.text) for line in lines)
+    has_account = any(
+        "CONTRATOCUENTACLABE" in compact_text(line.text) for line in lines
+    )
+    has_portfolio = any(
+        "RESUMENDELPORTAFOLIO" in compact_text(line.text) for line in lines
+    )
     has_brand = any("CETESDIRECTO" in compact_text(line.text) for line in lines)
     if has_brand or (has_account and has_portfolio):
         return "CETESDIRECTO"
