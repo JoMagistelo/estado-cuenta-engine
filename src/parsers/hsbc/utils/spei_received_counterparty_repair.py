@@ -128,7 +128,7 @@ def repair_received_spei_counterparty(
     La frontera X de las columnas decide dónde partir. El catálogo
     bancario únicamente valida/completa el participante; no se usa un
     diccionario de nombres ni se roba al ordenante la letra compartida
-    en el borde (por ejemplo la ``R`` de ``...BANCOMEROGELIO``).
+    en el borde (por ejemplo la ``R`` de ``...BANCOMEREMITENTE``).
     """
 
     if getattr(row, "tipo", None) != "recibidos":
