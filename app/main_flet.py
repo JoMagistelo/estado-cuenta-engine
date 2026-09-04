@@ -483,6 +483,12 @@ def main(page: ft.Page):
                     ),
 
                     ft.Text(
+                        "MercadoPago Digital",
+                        size=10,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
                         "Próximamente PDFs Escaneados",
                         size=9,
                         weight=ft.FontWeight.BOLD,
@@ -3505,7 +3511,7 @@ def main(page: ft.Page):
                         controls=[
 
                             ft.Text(
-                                "Versión 1.0",
+                                "Versión 2.0",
                                 weight=(
                                     ft.FontWeight.BOLD
                                 ),
