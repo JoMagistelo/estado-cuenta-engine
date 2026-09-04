@@ -23,6 +23,14 @@ FOOTER_MARKERS = (
 
 FOOTER_LINE_Y_TOLERANCE = 5.0
 
+# Firmas compuestas tolerantes a una pérdida OCR. Nunca se evalúan
+# fuera de la banda inferior definida por find_footer_start_y().
+FOOTER_BANK_TOKENS = (
+    "HSBC",
+    "HSEC",
+    "HSC",
+)
+
 
 # ============================================================
 # UTILIDADES
@@ -89,6 +97,14 @@ def normalize_text(
     text = re.sub(r"\s+", " ", text.upper())
 
     return text.strip()
+
+
+def compact_text(value: Any) -> str:
+    return re.sub(
+        r"[^A-Z0-9]",
+        "",
+        normalize_text(value),
+    )
 
 
 def page_words(
@@ -170,15 +186,61 @@ def footer_lines(
     return lines
 
 
+def is_fuzzy_footer_signature(value: str) -> bool:
+    """
+    Reconoce el pie cuando una palabra fuerte fue degradada por OCR.
+
+    Se exigen dos señales relacionadas entre sí; una aparición aislada
+    de HSBC, RFC, Reforma o un número nunca basta para cortar página.
+    La comprobación de posición inferior se realiza por separado.
+    """
+
+    normalized = normalize_text(value)
+    compact = compact_text(value)
+    tokens = set(re.findall(r"[A-Z0-9]+", normalized))
+
+    has_bank = any(token in tokens for token in FOOTER_BANK_TOKENS)
+    has_emitido = any(token.startswith("EMITID") for token in tokens)
+    has_rfc = "RFC" in tokens or compact.startswith("RFC")
+    has_financiero = "FINANCIERO" in tokens
+    has_reforma = "REFORMA" in tokens
+    has_cuauhtemoc = any(token.startswith("CUAUHTEM") for token in tokens)
+    has_hmi_fragment = (
+        "HMI" in tokens
+        or "950125KG8" in compact
+        or "HMI950125KG8" in compact
+    )
+
+    if has_emitido and has_bank:
+        return True
+    if has_bank and has_financiero:
+        return True
+    if has_rfc and has_hmi_fragment:
+        return True
+    if has_reforma and has_cuauhtemoc:
+        return True
+
+    # PAG. 3/8 puede degradarse a PAC. 3/8 o P4G 3/8. La tolerancia
+    # sólo se acepta junto al patrón fraccionario de página.
+    if re.search(
+        r"\bP[A4][GC]\.?\s*\d+\s*/\s*\d+\b",
+        normalized,
+    ):
+        return True
+
+    return False
+
+
 def is_footer_marker_text(value: str) -> bool:
     normalized = normalize_text(value)
 
     if any(marker in normalized for marker in FOOTER_MARKERS):
         return True
 
-    return bool(
-        re.search(r"\bPAG\.?\s*\d+\s*/\s*\d+\b", normalized)
-    )
+    if re.search(r"\bPAG\.?\s*\d+\s*/\s*\d+\b", normalized):
+        return True
+
+    return is_fuzzy_footer_signature(value)
 
 
 def find_footer_start_y(
