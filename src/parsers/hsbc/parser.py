@@ -11,6 +11,9 @@ from .extractors.movimientos import extract_movimientos_words
 from .utils.movement_accounting_recovery import (
     strengthen_hsbc_scanned_movements,
 )
+from .utils.movement_supplemental_fill import (
+    fill_existing_movements_from_supplemental,
+)
 from .utils.spei_received_party_repair import (
     repair_received_spei_parties_in_movements,
 )
@@ -98,6 +101,15 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
 
     movimientos = extract_movimientos_words(
         spatial_words
+    )
+
+    # Una segunda lectura de las mismas words se usa solamente como
+    # evidencia para completar campos ausentes de una fila que ya fue
+    # aceptada. La Referencia/Serial debe coincidir de forma única y
+    # nunca se sustituye un importe o saldo ya publicado.
+    fill_existing_movements_from_supplemental(
+        spatial_words,
+        movimientos,
     )
 
     # Refuerzo exclusivo para escaneados degradados. Reutiliza el
