@@ -43,7 +43,6 @@ class PDFTextStageResult:
         initial_empty_pages: int,
         has_extractable_text: bool,
     ) -> None:
-
         self.document = document
         self.initial_empty_pages = initial_empty_pages
         self.has_extractable_text = has_extractable_text
@@ -165,7 +164,7 @@ class ReaderManager:
         )
 
     # ========================================================
-    # OCR
+    # OCR — TESSERACT (PRIMARIO)
     # ========================================================
 
     @staticmethod
@@ -175,11 +174,40 @@ class ReaderManager:
     ) -> DocumentData:
         """
         Procesa el PDF mediante Tesseract OCR.
+
+        Se conserva como reader OCR primario para no cambiar el
+        comportamiento histórico del engine.
         """
 
         file_path = Path(file_path)
 
         return TesseractPDFReader.read(
+            file_path,
+            start_page=start_page,
+        )
+
+    # ========================================================
+    # OCR — PADDLEOCR (FALLBACK)
+    # ========================================================
+
+    @staticmethod
+    def read_paddle_ocr(
+        file_path: str | Path,
+        start_page: int = 0,
+    ) -> DocumentData:
+        """
+        Procesa el PDF mediante PaddleOCR.
+
+        El import es lazy para que PaddleOCR sea una dependencia
+        opcional: las instalaciones que sólo usan Tesseract siguen
+        funcionando sin cambios.
+        """
+
+        file_path = Path(file_path)
+
+        from .paddleocr_pdf_reader import PaddleOCRPDFReader
+
+        return PaddleOCRPDFReader.read(
             file_path,
             start_page=start_page,
         )
