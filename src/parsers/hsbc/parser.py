@@ -14,6 +14,9 @@ from .utils.movement_accounting_recovery import (
 from .utils.movement_supplemental_fill import (
     fill_existing_movements_from_supplemental,
 )
+from .utils.partial_movement_bridge import (
+    insert_partial_accounting_bridges,
+)
 from .utils.spei_received_party_repair import (
     repair_received_spei_parties_in_movements,
 )
@@ -118,6 +121,15 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
     # serie completa contra los saldos de apertura/cierre antes de
     # corregir balances OCR.
     movimientos = strengthen_hsbc_scanned_movements(
+        spatial_words,
+        movimientos,
+    )
+
+    # Una fila cuyo cargo/abono sí fue leído pero cuyo saldo desapareció
+    # puede cerrar una discontinuidad de forma determinista. Sólo se
+    # inserta cuando su delta conduce exactamente a la frontera contable
+    # del movimiento siguiente; de lo contrario se conserva el lote.
+    movimientos = insert_partial_accounting_bridges(
         spatial_words,
         movimientos,
     )
