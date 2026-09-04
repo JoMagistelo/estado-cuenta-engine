@@ -8,6 +8,12 @@ from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
+from .utils.robust_recovery import (
+    normalize_hsbc_ocr_words,
+    repair_datos_cuenta,
+    repair_resumen_financiero,
+    repair_movimientos,
+)
 
 
 def parse_hsbc(document: DocumentData) -> EstadoCuenta:
@@ -16,34 +22,28 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
 
     Todos los extractores utilizan exclusivamente spatial_words.
 
-    Flujo:
-
-        DocumentData
-             │
-             ▼
-        spatial_words
-             │
-        ┌────┼───────────────┐
-        ▼    ▼               ▼
-      Datos Resumen       Productos
-        │    │               │
-        └────┴───────────────┘
-                 │
-                 ▼
-             Movimientos
-                 │
-                 ▼
-            EstadoCuenta
+    Antes de ejecutar los extractores se aplica una normalización OCR
+    extremadamente acotada. Las rutas históricas de Datos, Resumen,
+    Productos y Movimientos permanecen intactas; las reparaciones se
+    aplican únicamente después de la extracción y sólo cuando existe
+    evidencia estructural suficiente.
     """
 
     # ============================================================
     # FUENTE ÚNICA DE EXTRACCIÓN
     # ============================================================
     #
-    # Todos los extractores trabajan sobre las mismas palabras
-    # espaciales contenidas en DocumentData.
+    # Se conserva una copia normalizada para no modificar el
+    # DocumentData original. Actualmente la normalización sólo
+    # recupera encabezados inequívocos como:
     #
-    spatial_words = document.spatial_words
+    #     ETALLE MOVIMIENTOS -> DETALLE MOVIMIENTOS
+    #
+    # cuando ambas palabras pertenecen al mismo renglón OCR.
+    #
+    spatial_words = normalize_hsbc_ocr_words(
+        document.spatial_words
+    )
 
     # ============================================================
     # DATOS DE CUENTA
@@ -53,12 +53,22 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
         spatial_words
     )
 
+    repair_datos_cuenta(
+        spatial_words,
+        datos_cuenta,
+    )
+
     # ============================================================
     # RESUMEN FINANCIERO
     # ============================================================
 
     resumen_financiero = extract_resumen_financiero_words(
         spatial_words
+    )
+
+    repair_resumen_financiero(
+        spatial_words,
+        resumen_financiero,
     )
 
     # ============================================================
@@ -72,13 +82,18 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
     # ============================================================
     # MOVIMIENTOS
     # ============================================================
-    #
-    # Este extractor ya funciona correctamente y se conserva
-    # exactamente con el mismo mecanismo.
-    #
 
     movimientos = extract_movimientos_words(
         spatial_words
+    )
+
+    # Si el OCR conservó la identidad del primer movimiento pero
+    # omitió exclusivamente su importe/saldo, se permite una
+    # reconstrucción sólo cuando la contabilidad del segundo
+    # movimiento y los totales del resumen lo demuestran.
+    repair_movimientos(
+        movimientos,
+        resumen_financiero,
     )
 
     # ============================================================
