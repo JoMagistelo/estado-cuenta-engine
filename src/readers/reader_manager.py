@@ -89,6 +89,7 @@ class ReaderManager:
             spatial_words=spatial_words,
             metadata={
                 "start_page": start_page,
+                "source_path": str(file_path),
             },
         )
 
@@ -129,6 +130,7 @@ class ReaderManager:
             spatial_words=[],
             metadata={
                 "start_page": start_page,
+                "source_path": str(file_path),
             },
         )
 
@@ -181,10 +183,12 @@ class ReaderManager:
 
         file_path = Path(file_path)
 
-        return TesseractPDFReader.read(
+        document = TesseractPDFReader.read(
             file_path,
             start_page=start_page,
         )
+        document.metadata["source_path"] = str(file_path)
+        return document
 
     # ========================================================
     # OCR — PADDLEOCR (FALLBACK)
@@ -207,7 +211,9 @@ class ReaderManager:
 
         from .paddleocr_pdf_reader import PaddleOCRPDFReader
 
-        return PaddleOCRPDFReader.read(
+        document = PaddleOCRPDFReader.read(
             file_path,
             start_page=start_page,
         )
+        document.metadata["source_path"] = str(file_path)
+        return document
