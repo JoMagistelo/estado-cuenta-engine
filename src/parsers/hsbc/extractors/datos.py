@@ -73,7 +73,7 @@ BOX_NOMBRE_CLIENTE = (
 #
 # Valor:
 #
-#     6270638192
+#     1234567890  (valor ilustrativo)
 #
 # El límite derecho es IMPORTANTE:
 #
@@ -97,12 +97,12 @@ BOX_NUMERO_CUENTA = (
 #
 # Valor:
 #
-#     021905062706381
-#     925
+#     000000000000000
+#     000
 #
 # Resultado:
 #
-#     021905062706381925
+#     000000000000000000
 # ------------------------------------------------------------
 
 BOX_CLABE = (
@@ -118,7 +118,7 @@ BOX_CLABE = (
 #
 # Valor:
 #
-#     38801782
+#     12345678  (valor ilustrativo)
 # ------------------------------------------------------------
 
 BOX_NUMERO_CLIENTE = (
@@ -134,7 +134,7 @@ BOX_NUMERO_CLIENTE = (
 #
 # Valor:
 #
-#     GACJ700226PP2
+#     XAXX010101000  (RFC genérico de ejemplo)
 # ------------------------------------------------------------
 
 BOX_RFC = (
@@ -1088,11 +1088,11 @@ def value_words_near_anchor(
     Ejemplo:
 
         NUMERO DE CUENTA
-        6270638192                         Saldo Final 9,949.54
+        1234567890                         Saldo Final 9,949.54
 
     solo devuelve:
 
-        6270638192
+        1234567890
     """
 
     if not anchor:
@@ -1337,8 +1337,6 @@ def extract_account_from_anchor(
     # a la etiqueta.
     # --------------------------------------------------------
 
-    candidate_lines = []
-
     for line in lines:
 
         if not line:
@@ -1413,7 +1411,7 @@ def extract_account_from_movement_header(
     En esos formatos el dato continúa apareciendo de forma
     explícita en el encabezado semántico de movimientos:
 
-        DETALLE MOVIMIENTOS ... NO. 6426571729
+        DETALLE MOVIMIENTOS ... NO. 1234567890
 
     Solo se consideran los dígitos posteriores a ``NO.``.
     Esto evita utilizar como cuenta el número de tarjeta que
@@ -1428,11 +1426,13 @@ def extract_account_from_movement_header(
             line
         )
 
-        if not (
-            "DETALLE" in normalized
-            and
-            "MOVIMIENTOS" in normalized
-        ):
+        header_tokens = re.findall(r"[A-Z0-9]+", normalized)
+        has_detail_token = any(
+            token in ("DETALLE", "ETALLE", "TALLE")
+            for token in header_tokens
+        )
+
+        if not has_detail_token or "MOVIMIENTOS" not in header_tokens:
             continue
 
         ordered_words = sorted(
@@ -1652,11 +1652,35 @@ def extract_numero_cliente_from_anchor(
 
     xmin, xmax, ymin, ymax = BOX_NUMERO_CLIENTE
 
+    # Prioridad a una word individual válida. En OCR desplazado la
+    # misma línea lógica puede contener también el RFC; concatenar el
+    # renglón completo produciría una secuencia mayor que los ocho
+    # dígitos válidos del número de cliente.
+    direct_candidates = []
+
+    for word in words:
+        center_x, center_y = word_center(word)
+        if not (
+            xmin - BOX_PADDING_X <= center_x <= xmax + BOX_PADDING_X
+            and anchor_y < center_y <= anchor_y + 25.0
+        ):
+            continue
+
+        candidate = re.sub(
+            r"\D",
+            "",
+            clean_word_text(word.get("text", "")),
+        )
+        if CLIENT_PATTERN.fullmatch(candidate):
+            direct_candidates.append((center_y, center_x, candidate))
+
+    if direct_candidates:
+        direct_candidates.sort(key=lambda item: (item[0], item[1]))
+        return direct_candidates[0][2]
+
     # --------------------------------------------------------
     # Buscar solamente la línea inmediatamente posterior.
     # --------------------------------------------------------
-
-    candidate_lines = []
 
     for line in lines:
 
@@ -1786,6 +1810,50 @@ def extract_numero_cliente_from_anchor(
 # EXTRACTOR RFC
 # ============================================================
 
+def extract_rfc_from_identity_region(
+    words: Sequence[Dict[str, Any]],
+) -> Optional[str]:
+    """
+    Recupera un RFC validado cuando ``RFC`` fue leído como ``REC``.
+
+    La búsqueda queda limitada a la columna y bloque de identidad;
+    no alcanza el RFC institucional del pie ni confunde el CURP.
+    """
+
+    expected_x, expected_y = box_center(BOX_RFC)
+    candidates = []
+
+    for word in words:
+        center_x, center_y = word_center(word)
+        if not (
+            BOX_RFC[0] - 15.0 <= center_x <= BOX_RFC[1] + 25.0
+            and BOX_RFC[2] - 55.0 <= center_y <= BOX_RFC[3] + 45.0
+        ):
+            continue
+
+        candidate = re.sub(
+            r"[^A-Z0-9Ñ&]",
+            "",
+            clean_word_text(word.get("text", "")).upper(),
+        )
+        if not RFC_PATTERN.fullmatch(candidate):
+            continue
+
+        candidates.append(
+            (
+                abs(center_x - expected_x) + abs(center_y - expected_y),
+                center_y,
+                candidate,
+            )
+        )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+
+    return candidates[0][2]
+
 
 def extract_rfc_from_anchor(
     lines: Sequence[
@@ -1804,9 +1872,9 @@ def extract_rfc_from_anchor(
     Ejemplo del layout HSBC:
 
         RFC
-        GACJ700226PP2
+        XAXX010101000
         CURP
-        GACJ700226HVZRRN04
+        XAXX010101HDFXXX00
 
     El extractor NO toma toda la zona vertical porque eso
     podría mezclar RFC + CURP.
@@ -1834,7 +1902,7 @@ def extract_rfc_from_anchor(
     )
 
     if anchor is None:
-        return None
+        return extract_rfc_from_identity_region(words)
 
     anchor_y = line_center_y(
         anchor
@@ -1923,13 +1991,13 @@ def extract_rfc_from_anchor(
         #
         # Así:
         #
-        #     GACJ700226PP2
+        #     XAXX010101000
         #
         # es válido.
         #
         # Pero:
         #
-        #     GACJ700226PP2CURP
+        #     XAXX010101000CURP
         #
         # no lo sería.
         # ----------------------------------------------------
@@ -2049,7 +2117,7 @@ def extract_rfc_from_anchor(
 
             return direct_candidates[0][2]
 
-    return None
+    return extract_rfc_from_identity_region(words)
 
 
 
@@ -2512,6 +2580,25 @@ def extract_producto_principal(
         return "Ahorro Flexible HSBC"
 
     # --------------------------------------------------------
+    # Layout NOMINA FLEXIBLE HSBC.
+    # --------------------------------------------------------
+
+    nomina_candidates = [
+        line
+        for line in lines
+        if (
+            "NOMINA" in normalized_line_text(line)
+            and "FLEXIBLE" in normalized_line_text(line)
+        )
+    ]
+
+    if nomina_candidates:
+        # Se devuelve el nombre canónico aun si el logotipo fue leído
+        # como HSEC/HSC; NOMINA + FLEXIBLE identifica el producto y no
+        # una etiqueta genérica del estado de cuenta.
+        return "Nomina Flexible HSBC"
+
+    # --------------------------------------------------------
     # Fallback espacial.
     # --------------------------------------------------------
 
@@ -2589,6 +2676,12 @@ def is_probable_person_name(
         )
     ):
 
+        return False
+
+    name_tokens = set(re.findall(r"[A-ZÁÉÍÓÚÜÑ]+", normalized))
+    if name_tokens.intersection(
+        {"COL", "COLONIA", "AV", "AVENIDA", "CALLE", "BOULEVARD"}
+    ):
         return False
 
     if re.search(

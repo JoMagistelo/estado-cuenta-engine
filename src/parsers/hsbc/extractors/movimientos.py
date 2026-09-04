@@ -97,9 +97,9 @@ DAY_PATTERN = re.compile(r"^(?:0?[1-9]|[12]\d|3[01])$")
 # día, por ejemplo ``11.`` o ``14|``. La puntuación es tolerable
 # únicamente en la columna Día y nunca se incorpora al concepto.
 DAY_OCR_PATTERN = re.compile(
-    r"^[\s.,;:|]*"
+    r"^[\s.,;:|_]*"
     r"(?P<day>0?[1-9]|[12]\d|3[01])"
-    r"[\s.,;:|]*$"
+    r"[\s.,;:|_]*$"
 )
 
 # En OCR deteriorado, el día puede quedar unido al primer token
@@ -137,12 +137,35 @@ SPEI_DATE_PATTERN = re.compile(
     r"[/-]"
     r"\d{4}$"
 )
+SPEI_OCR_DATE_PATTERN = re.compile(
+    r"^(?P<day>[A-Z0-9]{1,4})"
+    r"[/-]"
+    r"(?P<month>\d{1,2})"
+    r"[/-]"
+    r"(?P<year>\d{4})$"
+)
 TRAILING_DIGITS_PATTERN = re.compile(r"(\d+)\D*$")
+
+# Se usan únicamente como identidades alternativas de cruce. La
+# Clave de Rastreo publicada y la Referencia / Serial original nunca
+# se reescriben con estas equivalencias.
+TRACKING_OCR_DIGIT_TRANSLATION = str.maketrans(
+    {
+        "B": "8",
+        "C": "0",
+        "D": "0",
+        "I": "1",
+        "L": "1",
+        "O": "0",
+        "Q": "0",
+        "S": "5",
+    }
+)
 
 # La cuenta puede venir fusionada con la primera palabra del
 # concepto en un único token PDF, por ejemplo:
 #
-#     00001180228001000108HACIENDA
+#     000000000000000000CONCEPTO
 #
 # El patrón separa la secuencia numérica inicial del texto que
 # pertenece a la columna Concepto del pago.
@@ -519,8 +542,18 @@ def is_movement_header_line(
     line: Sequence[Dict[str, Any]],
 ) -> bool:
     normalized = normalize_text(line_text(line))
+    tokens = re.findall(r"[A-Z0-9]+", normalized)
 
-    return "DETALLE" in normalized and "MOVIMIENTOS" in normalized
+    # Tesseract puede perder el borde izquierdo de la primera letra:
+    # ``DETALLE`` -> ``ETALLE`` o ``TALLE``. La segunda señal sigue
+    # siendo el término completo MOVIMIENTOS, por lo que la relajación
+    # no convierte textos generales de la carátula en una tabla.
+    has_detail_token = any(
+        token in ("DETALLE", "ETALLE", "TALLE")
+        for token in tokens
+    )
+
+    return has_detail_token and "MOVIMIENTOS" in tokens
 
 
 def is_column_header_line(
@@ -558,6 +591,65 @@ def spei_section_type(
         return "enviados"
     if "RECIBIDOS" in normalized:
         return "recibidos"
+
+    return None
+
+
+def is_generic_spei_period_header_line(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    Detecta el título de una tabla SPEI aunque el OCR pierda su tipo.
+
+    En el layout degradado se observó ``Info ... eriodo`` para
+    Enviados y ``... durante el eriodo`` para Recibidos. Se exige una
+    fecha completa, la raíz de PERIODO y evidencia de título; una
+    línea de periodo del resumen, por sí sola, no activa esta ruta.
+    """
+
+    normalized = normalize_text(line_text(line))
+    if "ERIODO" not in normalized:
+        return False
+    if DATE_PATTERN.search(line_text(line)) is None:
+        return False
+
+    return any(
+        token in normalized
+        for token in ("INFO", "DURANTE", "DURTE", "RECIB", "ENVI")
+    )
+
+
+def infer_spei_section_type(
+    lines: Sequence[Sequence[Dict[str, Any]]],
+) -> Optional[str]:
+    """Clasifica una tabla sin depender de su título OCR."""
+
+    tracking_parts = []
+    participant_parts = []
+
+    for line in lines:
+        tracking_parts.append(
+            text_from_spei_line_column(line, "clave_rastreo")
+        )
+        participant_parts.append(
+            text_from_spei_line_column(line, "participante")
+        )
+
+    tracking = compact_tracking_key(" ".join(tracking_parts)) or ""
+    participants = normalize_text(" ".join(participant_parts))
+
+    has_sent_key = "HSBC" in tracking or "HSB" in tracking
+    has_received_key = "MBAN" in tracking
+
+    if has_sent_key and not has_received_key:
+        return "enviados"
+    if has_received_key and not has_sent_key:
+        return "recibidos"
+
+    if "*" in participants and "TRANSFERENCIA" in normalize_text(
+        " ".join(line_text(line) for line in lines)
+    ):
+        return "enviados"
 
     return None
 
@@ -852,7 +944,7 @@ def compact_tracking_key(value: Optional[str]) -> Optional[str]:
     Reconstruye la Clave de Rastreo conservando el prefijo.
 
     Ejemplo:
-        HSBC2285 + 77 -> HSBC228577
+        HSBC0123 + 45 -> HSBC012345
     """
 
     if value is None:
@@ -886,13 +978,82 @@ def normalize_tracking_key(value: Optional[str]) -> Optional[str]:
     return compact or None
 
 
+def tracking_key_suffix(value: Optional[str]) -> Optional[str]:
+    """
+    Separa de forma no ambigua los prefijos ``HSB`` y ``HSBC``.
+
+    ``HSBC`` se prueba primero porque contiene por completo a
+    ``HSB``. El valor devuelto conserva todos los ceros y letras del
+    identificador; se usa para generar identidades de cruce, no para
+    modificar el campo publicado.
+    """
+
+    compact = compact_tracking_key(value)
+    if not compact:
+        return None
+
+    if compact.startswith("HSBC"):
+        return compact[4:] or None
+    if compact.startswith("HSB"):
+        return compact[3:] or None
+
+    return compact
+
+
+def normalize_numeric_tracking_identity(
+    value: Optional[str],
+) -> Optional[str]:
+    """Normaliza relleno izquierdo sin alterar el valor original."""
+
+    if value is None:
+        return None
+
+    digits = re.sub(r"\D", "", value)
+    if len(digits) < 4:
+        return None
+
+    normalized = digits.lstrip("0")
+
+    return normalized or "0"
+
+
+def tracking_numeric_identities(
+    value: Optional[str],
+) -> Tuple[str, ...]:
+    """
+    Crea identidades numéricas tolerantes para el cruce SPEI.
+
+    Además de extraer sólo los dígitos, genera una segunda candidata
+    reemplazando confusiones OCR frecuentes. Así, por ejemplo,
+    ``HSB00C4201`` puede cruzarse con ``004201`` o ``4201`` sin
+    cambiar ninguno de los dos valores almacenados.
+    """
+
+    suffix = tracking_key_suffix(value)
+    if not suffix:
+        return ()
+
+    candidates = (
+        suffix,
+        suffix.translate(TRACKING_OCR_DIGIT_TRANSLATION),
+    )
+    identities: List[str] = []
+
+    for candidate in candidates:
+        identity = normalize_numeric_tracking_identity(candidate)
+        if identity and identity not in identities:
+            identities.append(identity)
+
+    return tuple(identities)
+
+
 def normalize_spei_reference(value: Optional[str]) -> Optional[str]:
     """
     Reconstruye el Número de Referencia conservando sus ceros.
 
     Ejemplo:
-        000000000000 + 00110014
-        -> 00000000000000110014
+        000000000000 + 00012345
+        -> 00000000000000012345
     """
 
     if value is None:
@@ -964,9 +1125,9 @@ def extract_received_reference_from_concept(
     cruzar SPEI recibidos. Referencia / Serial pertenece a otra
     columna y no interviene en esta estrategia.
 
-    Caso observado:
-        HACIENDA TE DEVUELVE DC252600004 0110014
-        -> 0110014
+    Ejemplo sintético:
+        ABONO SPEI DEMO DC000000000 00012345
+        -> 00012345
     """
 
     if not concept:
@@ -990,8 +1151,8 @@ def extract_movement_tracking_key(
     completo permanece conservado en Movimiento.referencia si no
     existe coincidencia SPEI.
 
-    Ejemplo:
-        08045209\n6116115 -> 6116115
+    Ejemplo sintético:
+        00000001\n7654321 -> 7654321
     """
 
     if movement_reference is None:
@@ -1012,9 +1173,126 @@ def extract_movement_tracking_key(
     return normalize_tracking_key(values[-1])
 
 
+def extract_movement_tracking_keys(
+    movement_reference: Optional[str],
+) -> Tuple[str, ...]:
+    """
+    Devuelve todas las candidatas útiles sin alterar la referencia.
+
+    En OCR inclinado los dos renglones de Referencia / Serial pueden
+    llegar invertidos. Cuando hay más de un renglón se descarta el
+    componente serial de ocho dígitos y se prueban los demás; en el
+    layout normal el resultado continúa siendo únicamente el renglón
+    inferior histórico. La regla usa la estructura del campo y no un
+    prefijo observado en una cuenta específica.
+    """
+
+    if movement_reference is None:
+        return ()
+
+    raw_values = [
+        part.strip()
+        for part in re.split(r"[\r\n]+", str(movement_reference))
+        if part.strip()
+    ]
+    candidates: List[str] = []
+
+    has_multiple_components = len(raw_values) > 1
+
+    for raw_value in reversed(raw_values):
+        compact = compact_tracking_key(raw_value)
+        if not compact:
+            continue
+        if has_multiple_components and re.fullmatch(r"\d{8}", compact):
+            continue
+
+        normalized = normalize_tracking_key(compact)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+
+    if candidates:
+        return tuple(candidates)
+
+    historical = extract_movement_tracking_key(movement_reference)
+
+    return (historical,) if historical else ()
+
+
 # ============================================================
 # EXTRACTORES DE CAMPOS SPEI
 # ============================================================
+
+def normalize_spei_date_token(value: Any) -> Optional[str]:
+    """Corrige únicamente confusiones OCR inequívocas del día."""
+
+    token = normalize_text(value).replace(" ", "")
+    token = re.sub(r"[^A-Z0-9/-]", "", token)
+    match = SPEI_OCR_DATE_PATTERN.fullmatch(token)
+    if match is None:
+        return None
+
+    raw_day = match.group("day")
+
+    # Confusiones frecuentes limitadas a la celda de fecha. Las
+    # formas 80/81 y B0/B1 corresponden a 30/31 por la silueta del
+    # glifo 3; D/O/Q al inicio corresponden a un cero inicial.
+    if (
+        len(raw_day) == 2
+        and raw_day[0] in ("8", "B")
+        and raw_day[1] in ("0", "1")
+    ):
+        day_digits = "3" + raw_day[1]
+    else:
+        translated = raw_day.translate(
+            str.maketrans(
+                {
+                    "D": "0",
+                    "O": "0",
+                    "P": "0",
+                    "Q": "0",
+                    "I": "1",
+                    "L": "1",
+                    "Z": "2",
+                }
+            )
+        )
+        day_digits = re.sub(r"\D", "", translated)
+
+        if raw_day.isalpha() and len(day_digits) == 1:
+            return None
+
+    if not day_digits:
+        return None
+
+    # Una marca OCR puede quedar pegada a la izquierda, por ejemplo
+    # ``123/12/2024`` para ``23/12/2024``. Sólo se descarta el prefijo
+    # si los dos últimos dígitos forman un día calendario válido.
+    day_candidates = [day_digits]
+    if len(day_digits) > 2:
+        day_candidates.append(day_digits[-2:])
+
+    day_value: Optional[int] = None
+
+    for candidate in day_candidates:
+        value_int = int(candidate)
+        if DAY_MIN <= value_int <= DAY_MAX:
+            day_value = value_int
+            break
+
+    if day_value is None:
+        return None
+
+    try:
+        parsed = date(
+            int(match.group("year")),
+            int(match.group("month")),
+            day_value,
+        )
+    except ValueError:
+        return None
+
+    return parsed.strftime("%d/%m/%Y")
+
 
 def extract_spei_date(row: SpeiRow) -> Optional[str]:
     value = text_from_spei_box(
@@ -1025,9 +1303,36 @@ def extract_spei_date(row: SpeiRow) -> Optional[str]:
     if not value:
         return None
 
-    match = DATE_PATTERN.search(value)
+    tokens = value.split()
 
-    return match.group(0) if match else None
+    # Primero se prueba la celda completa. Esto recompone fechas que
+    # el OCR separó dentro de la misma columna, por ejemplo
+    # ``L1`` + ``7/12/2024`` o ``P2/1`` + ``2/2024``.
+    normalized_compact = normalize_spei_date_token(
+        "".join(tokens)
+    )
+    if normalized_compact:
+        return normalized_compact
+
+    for token in tokens:
+        normalized = normalize_spei_date_token(token)
+        if normalized:
+            return normalized
+
+    # El día también puede dividirse en dos words: ``L1`` +
+    # ``7/12/2024``. Se reconstruye sólo dentro de la columna Fecha.
+    for first, second in zip(tokens, tokens[1:]):
+        first_digits = re.sub(r"\D", "", first)
+        if not first_digits:
+            continue
+
+        normalized = normalize_spei_date_token(
+            first_digits[-1] + second
+        )
+        if normalized:
+            return normalized
+
+    return None
 
 
 def extract_spei_time(row: SpeiRow) -> Optional[str]:
@@ -1047,42 +1352,71 @@ def extract_spei_time(row: SpeiRow) -> Optional[str]:
 
 
 def parse_spei_amount(row: SpeiRow) -> float:
-    words = words_from_spei_row_in_box(
-        row,
-        BOX_SPEI_MONTO,
-        padding_x=8.0,
+    candidates: List[Tuple[Tuple[int, int, int], float]] = []
+
+    for line in row.lines:
+        for word in line:
+            # Propiedad exclusiva de columna: un fragmento numérico
+            # de Clave de Rastreo situado junto al borde (p. ej. 55)
+            # no se concatena al importe 1,800.00.
+            if primary_spei_column(word) != "monto":
+                continue
+
+            text = clean_word_text(word.get("text", ""))
+            normalized = (
+                text.replace(",", "").replace("$", "").strip()
+            )
+            if not re.fullmatch(r"\d+(?:\.\d{1,2})?", normalized):
+                continue
+
+            try:
+                parsed = float(normalized)
+            except ValueError:
+                continue
+
+            score = (
+                1 if "." in normalized else 0,
+                1 if "," in text else 0,
+                len(re.sub(r"\D", "", normalized)),
+            )
+            candidates.append((score, parsed))
+
+    if not candidates:
+        return 0.0
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    return candidates[0][1]
+
+
+def extract_received_date_from_tracking_key(
+    value: Optional[str],
+) -> Optional[str]:
+    """Lee YYMMDD del segmento estable de una clave MBAN recibida."""
+
+    compact = compact_tracking_key(value)
+    if not compact or not compact.startswith("MBAN"):
+        return None
+
+    match = re.search(
+        r"^MBAN[O0I1]{3,5}(?P<date>\d{6})",
+        compact,
     )
-    if not words:
-        return 0.0
+    if match is None:
+        return None
 
-    parts = []
-
-    for word in words:
-        text = clean_word_text(word.get("text", ""))
-        if not text:
-            continue
-
-        normalized = (
-            text
-            .replace(",", "")
-            .replace("$", "")
-            .strip()
-        )
-
-        if re.fullmatch(r"\d+(?:\.\d{1,2})?", normalized):
-            parts.append(normalized)
-
-    if not parts:
-        return 0.0
-
-    value = "".join(parts)
-    if not re.fullmatch(r"\d+(?:\.\d{1,2})?", value):
-        return 0.0
+    raw_date = match.group("date")
 
     try:
-        return float(value)
+        parsed = date(
+            2000 + int(raw_date[:2]),
+            int(raw_date[2:4]),
+            int(raw_date[4:6]),
+        )
     except ValueError:
-        return 0.0
+        return None
+
+    return parsed.strftime("%d/%m/%Y")
 
 
 def populate_spei_row(row: SpeiRow) -> None:
@@ -1164,14 +1498,97 @@ def populate_spei_row(row: SpeiRow) -> None:
     )
     row.numero_referencia = normalize_spei_reference(raw_reference)
 
+    if row.tipo == "recibidos":
+        tracking_date = extract_received_date_from_tracking_key(
+            row.clave_rastreo
+        )
+        if tracking_date:
+            row.fecha = tracking_date
+
 
 # ============================================================
 # RECONSTRUCCIÓN DE FILAS SPEI
 # ============================================================
 
+def text_from_spei_line_column(
+    line: Sequence[Dict[str, Any]],
+    column_name: str,
+) -> str:
+    selected = [
+        word
+        for word in line
+        if primary_spei_column(word) == column_name
+    ]
+    selected.sort(key=lambda word: safe_float(word.get("x0", 0.0)))
+
+    return " ".join(
+        clean_word_text(word.get("text", ""))
+        for word in selected
+        if clean_word_text(word.get("text", ""))
+    ).strip()
+
+
+def line_has_spei_row_structure(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    Reconoce una fila aunque Tesseract dañe u omita su fecha.
+
+    La combinación de hora, monto, clave y número de referencia es
+    suficientemente específica para separar operaciones consecutivas
+    sin interpretar como fila una línea de continuación.
+    """
+
+    time_text = text_from_spei_line_column(line, "hora")
+    amount_text = text_from_spei_line_column(line, "monto")
+    tracking_text = text_from_spei_line_column(line, "clave_rastreo")
+    reference_text = text_from_spei_line_column(
+        line,
+        "numero_referencia",
+    )
+    account_text = text_from_spei_line_column(line, "cuenta")
+    participant_text = text_from_spei_line_column(
+        line,
+        "participante",
+    )
+
+    has_time = any(
+        TIME_PATTERN.fullmatch(token)
+        for token in time_text.split()
+    )
+    has_amount = any(
+        MONEY_PATTERN.fullmatch(token)
+        for token in amount_text.split()
+        if token != "$"
+    )
+    tracking_key = compact_tracking_key(tracking_text)
+    reference_digits = re.sub(r"\D", "", reference_text)
+
+    has_complete_tracking = (
+        tracking_key is not None
+        and len(tracking_key) >= 4
+        and bool(re.search(r"\d", tracking_key))
+    )
+    has_strong_row_without_tracking = (
+        len(re.sub(r"\D", "", account_text)) >= 10
+        and bool(participant_text.strip())
+    )
+
+    return (
+        has_time
+        and has_amount
+        and (has_complete_tracking or has_strong_row_without_tracking)
+        and len(reference_digits) >= 4
+    )
+
+
 def line_starts_spei_row(
     line: Sequence[Dict[str, Any]],
 ) -> bool:
+    date_text = text_from_spei_line_column(line, "fecha")
+    if normalize_spei_date_token(date_text):
+        return True
+
     for word in line:
         if not word_belongs_to_spei_column(
             word,
@@ -1181,10 +1598,10 @@ def line_starts_spei_row(
             continue
 
         text = clean_word_text(word.get("text", ""))
-        if SPEI_DATE_PATTERN.fullmatch(text):
+        if normalize_spei_date_token(text):
             return True
 
-    return False
+    return line_has_spei_row_structure(line)
 
 
 def is_valid_spei_data_line(
@@ -1202,9 +1619,96 @@ def is_valid_spei_data_line(
     return True
 
 
+def line_has_spei_main_payload(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """Detecta datos principales desplazados antes de su fecha."""
+
+    for word in line:
+        owner = primary_spei_column(word)
+        text = clean_word_text(word.get("text", ""))
+        compact = compact_tracking_key(text) or ""
+        digits = re.sub(r"\D", "", text)
+
+        if owner == "cuenta" and len(digits) >= 10:
+            return True
+        if owner == "monto" and MONEY_PATTERN.fullmatch(text):
+            return True
+        if owner == "clave_rastreo" and compact.startswith(
+            ("HSB", "MBAN")
+        ):
+            return True
+
+    return False
+
+
+def line_starts_degraded_spei_row(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """Reconoce una primera fila cuya fecha y clave perdieron prefijo."""
+
+    participant = text_from_spei_line_column(line, "participante")
+    account = text_from_spei_line_column(line, "cuenta")
+    concept = text_from_spei_line_column(line, "concepto")
+    amount = text_from_spei_line_column(line, "monto")
+
+    return (
+        "*" in participant
+        and len(re.sub(r"\D", "", account)) >= 10
+        and bool(concept.strip())
+        and any(
+            MONEY_PATTERN.fullmatch(token)
+            for token in amount.split()
+            if token != "$"
+        )
+    )
+
+
+def split_spei_precursor_line(
+    line: Sequence[Dict[str, Any]],
+    has_current_row: bool,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Separa columnas adelantadas de continuaciones de la fila previa.
+
+    En OCR inclinado una misma línea lógica puede contener
+    ``MEXICO Express`` de la fila anterior y cuenta/monto/clave de la
+    siguiente. La propiedad exclusiva de columna permite dividirla.
+    """
+
+    if not has_current_row:
+        return list(line), []
+
+    precursor: List[Dict[str, Any]] = []
+    continuation: List[Dict[str, Any]] = []
+
+    for word in line:
+        owner = primary_spei_column(word)
+        normalized = normalize_text(word.get("text", ""))
+
+        belongs_to_next = owner in (
+            "cuenta",
+            "concepto",
+            "monto",
+            "clave_rastreo",
+            "numero_referencia",
+        )
+
+        if owner == "contraparte" and "TRANSFERENCIA" in normalized:
+            belongs_to_next = True
+
+        if belongs_to_next:
+            precursor.append(word)
+        else:
+            continuation.append(word)
+
+    return precursor, continuation
+
+
 def split_page_into_spei_rows(
     lines: Sequence[Sequence[Dict[str, Any]]],
     section_type: str,
+    recover_precursors: bool = False,
 ) -> List[SpeiRow]:
     """
     Reconstruye operaciones SPEI de una o varias líneas.
@@ -1217,8 +1721,9 @@ def split_page_into_spei_rows(
 
     rows: List[SpeiRow] = []
     current_row: Optional[SpeiRow] = None
+    pending_precursors: List[List[Dict[str, Any]]] = []
 
-    for line in lines:
+    for index, line in enumerate(lines):
         if not line:
             continue
 
@@ -1232,7 +1737,11 @@ def split_page_into_spei_rows(
         if is_spei_column_header_line(line):
             continue
 
-        if line_starts_spei_row(line):
+        starts_row = line_starts_spei_row(line) or (
+            recover_precursors and line_starts_degraded_spei_row(line)
+        )
+
+        if starts_row:
             if current_row is not None:
                 populate_spei_row(current_row)
                 rows.append(current_row)
@@ -1240,9 +1749,40 @@ def split_page_into_spei_rows(
             current_row = SpeiRow(
                 tipo=section_type,
                 page=safe_page(line[0]),
-                lines=[list(line)],
+                lines=[*pending_precursors, list(line)],
             )
+            pending_precursors = []
             continue
+
+        if recover_precursors and line_has_spei_main_payload(line):
+            next_line = next(
+                (
+                    candidate
+                    for candidate in lines[index + 1:]
+                    if candidate
+                ),
+                None,
+            )
+
+            if (
+                next_line is not None
+                and safe_page(next_line[0]) == safe_page(line[0])
+                and line_starts_spei_row(next_line)
+                and 0.0
+                <= line_center_y(next_line) - line_center_y(line)
+                <= 13.0
+            ):
+                precursor, continuation = split_spei_precursor_line(
+                    line,
+                    current_row is not None,
+                )
+
+                if current_row is not None and continuation:
+                    current_row.lines.append(continuation)
+
+                if precursor:
+                    pending_precursors.append(precursor)
+                continue
 
         if current_row is None:
             continue
@@ -1293,6 +1833,14 @@ def extract_spei_rows(
             current_lines = []
             continue
 
+        if is_generic_spei_period_header_line(line):
+            if current_type is not None and current_lines:
+                sections.append((current_type, current_lines))
+
+            current_type = "unknown"
+            current_lines = []
+            continue
+
         if current_type is None:
             continue
 
@@ -1312,10 +1860,19 @@ def extract_spei_rows(
     rows: List[SpeiRow] = []
 
     for section_type, section_lines in sections:
+        recover_precursors = section_type == "unknown"
+
+        if section_type == "unknown":
+            inferred_type = infer_spei_section_type(section_lines)
+            if inferred_type is None:
+                continue
+            section_type = inferred_type
+
         rows.extend(
             split_page_into_spei_rows(
                 section_lines,
                 section_type,
+                recover_precursors=recover_precursors,
             )
         )
 
@@ -1396,6 +1953,92 @@ def parse_day_token(value: Any) -> Optional[int]:
 def extract_day_from_line(
     line: Sequence[Dict[str, Any]],
 ) -> Optional[int]:
+    day_words = sorted(
+        (
+            word
+            for word in line
+            if word_inside_box(
+                word,
+                BOX_DAY,
+                padding_x=7.0,
+                padding_y=3.0,
+            )
+            and safe_float(word.get("x1", 0.0)) <= 65.0
+        ),
+        key=lambda word: safe_float(word.get("x0", 0.0)),
+    )
+
+    # En páginas OCR degradadas HSBC puede entregar dos capas para
+    # el día: una word ancha y corrupta y, encima, los dos dígitos
+    # correctos por separado (``12`` + ``1`` + ``3``). Los dos
+    # fragmentos unitarios situados más a la derecha son la lectura
+    # más precisa de esa celda.
+    single_digit_fragments: List[str] = []
+
+    for word in day_words:
+        raw = clean_word_text(word.get("text", ""))
+        digits = re.sub(r"\D", "", raw)
+
+        if len(digits) == 1:
+            single_digit_fragments.append(digits)
+
+    if len(single_digit_fragments) >= 2:
+        composite = int("".join(single_digit_fragments[-2:]))
+        if DAY_MIN <= composite <= DAY_MAX:
+            return composite
+
+    # Otra variante observada comprime el primer dígito en una word
+    # diminuta como ``21``/``2!`` y conserva el segundo por separado.
+    # Sólo se acepta cuando ambas cajas son contiguas en la columna
+    # Día; no se toman números del concepto.
+    if len(day_words) >= 2:
+        for first, second in zip(day_words, day_words[1:]):
+            first_digits = re.sub(
+                r"\D",
+                "",
+                clean_word_text(first.get("text", "")),
+            )
+            second_digits = re.sub(
+                r"\D",
+                "",
+                clean_word_text(second.get("text", "")),
+            )
+            gap = (
+                safe_float(second.get("x0", 0.0))
+                - safe_float(first.get("x1", 0.0))
+            )
+            first_width = (
+                safe_float(first.get("x1", 0.0))
+                - safe_float(first.get("x0", 0.0))
+            )
+
+            if (
+                len(first_digits) == 2
+                and len(second_digits) == 1
+                and first_width <= 6.0
+                and gap <= 2.5
+            ):
+                composite = int(first_digits[0] + second_digits)
+                if DAY_MIN <= composite <= DAY_MAX:
+                    return composite
+
+    # ``E...7`` es una confusión localizada del glifo 2 en la celda
+    # Día. Se exige un segundo dígito y estructura financiera real
+    # para que esta equivalencia no se use sobre texto ordinario.
+    for word in day_words:
+        raw = normalize_text(word.get("text", ""))
+        translated = raw.replace("E", "2")
+        digits = re.sub(r"\D", "", translated)
+
+        if (
+            raw.startswith("E")
+            and len(digits) == 2
+            and line_has_transaction_amount(line)
+        ):
+            candidate = int(digits)
+            if DAY_MIN <= candidate <= DAY_MAX:
+                return candidate
+
     day_word = find_day_word_in_line(line)
     if day_word is None:
         return None
@@ -1702,6 +2345,25 @@ def line_starts_movement(
     )
 
 
+def line_confirms_movement_table(
+    line: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    Permite iniciar sin encabezado sólo ante una fila financiera real.
+
+    Esto evita que el número de una dirección en la carátula active la
+    tabla y que una línea posterior de RFC cierre la página antes del
+    primer movimiento.
+    """
+
+    return (
+        line_starts_movement(line)
+        and line_has_numeric_reference(line)
+        and line_has_transaction_amount(line)
+        and line_has_balance_amount(line)
+    )
+
+
 def is_footer_like_line(
     line: Sequence[Dict[str, Any]],
 ) -> bool:
@@ -1820,12 +2482,15 @@ def split_page_into_movement_rows(
 
         if is_column_header_line(line):
             table_started = True
+            movement_header_confirmed = True
             continue
 
         if is_footer_like_line(line):
-            flush_current_row()
-            flush_pending_orphan()
-            break
+            if table_started:
+                flush_current_row()
+                flush_pending_orphan()
+                break
+            continue
 
         if table_started and (
             is_table_breaker_line(line)
@@ -1836,6 +2501,15 @@ def split_page_into_movement_rows(
             break
 
         if line_starts_movement(line):
+            if (
+                not table_started
+                and not line_confirms_movement_table(line)
+            ):
+                continue
+
+            if not table_started:
+                movement_header_confirmed = True
+
             if pending_orphan_lines:
                 if (
                     line_has_transaction_amount(line)
@@ -2001,6 +2675,14 @@ def extract_concepto(row: MovementRow) -> str:
 
     for line in ordered_lines:
         day_word = find_day_word_in_line(line)
+        day_zone_words = {
+            id(word)
+            for word in line
+            if (
+                safe_float(word.get("x0", 0.0)) >= BOX_DAY[0] - 7.0
+                and safe_float(word.get("x1", 0.0)) <= 65.0
+            )
+        }
 
         for word in sorted(
             line,
@@ -2020,6 +2702,17 @@ def extract_concepto(row: MovementRow) -> str:
                 word.get("text", "")
             )
             if not text:
+                continue
+
+            if id(word) in day_zone_words:
+                if word is day_word:
+                    _, inline_concept = (
+                        split_day_and_inline_concept(text)
+                    )
+
+                    if inline_concept:
+                        parts.append(inline_concept)
+
                 continue
 
             if day_word is not None and word is day_word:
@@ -2557,6 +3250,45 @@ def movement_accounting_delta(
     return float(abono or 0.0) - float(cargo or 0.0)
 
 
+def extract_statement_opening_balance(
+    words: Sequence[Dict[str, Any]],
+) -> Optional[float]:
+    """
+    Recupera el saldo inicial como frontera contable del primer
+    movimiento.
+
+    Se exige el ancla completa SALDO + INICIAL y un importe en la
+    columna derecha. La función no depende de una página o altura
+    fija y sólo se usa para comprobar filas parciales del detalle.
+    """
+
+    candidates: List[Tuple[int, float, float]] = []
+
+    for line in group_words_into_lines(words):
+        normalized = normalize_text(line_text(line))
+        if "SALDO" not in normalized or "INICIAL" not in normalized:
+            continue
+
+        value = parse_money_from_primary_line(line, "saldo")
+        if value is None:
+            continue
+
+        candidates.append(
+            (
+                safe_page(line[0]),
+                line_center_y(line),
+                value,
+            )
+        )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+
+    return candidates[0][2]
+
+
 def malformed_money_token_matches_expected(
     row: MovementRow,
     column_name: str,
@@ -2709,6 +3441,125 @@ def balance_is_obviously_truncated(
     return ratio < 0.20 or ratio > 5.0
 
 
+def repair_partial_movement_financials(
+    movements: Sequence[Movimiento],
+    rows: Sequence[MovementRow],
+    opening_balance: Optional[float],
+) -> None:
+    """
+    Completa únicamente filas marcadas como recuperación parcial.
+
+    Una corrección requiere dos fronteras independientes: el saldo
+    anterior (o el saldo inicial impreso) y el saldo del movimiento
+    siguiente junto con su importe. Esto permite recuperar la fila
+    inicial aun cuando Tesseract haya omitido cargo y saldo, y una
+    fila interna cuyos importes hayan perdido varios dígitos.
+    """
+
+    limit = min(len(movements), len(rows))
+
+    for index in range(limit):
+        row = rows[index]
+        if not row.partial_recovery:
+            continue
+
+        movement = movements[index]
+        previous_balance: Optional[float] = None
+
+        if index == 0:
+            previous_balance = opening_balance
+        else:
+            previous = movements[index - 1].saldo_operacion
+            if previous is not None:
+                try:
+                    previous_balance = float(previous)
+                except (TypeError, ValueError):
+                    pass
+
+        expected_current: Optional[float] = None
+
+        if index + 1 < limit:
+            following = movements[index + 1]
+            following_delta = movement_accounting_delta(following)
+
+            if (
+                following.saldo_operacion is not None
+                and following_delta is not None
+            ):
+                try:
+                    expected_current = round(
+                        float(following.saldo_operacion)
+                        - following_delta,
+                        2,
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+        observed_balance: Optional[float] = None
+        if movement.saldo_operacion is not None:
+            try:
+                observed_balance = float(movement.saldo_operacion)
+            except (TypeError, ValueError):
+                pass
+
+        if expected_current is not None and (
+            observed_balance is None
+            or balance_is_obviously_truncated(
+                observed_balance,
+                expected_current,
+            )
+        ):
+            movement.saldo_operacion = expected_current
+            observed_balance = expected_current
+
+        if previous_balance is None or observed_balance is None:
+            continue
+
+        expected_delta = round(
+            observed_balance - previous_balance,
+            2,
+        )
+        if abs(expected_delta) < 0.01:
+            continue
+
+        observed_delta = movement_accounting_delta(movement)
+        should_replace_amount = observed_delta is None
+
+        if observed_delta is not None and expected_current is not None:
+            same_direction = observed_delta * expected_delta > 0.0
+            should_replace_amount = (
+                same_direction
+                and abs(observed_delta) < abs(expected_delta) * 0.20
+            )
+
+        if not should_replace_amount:
+            continue
+
+        if expected_delta < 0.0:
+            movement.cargo = abs(expected_delta)
+            movement.abono = 0.0
+        else:
+            movement.cargo = 0.0
+            movement.abono = expected_delta
+
+
+def repair_missing_operation_dates(
+    movements: Sequence[Movimiento],
+) -> None:
+    """Completa una fecha ausente sólo si ambos vecinos coinciden."""
+
+    for index in range(1, len(movements) - 1):
+        movement = movements[index]
+        if movement.fecha_operacion:
+            continue
+
+        previous_date = movements[index - 1].fecha_operacion
+        following_date = movements[index + 1].fecha_operacion
+
+        if previous_date and previous_date == following_date:
+            movement.fecha_operacion = previous_date
+
+
 def repair_corrupted_balances(
     movements: Sequence[Movimiento],
 ) -> None:
@@ -2822,6 +3673,7 @@ class SpeiMatchIndexes:
     """
 
     sent_by_tracking_key: Dict[str, List[SpeiRow]]
+    sent_by_numeric_tracking_key: Dict[str, List[SpeiRow]]
     received_by_reference: Dict[str, List[SpeiRow]]
 
 
@@ -2829,6 +3681,7 @@ def build_spei_match_indexes(
     spei_rows: Sequence[SpeiRow],
 ) -> SpeiMatchIndexes:
     sent_by_tracking_key: Dict[str, List[SpeiRow]] = {}
+    sent_by_numeric_tracking_key: Dict[str, List[SpeiRow]] = {}
     received_by_reference: Dict[str, List[SpeiRow]] = {}
 
     for row in spei_rows:
@@ -2839,6 +3692,14 @@ def build_spei_match_indexes(
             if tracking_key:
                 sent_by_tracking_key.setdefault(
                     tracking_key,
+                    [],
+                ).append(row)
+
+            for numeric_key in tracking_numeric_identities(
+                row.clave_rastreo
+            ):
+                sent_by_numeric_tracking_key.setdefault(
+                    numeric_key,
                     [],
                 ).append(row)
             continue
@@ -2864,6 +3725,9 @@ def build_spei_match_indexes(
 
     return SpeiMatchIndexes(
         sent_by_tracking_key=sent_by_tracking_key,
+        sent_by_numeric_tracking_key=(
+            sent_by_numeric_tracking_key
+        ),
         received_by_reference=received_by_reference,
     )
 
@@ -2879,23 +3743,127 @@ def movement_amounts(movement: Movimiento) -> List[float]:
     return amounts
 
 
+def normalized_concept_identity(value: Optional[str]) -> str:
+    if not value:
+        return ""
+
+    normalized = normalize_text(value)
+    normalized = re.sub(r"\b\d{4,}\b\s*$", "", normalized)
+
+    return re.sub(r"[^A-Z0-9]", "", normalized)
+
+
+def meaningful_concept_tokens(value: Optional[str]) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Z0-9]+", normalize_text(value))
+        if (
+            (len(token) >= 2 or token.isdigit())
+            and (not token.isdigit() or len(token) <= 2)
+            and token not in {"CGO", "RRA", "ARRA"}
+        )
+    }
+
+
+def spei_concept_match_score(
+    movement: Movimiento,
+    candidate: SpeiRow,
+) -> int:
+    movement_concept = normalized_concept_identity(movement.concepto)
+    spei_concept = normalized_concept_identity(candidate.concepto)
+
+    if not movement_concept or not spei_concept:
+        return 0
+    if movement_concept == spei_concept:
+        return 3
+    if (
+        spei_concept in movement_concept
+        or movement_concept in spei_concept
+    ):
+        return 2
+
+    movement_tokens = meaningful_concept_tokens(movement.concepto)
+    spei_tokens = meaningful_concept_tokens(candidate.concepto)
+    if movement_tokens and spei_tokens:
+        if spei_tokens.issubset(movement_tokens):
+            return 2
+
+        overlap = len(movement_tokens.intersection(spei_tokens))
+        if overlap / max(len(movement_tokens), len(spei_tokens)) >= 0.6:
+            return 2
+
+    return 0
+
+
 def choose_spei_candidate(
     movement: Movimiento,
     candidates: Sequence[SpeiRow],
 ) -> Optional[SpeiRow]:
     if not candidates:
         return None
-    if len(candidates) == 1:
-        return candidates[0]
 
     amounts = movement_amounts(movement)
 
-    for candidate in candidates:
+    amount_matches = [
+        candidate
+        for candidate in candidates
+        if (
+            candidate.monto <= 0.0
+            or not amounts
+            or any(
+                abs(candidate.monto - amount) < 0.01
+                for amount in amounts
+            )
+        )
+    ]
+
+    # Una clave correcta con importe incompatible es evidencia de
+    # que el OCR desplazó Referencia / Serial a la fila vecina. No se
+    # enriquece esa fila; la reconciliación bidireccional posterior
+    # podrá resolver ambas por monto, sentido y fecha.
+    if not amount_matches:
+        return None
+    if len(amount_matches) == 1:
+        return amount_matches[0]
+
+    concept_scores = [
+        (spei_concept_match_score(movement, candidate), candidate)
+        for candidate in amount_matches
+    ]
+    best_concept_score = max(score for score, _ in concept_scores)
+
+    if best_concept_score > 0:
+        best_concept_candidates = [
+            candidate
+            for score, candidate in concept_scores
+            if score == best_concept_score
+        ]
+        if len(best_concept_candidates) == 1:
+            return best_concept_candidates[0]
+
+    for candidate in amount_matches:
         for amount in amounts:
             if abs(candidate.monto - amount) < 0.01:
                 return candidate
 
-    return candidates[0]
+    return amount_matches[0]
+
+
+def unique_spei_rows(
+    rows: Sequence[SpeiRow],
+) -> List[SpeiRow]:
+    result: List[SpeiRow] = []
+    seen: set[int] = set()
+
+    for row in rows:
+        identity = id(row)
+        if identity in seen:
+            continue
+
+        seen.add(identity)
+        result.append(row)
+
+    return result
 
 
 # ============================================================
@@ -2918,13 +3886,42 @@ def find_spei_sent_match(
         HSB61161 + 15
     """
 
-    key = extract_movement_tracking_key(movement.referencia)
-    if not key:
+    keys = extract_movement_tracking_keys(movement.referencia)
+    if not keys:
         return None
 
-    candidates = indexes.sent_by_tracking_key.get(key, [])
+    exact_candidates: List[SpeiRow] = []
 
-    return choose_spei_candidate(movement, candidates)
+    for key in keys:
+        exact_candidates.extend(
+            indexes.sent_by_tracking_key.get(key, [])
+        )
+
+    candidates = unique_spei_rows(exact_candidates)
+
+    if candidates:
+        exact_match = choose_spei_candidate(movement, candidates)
+        if exact_match is not None:
+            return exact_match
+
+    # Respaldo para variantes HSB/HSBC, relleno con ceros a la
+    # izquierda y letras OCR intercaladas. El campo original no se
+    # modifica; estas identidades existen únicamente para el cruce.
+    numeric_candidates: List[SpeiRow] = []
+
+    for key in keys:
+        for numeric_key in tracking_numeric_identities(key):
+            numeric_candidates.extend(
+                indexes.sent_by_numeric_tracking_key.get(
+                    numeric_key,
+                    [],
+                )
+            )
+
+    return choose_spei_candidate(
+        movement,
+        unique_spei_rows(numeric_candidates),
+    )
 
 
 # ============================================================
@@ -2946,13 +3943,13 @@ def find_spei_received_match(
 
     Caso observado:
         Concepto del movimiento:
-            ... DC252600004 0110014
+            ... DC000000000 00012345
 
         Número de Referencia SPEI:
-            000000000000 + 00110014
+            000000000000 + 00012345
 
         Identidad común:
-            110014
+            12345
 
     Referencia / Serial del movimiento no interviene en este cruce.
     """
@@ -3016,6 +4013,316 @@ def find_spei_match(
     return sent_match
 
 
+def parse_model_date(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+
+    try:
+        day_value, month_value, year_value = value.split("/")
+        return date(
+            int(year_value),
+            int(month_value),
+            int(day_value),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def infer_spei_date_from_reference(
+    movement: Movimiento,
+    spei_row: SpeiRow,
+) -> Optional[str]:
+    """
+    Recupera DDMMYY del extremo derecho sólo con validación cruzada.
+
+    El Número de Referencia no siempre codifica la fecha, por eso el
+    respaldo se acepta exclusivamente cuando la fecha resultante
+    queda a no más de dos días de la operación ya extraída.
+    """
+
+    reference = normalize_spei_reference(spei_row.numero_referencia)
+    movement_date = parse_model_date(movement.fecha_operacion)
+    if not reference or len(reference) < 6 or movement_date is None:
+        return None
+
+    suffix = reference[-6:]
+
+    try:
+        candidate = date(
+            2000 + int(suffix[4:6]),
+            int(suffix[2:4]),
+            int(suffix[:2]),
+        )
+    except ValueError:
+        return None
+
+    if abs((movement_date - candidate).days) > 2:
+        return None
+
+    return candidate.strftime("%d/%m/%Y")
+
+
+def reconcile_spei_date_with_movement(
+    movement: Movimiento,
+    spei_row: SpeiRow,
+) -> Optional[str]:
+    """Recupera la decena del día sólo cuando el OCR la omitió."""
+
+    parsed_spei_date = parse_model_date(spei_row.fecha)
+    movement_date = parse_model_date(movement.fecha_operacion)
+    if parsed_spei_date is None or movement_date is None:
+        return spei_row.fecha
+    if abs((movement_date - parsed_spei_date).days) <= 2:
+        return spei_row.fecha
+    if spei_concept_match_score(movement, spei_row) < 2:
+        return spei_row.fecha
+
+    raw_date = text_from_spei_box(
+        spei_row,
+        BOX_SPEI_FECHA,
+        padding_x=5.0,
+    ) or ""
+    raw_match = re.search(r"(?<!\d)(\d)[/-]\d{1,2}[/-]\d{4}", raw_date)
+    if raw_match is None:
+        return spei_row.fecha
+
+    if (
+        movement_date.month != parsed_spei_date.month
+        or movement_date.year != parsed_spei_date.year
+    ):
+        return spei_row.fecha
+
+    base_day = int(raw_match.group(1))
+    candidates = []
+
+    for prefix in (10, 20):
+        try:
+            candidate = date(
+                parsed_spei_date.year,
+                parsed_spei_date.month,
+                base_day + prefix,
+            )
+        except ValueError:
+            continue
+
+        if abs((movement_date - candidate).days) <= 2:
+            candidates.append(candidate)
+
+    if len(candidates) != 1:
+        return spei_row.fecha
+
+    return candidates[0].strftime("%d/%m/%Y")
+
+
+def fallback_spei_pair_is_compatible(
+    movement: Movimiento,
+    spei_row: SpeiRow,
+) -> bool:
+    """
+    Valida un cruce de respaldo por sentido, importe y fecha.
+
+    Se usa sólo en la reconciliación uno-a-uno. Nunca basta el monto
+    aislado: para enviados se exige además evidencia conceptual de
+    transferencia; cuando ambas fechas existen no pueden diferir más
+    de dos días calendario.
+    """
+
+    amounts = movement_amounts(movement)
+    if spei_row.monto <= 0.0 or not any(
+        abs(spei_row.monto - amount) < 0.01
+        for amount in amounts
+    ):
+        return False
+
+    if spei_row.tipo == "enviados":
+        if not movement.cargo or movement.abono:
+            return False
+
+        normalized_concept = normalize_text(movement.concepto)
+        reference_parts = [
+            compact_tracking_key(part)
+            for part in re.split(
+                r"[\r\n]+",
+                movement.referencia or "",
+            )
+            if part.strip()
+        ]
+        has_serial_pair = (
+            len(reference_parts) > 1
+            and any(
+                part is not None and re.fullmatch(r"\d{8}", part)
+                for part in reference_parts
+            )
+        )
+        has_transfer_evidence = any(
+            token in normalized_concept
+            for token in ("CGO", "SPEI", "TANDA", "PAGO")
+        ) or has_serial_pair
+
+        if not has_transfer_evidence:
+            return False
+    elif spei_row.tipo == "recibidos":
+        if not movement.abono or movement.cargo:
+            return False
+    else:
+        return False
+
+    movement_date = parse_model_date(movement.fecha_operacion)
+    spei_date = parse_model_date(spei_row.fecha)
+
+    if spei_date is None and spei_concept_match_score(
+        movement,
+        spei_row,
+    ) < 2:
+        return False
+
+    if movement_date is not None and spei_date is not None:
+        date_distance = abs((movement_date - spei_date).days)
+        has_strong_concept_match = (
+            spei_concept_match_score(movement, spei_row) >= 2
+            and len(meaningful_concept_tokens(spei_row.concepto)) >= 2
+        )
+
+        if date_distance > 2 and not has_strong_concept_match:
+            return False
+
+    return True
+
+
+def resolve_unique_spei_fallbacks(
+    movements: Sequence[Movimiento],
+    spei_rows: Sequence[SpeiRow],
+    resolved_matches: List[Optional[SpeiRow]],
+) -> None:
+    """Resuelve pares únicos en ambas direcciones, sin reutilizarlos."""
+
+    used_rows = {
+        id(match)
+        for match in resolved_matches
+        if match is not None
+    }
+
+    while True:
+        candidate_rows_by_movement: Dict[int, List[SpeiRow]] = {}
+        candidate_movements_by_row: Dict[int, List[int]] = {}
+
+        for movement_index, movement in enumerate(movements):
+            if resolved_matches[movement_index] is not None:
+                continue
+
+            for spei_row in spei_rows:
+                if id(spei_row) in used_rows:
+                    continue
+                if not fallback_spei_pair_is_compatible(
+                    movement,
+                    spei_row,
+                ):
+                    continue
+
+                candidate_rows_by_movement.setdefault(
+                    movement_index,
+                    [],
+                ).append(spei_row)
+                candidate_movements_by_row.setdefault(
+                    id(spei_row),
+                    [],
+                ).append(movement_index)
+
+        resolved_any = False
+
+        for movement_index, candidates in candidate_rows_by_movement.items():
+            if len(candidates) != 1:
+                continue
+
+            candidate = candidates[0]
+            if len(candidate_movements_by_row.get(id(candidate), [])) != 1:
+                continue
+
+            resolved_matches[movement_index] = candidate
+            used_rows.add(id(candidate))
+            resolved_any = True
+
+        if not resolved_any:
+            break
+
+
+def remove_ambiguous_spei_reuse(
+    movements: Sequence[Movimiento],
+    resolved_matches: List[Optional[SpeiRow]],
+) -> None:
+    """Impide publicar una misma operación SPEI en dos movimientos."""
+
+    matches_by_row: Dict[int, List[int]] = {}
+
+    for index, match in enumerate(resolved_matches):
+        if match is None:
+            continue
+        matches_by_row.setdefault(id(match), []).append(index)
+
+    for indexes in matches_by_row.values():
+        if len(indexes) <= 1:
+            continue
+
+        match = resolved_matches[indexes[0]]
+        if match is None:
+            continue
+
+        match_date = parse_model_date(match.fecha)
+        scored = []
+
+        for index in indexes:
+            movement_date = parse_model_date(
+                movements[index].fecha_operacion
+            )
+            exact_date = int(
+                match_date is not None and movement_date == match_date
+            )
+            scored.append((exact_date, index))
+
+        best_score = max(score for score, _ in scored)
+        best_indexes = [
+            index
+            for score, index in scored
+            if score == best_score
+        ]
+
+        keep_index = best_indexes[0] if len(best_indexes) == 1 else None
+
+        for index in indexes:
+            if index != keep_index:
+                resolved_matches[index] = None
+
+
+def recover_operation_date_from_spei(
+    movements: Sequence[Movimiento],
+    index: int,
+    spei_row: SpeiRow,
+) -> None:
+    """Usa la fecha SPEI sólo cuando queda acotada por ambos vecinos."""
+
+    movement = movements[index]
+    if movement.fecha_operacion or not spei_row.fecha:
+        return
+    if index == 0 or index + 1 >= len(movements):
+        return
+
+    previous_date = parse_model_date(
+        movements[index - 1].fecha_operacion
+    )
+    following_date = parse_model_date(
+        movements[index + 1].fecha_operacion
+    )
+    candidate_date = parse_model_date(spei_row.fecha)
+
+    if (
+        previous_date is not None
+        and following_date is not None
+        and candidate_date is not None
+        and previous_date <= candidate_date <= following_date
+    ):
+        movement.fecha_operacion = spei_row.fecha
+
+
 # ============================================================
 # ENRIQUECIMIENTO DE MOVIMIENTOS
 # ============================================================
@@ -3045,6 +4352,8 @@ def enrich_movement_from_received_spei(
         movement.beneficiario = nombre_ordenante
     if cuenta_ordenante:
         movement.cuenta_beneficiario = cuenta_ordenante
+        if re.fullmatch(r"\d{18}", cuenta_ordenante):
+            movement.clabe_beneficiario = cuenta_ordenante
     if spei_row.concepto:
         movement.concepto_original = spei_row.concepto
 
@@ -3061,6 +4370,8 @@ def enrich_movement_from_sent_spei(
         movement.beneficiario = spei_row.beneficiario
     if spei_row.cuenta_beneficiaria:
         movement.cuenta_beneficiario = spei_row.cuenta_beneficiaria
+        if re.fullmatch(r"\d{18}", spei_row.cuenta_beneficiaria):
+            movement.clabe_beneficiario = spei_row.cuenta_beneficiaria
     if spei_row.concepto:
         movement.concepto_original = spei_row.concepto
 
@@ -3099,6 +4410,17 @@ def enrich_movement_from_spei(
             spei_row.hora
         )
 
+    # La fecha de liquidación proviene de la fila SPEI confirmada,
+    # tanto para enviados como para recibidos. No se copia la fecha
+    # del movimiento ni se completa cuando el OCR de la tabla no
+    # aportó una fecha calendario válida.
+    liquidation_date = (
+        reconcile_spei_date_with_movement(movement, spei_row)
+        or infer_spei_date_from_reference(movement, spei_row)
+    )
+    if liquidation_date:
+        movement.fecha_liquidacion = liquidation_date
+
     # Participante Emisor para recibidos y Participante Receptor
     # para enviados comparten la misma posición espacial.
     if spei_row.participante:
@@ -3126,6 +4448,27 @@ def enrich_movement_from_spei(
         spei_row.clave_rastreo
     )
 
+    # Si la tabla conservó únicamente un sufijo muy corto (``73``),
+    # el pareo único ya confirmado permite completar sólo la parte
+    # numérica desde Referencia / Serial. No se inventa HSB/HSBC,
+    # porque ese prefijo no puede deducirse de forma determinista.
+    if (
+        spei_row.tipo == "enviados"
+        and tracking_key
+        and len(tracking_key) < 4
+    ):
+        for candidate in extract_movement_tracking_keys(
+            movement.referencia
+        ):
+            compact_candidate = compact_tracking_key(candidate)
+            if (
+                compact_candidate
+                and len(compact_candidate) >= 4
+                and compact_candidate.endswith(tracking_key)
+            ):
+                tracking_key = compact_candidate
+                break
+
     if tracking_key:
         movement.clave_rastreo = tracking_key
 
@@ -3148,13 +4491,28 @@ def enrich_movements_from_spei(
         for movement in movements
     ]
 
-    for movement, spei_match in zip(
+    remove_ambiguous_spei_reuse(
         movements,
         resolved_matches,
+    )
+
+    resolve_unique_spei_fallbacks(
+        movements,
+        spei_rows,
+        resolved_matches,
+    )
+
+    for index, (movement, spei_match) in enumerate(
+        zip(movements, resolved_matches)
     ):
         if spei_match is None:
             continue
 
+        recover_operation_date_from_spei(
+            movements,
+            index,
+            spei_match,
+        )
         enrich_movement_from_spei(movement, spei_match)
 
 
@@ -3223,12 +4581,23 @@ def extract_movimientos_words(
             movements.append(movement)
             accepted_rows.append(row)
 
+    opening_balance = extract_statement_opening_balance(
+        filtered_words
+    )
+
+    repair_partial_movement_financials(
+        movements,
+        accepted_rows,
+        opening_balance,
+    )
+
     repair_malformed_transaction_amounts(
         movements,
         accepted_rows,
     )
 
     repair_corrupted_balances(movements)
+    repair_missing_operation_dates(movements)
 
     enrich_movements_from_spei(
         movements,
