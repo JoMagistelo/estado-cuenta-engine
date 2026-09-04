@@ -8,6 +8,9 @@ from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
+from .utils.movement_accounting_recovery import (
+    strengthen_hsbc_scanned_movements,
+)
 from .utils.spei_received_party_repair import (
     repair_received_spei_parties_in_movements,
 )
@@ -95,6 +98,16 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
 
     movimientos = extract_movimientos_words(
         spatial_words
+    )
+
+    # Refuerzo exclusivo para escaneados degradados. Reutiliza el
+    # parser histórico y sólo agrega filas que formen una cadena
+    # contable exacta entre saldos ya observados. También valida la
+    # serie completa contra los saldos de apertura/cierre antes de
+    # corregir balances OCR.
+    movimientos = strengthen_hsbc_scanned_movements(
+        spatial_words,
+        movimientos,
     )
 
     # Refuerzo conservador para SPEI recibidos. Sólo actúa cuando una
