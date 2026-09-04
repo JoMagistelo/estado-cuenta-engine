@@ -51,7 +51,7 @@ class TesseractPDFReader:
 
     LANGUAGE = "spa"
 
-    CONFIG = "--oem 3 --psm 11"
+    CONFIG = "--oem 3 --psm 3"
 
     TIMEOUT_SECONDS = 90
 
