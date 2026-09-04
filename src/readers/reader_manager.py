@@ -4,9 +4,9 @@ from pathlib import Path
 
 from readers.models import DocumentData
 
+from .adaptive_tesseract_pdf_reader import AdaptiveTesseractPDFReader
 from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
-from .tesseract_pdf_reader import TesseractPDFReader
 
 
 # ============================================================
@@ -175,11 +175,15 @@ class ReaderManager:
     ) -> DocumentData:
         """
         Procesa el PDF mediante Tesseract OCR.
+
+        Conserva 300 DPI / PSM 3 como lectura principal y aplica un
+        rescate de mayor resolución únicamente en páginas tabulares
+        donde la segunda lectura demuestra más filas contables.
         """
 
         file_path = Path(file_path)
 
-        return TesseractPDFReader.read(
+        return AdaptiveTesseractPDFReader.read(
             file_path,
             start_page=start_page,
         )
