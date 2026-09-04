@@ -54,7 +54,7 @@ Parser especializado
 Modelo EstadoCuenta
        │
        ▼
-Validaciones
+Validaciones 
        │
        ▼
 Mapeo / exportación
