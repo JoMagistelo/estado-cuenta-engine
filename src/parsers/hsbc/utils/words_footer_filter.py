@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from typing import Any, Dict, List, Sequence
 
 
@@ -12,13 +15,13 @@ FOOTER_TOP_RATIO = 0.88
 FOOTER_MIN_TOP = 700.0
 
 FOOTER_MARKERS = (
-    "EMITIDO",
-    "HSBC MEXICO",
-    "HSBC.",
-    "RFC:",
-    "PAG.",
+    "EMITIDO POR",
+    "GRUPO FINANCIERO HSBC",
+    "HMI-950125KG8",
     "PASEO DE LA REFORMA",
 )
+
+FOOTER_LINE_Y_TOLERANCE = 5.0
 
 
 # ============================================================
@@ -76,9 +79,16 @@ def normalize_text(
     if value is None:
         return ""
 
-    return str(
-        value
-    ).strip().upper()
+    text = str(value).strip()
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(
+        char
+        for char in text
+        if unicodedata.category(char) != "Mn"
+    )
+    text = re.sub(r"\s+", " ", text.upper())
+
+    return text.strip()
 
 
 def page_words(
@@ -122,6 +132,98 @@ def page_words(
 # DETECCIÓN DE FOOTER
 # ============================================================
 
+def footer_lines(
+    words: Sequence[Dict[str, Any]],
+) -> List[List[Dict[str, Any]]]:
+    """Agrupa sólo para reconocer marcadores partidos por OCR."""
+
+    lines: List[List[Dict[str, Any]]] = []
+
+    for word in sorted(
+        words,
+        key=lambda item: (
+            safe_float(item.get("top", 0.0)),
+            safe_float(item.get("x0", 0.0)),
+        ),
+    ):
+        top = safe_float(word.get("top", 0.0))
+        target = next(
+            (
+                line
+                for line in reversed(lines)
+                if abs(
+                    safe_float(line[0].get("top", 0.0)) - top
+                )
+                <= FOOTER_LINE_Y_TOLERANCE
+            ),
+            None,
+        )
+
+        if target is None:
+            lines.append([word])
+        else:
+            target.append(word)
+
+    for line in lines:
+        line.sort(key=lambda item: safe_float(item.get("x0", 0.0)))
+
+    return lines
+
+
+def is_footer_marker_text(value: str) -> bool:
+    normalized = normalize_text(value)
+
+    if any(marker in normalized for marker in FOOTER_MARKERS):
+        return True
+
+    return bool(
+        re.search(r"\bPAG\.?\s*\d+\s*/\s*\d+\b", normalized)
+    )
+
+
+def find_footer_start_y(
+    words: Sequence[Dict[str, Any]],
+) -> float | None:
+    """
+    Localiza la frontera Y del pie mediante posición y frase fuerte.
+
+    Una palabra aislada como RFC o HSBC no basta. Esto evita cortar
+    tablas válidas cuando el último movimiento queda cerca del borde.
+    """
+
+    if not words:
+        return None
+
+    max_bottom = max(
+        safe_float(word.get("bottom", word.get("top", 0.0)))
+        for word in words
+    )
+    # La referencia absoluta funciona para la escala histórica y el
+    # ratio permite que la misma utilidad opere sobre coordenadas
+    # reescaladas (por ejemplo, otro motor OCR).
+    dynamic_threshold = min(
+        FOOTER_MIN_TOP,
+        max_bottom * FOOTER_TOP_RATIO,
+    )
+    candidates = []
+
+    for line in footer_lines(words):
+        line_top = min(
+            safe_float(word.get("top", 0.0))
+            for word in line
+        )
+        if line_top < dynamic_threshold:
+            continue
+
+        text = " ".join(
+            str(word.get("text", ""))
+            for word in line
+        )
+        if is_footer_marker_text(text):
+            candidates.append(line_top)
+
+    return min(candidates) if candidates else None
+
 
 def find_footer_start_index(
     words: Sequence[
@@ -139,61 +241,17 @@ def find_footer_start_index(
     No depende de una coordenada Y exacta.
     """
 
-    if not words:
+    footer_y = find_footer_start_y(words)
+    if footer_y is None:
         return None
 
-    max_top = max(
-        safe_float(
-            word.get(
-                "top",
-                0.0,
-            )
-        )
-        for word in words
-    )
+    candidates = [
+        index
+        for index, word in enumerate(words)
+        if safe_float(word.get("top", 0.0)) >= footer_y
+    ]
 
-    dynamic_threshold = max(
-        FOOTER_MIN_TOP,
-        max_top * FOOTER_TOP_RATIO,
-    )
-
-    candidates = []
-
-    for index, word in enumerate(
-        words
-    ):
-
-        text = normalize_text(
-            word.get(
-                "text",
-                "",
-            )
-        )
-
-        top = safe_float(
-            word.get(
-                "top",
-                0.0,
-            )
-        )
-
-        if top < dynamic_threshold:
-            continue
-
-        if any(
-            marker in text
-            for marker in FOOTER_MARKERS
-        ):
-            candidates.append(
-                index
-            )
-
-    if not candidates:
-        return None
-
-    return min(
-        candidates
-    )
+    return min(candidates) if candidates else None
 
 
 # ============================================================
@@ -233,15 +291,17 @@ def filter_page_footer(
         )
     )
 
-    footer_start = find_footer_start_index(
+    footer_start_y = find_footer_start_y(
         ordered
     )
 
-    if footer_start is None:
+    if footer_start_y is None:
         return ordered
 
-    return ordered[
-        :footer_start
+    return [
+        word
+        for word in ordered
+        if safe_float(word.get("top", 0.0)) < footer_start_y
     ]
 
 

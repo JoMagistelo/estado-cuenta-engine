@@ -1699,6 +1699,43 @@ def extract_first_numeric_after_token(
     )
 
 
+def extract_percentage_after_token(
+    line: Sequence[Dict[str, Any]],
+    token: str,
+) -> Optional[float]:
+    """Extrae un porcentaje del mismo renglón y a la derecha."""
+
+    label_words = [
+        word
+        for word in line
+        if normalize_text(token) in normalized_word_text(word)
+    ]
+    if not label_words:
+        return None
+
+    label_right = max(
+        safe_float(word.get("x1", 0.0))
+        for word in label_words
+    )
+
+    for word in sorted(
+        line,
+        key=lambda item: safe_float(item.get("x0", 0.0)),
+    ):
+        if safe_float(word.get("x0", 0.0)) < label_right - 1.0:
+            continue
+
+        text = clean_word_text(word.get("text", ""))
+        if "%" not in text:
+            continue
+
+        parsed = parse_percentage(text)
+        if parsed is not None:
+            return parsed
+
+    return None
+
+
 def extract_saldo_promedio_by_order(
     lines: Sequence[
         Sequence[
@@ -1712,23 +1749,11 @@ def extract_saldo_promedio_by_order(
     """
     Recupera el saldo promedio cuando su etiqueta no fue OCR.
 
-    HSBC imprime el saldo promedio antes del pago de interés
-    mensual. Sólo se usa este respaldo cuando el mismo importe
-    mensual también fue confirmado en movimientos.
+    HSBC imprime el saldo promedio antes del pago de interés anual.
+    La búsqueda queda acotada a la columna monetaria y a los 85 puntos
+    anteriores a esa ancla. Se elige el importe positivo más cercano;
+    no se depende de una coordenada Y absoluta.
     """
-
-    monthly_interest = extract_movement_total(
-        lines,
-        (
-            "PAGO",
-            "INTERES",
-            "NOMINAL",
-        ),
-        MOVEMENT_ABONO_X,
-    )
-
-    if monthly_interest is None:
-        return None
 
     annual_anchor = find_best_anchor_line(
         lines,
@@ -1748,6 +1773,21 @@ def extract_saldo_promedio_by_order(
         annual_anchor
     )
 
+    monthly_anchor = find_best_anchor_line(
+        lines,
+        (
+            "PAGO",
+            "INTERES",
+            "NOMINAL",
+            "MES",
+        ),
+    )
+    upper_bound_y = (
+        line_center_y(monthly_anchor)
+        if monthly_anchor is not None
+        else annual_y
+    )
+
     rows = []
 
     for word in sorted(
@@ -1762,7 +1802,7 @@ def extract_saldo_promedio_by_order(
         if not (
             annual_y - 85.0
             <= center_y
-            <= annual_y - LINE_Y_TOLERANCE
+            <= upper_bound_y - LINE_Y_TOLERANCE
         ):
             continue
 
@@ -1809,33 +1849,12 @@ def extract_saldo_promedio_by_order(
                 )
             )
 
-    monthly_rows = [
-        row
-        for row in parsed_rows
-        if abs(
-            row[1]
-            - monthly_interest
-        )
-        <= 0.01
-    ]
-
-    if not monthly_rows:
-        return None
-
-    monthly_y = max(
-        row[0]
-        for row in monthly_rows
-    )
-
     previous_rows = [
         row
         for row in parsed_rows
         if (
-            row[0]
-            < monthly_y - LINE_Y_TOLERANCE
-            and
-            abs(row[1])
-            > abs(monthly_interest) + 0.01
+            row[0] < upper_bound_y - LINE_Y_TOLERANCE
+            and row[1] > 0.0
         )
     ]
 
@@ -1933,10 +1952,17 @@ def extract_saldo_anterior(
     if anchor is None:
         return None
 
+    same_line_value = extract_first_numeric_after_token(
+        anchor,
+        "INICIAL",
+    )
+    parsed_same_line = parse_money(same_line_value)
+    if parsed_same_line is not None:
+        return parsed_same_line
+
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_SALDO_ANTERIOR,
     )
 
     return parse_money(
@@ -1979,10 +2005,17 @@ def extract_depositos_abonos(
     if anchor is None:
         return None
 
+    same_line_value = extract_first_numeric_after_token(
+        anchor,
+        "DEPOSITOS",
+    )
+    parsed_same_line = parse_money(same_line_value)
+    if parsed_same_line is not None:
+        return parsed_same_line
+
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_DEPOSITOS_ABONOS,
     )
 
     return parse_money(
@@ -2026,10 +2059,17 @@ def extract_retiros_cargos(
     if anchor is None:
         return None
 
+    same_line_value = extract_first_numeric_after_token(
+        anchor,
+        "RETIROS",
+    )
+    parsed_same_line = parse_money(same_line_value)
+    if parsed_same_line is not None:
+        return parsed_same_line
+
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_RETIROS_CARGOS,
     )
 
     return parse_money(
@@ -2300,12 +2340,47 @@ def extract_saldo_final(
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_SALDO_FINAL,
     )
 
     return parse_money(
         value
     )
+
+
+def extract_saldo_final_from_document(
+    words: Sequence[Dict[str, Any]],
+) -> Optional[float]:
+    """Busca un Saldo Final explícito en cualquier página."""
+
+    candidates = []
+
+    for line in group_words_into_lines(words):
+        normalized = normalized_line_text(line)
+        if "SALDO" not in normalized or "FINAL" not in normalized:
+            continue
+
+        parsed = parse_money(
+            extract_first_numeric_after_token(line, "FINAL")
+        )
+        if parsed is None:
+            continue
+
+        candidates.append(
+            (
+                safe_page(line[0]),
+                line_center_y(line),
+                parsed,
+            )
+        )
+
+    if not candidates:
+        return None
+
+    # El último resumen del documento suele acompañar el cierre del
+    # detalle; en caso de repetición ambos valores deben coincidir.
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    return candidates[0][2]
 
 
 # ============================================================
@@ -2409,14 +2484,9 @@ def extract_tasa_bruta_anual(
     if anchor is None:
         return None
 
-    value = extract_value_near_anchor(
-        words,
+    return extract_percentage_after_token(
         anchor,
-        expected_y=EXPECTED_Y_TASA_PROMEDIO_NOMINAL,
-    )
-
-    return parse_percentage(
-        value
+        "NOMINAL",
     )
 
 
@@ -2453,10 +2523,17 @@ def extract_manejo_cuenta(
     if anchor is None:
         return None
 
+    same_line_value = extract_first_numeric_after_token(
+        anchor,
+        "COBRADAS",
+    )
+    parsed_same_line = parse_money(same_line_value)
+    if parsed_same_line is not None:
+        return parsed_same_line
+
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_COMISIONES_COBRADAS,
     )
 
     return parse_money(
@@ -2502,11 +2579,42 @@ def extract_saldo_promedio_minimo_mensual(
     if anchor is None:
         return None
 
+    same_line_value = extract_first_numeric_after_token(
+        anchor,
+        "REQUERIDO",
+    )
+    parsed_same_line = parse_money(same_line_value)
+    if parsed_same_line is not None:
+        return parsed_same_line
+
     value = extract_value_near_anchor(
         words,
         anchor,
-        expected_y=EXPECTED_Y_SALDO_PROMEDIO_MINIMO,
     )
+
+    candidate_words = select_value_row(
+        value_candidates_near_anchor(words, anchor)
+    )
+    if candidate_words:
+        candidate_y = word_center(candidate_words[0])[1]
+        candidate_line = next(
+            (
+                line
+                for line in lines
+                if abs(line_center_y(line) - candidate_y)
+                <= LINE_Y_TOLERANCE
+            ),
+            None,
+        )
+
+        if (
+            candidate_line is not None
+            and candidate_line is not anchor
+            and "SALDO" in normalized_line_text(candidate_line)
+        ):
+            # El valor pertenece al campo Saldo Promedio siguiente;
+            # no se desplaza hacia arriba para llenar el mínimo.
+            return None
 
     return parse_money(
         value
@@ -2833,6 +2941,9 @@ def extract_resumen_financiero_words(
         )
     )
 
+    if saldo_final is None:
+        saldo_final = extract_saldo_final_from_document(words)
+
     # ========================================================
     # 5. NUEVOS CAMPOS
     # ========================================================
@@ -2951,6 +3062,21 @@ def extract_resumen_financiero_words(
         and isr_retenido is not None
     ):
         retiros_cargos += isr_retenido
+
+    # Si el OCR omitió por completo la etiqueta de Saldo Final, los
+    # tres totales impresos constituyen una ecuación cerrada. Esta
+    # recuperación ocurre después de incorporar interés/ISR para que
+    # use exactamente los mismos totales que validan movimientos.
+    if (
+        saldo_final is None
+        and saldo_anterior is not None
+        and depositos_abonos is not None
+        and retiros_cargos is not None
+    ):
+        saldo_final = round(
+            saldo_anterior + depositos_abonos - retiros_cargos,
+            2,
+        )
 
     # ========================================================
     # 8. MODELO

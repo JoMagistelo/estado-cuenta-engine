@@ -73,8 +73,9 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
     # MOVIMIENTOS
     # ============================================================
     #
-    # Este extractor ya funciona correctamente y se conserva
-    # exactamente con el mismo mecanismo.
+    # El extractor localiza el inicio real de la tabla, reconstruye
+    # filas OCR mediante continuidad contable y enriquece únicamente
+    # los cruces SPEI confirmados.
     #
 
     movimientos = extract_movimientos_words(
