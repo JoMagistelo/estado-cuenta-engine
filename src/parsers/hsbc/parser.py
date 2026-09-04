@@ -11,6 +11,9 @@ from .extractors.movimientos import extract_movimientos_words
 from .utils.spei_received_party_repair import (
     repair_received_spei_parties_in_movements,
 )
+from .utils.summary_accounting_recovery import (
+    strengthen_hsbc_summary_accounting,
+)
 
 
 def parse_hsbc(document: DocumentData) -> EstadoCuenta:
@@ -62,6 +65,15 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
 
     resumen_financiero = extract_resumen_financiero_words(
         spatial_words
+    )
+
+    # Refuerzo del bloque contable: sólo sustituye saldo anterior,
+    # depósitos, retiros y saldo final cuando al menos tres valores
+    # están anclados de forma independiente y la identidad contable
+    # cierra. Si faltan dos o más datos no fuerza ninguna inferencia.
+    strengthen_hsbc_summary_accounting(
+        spatial_words,
+        resumen_financiero,
     )
 
     # ============================================================
