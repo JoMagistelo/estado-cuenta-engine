@@ -161,6 +161,7 @@ No usar información real para validar una instalación de desarrollo. Consulte 
 - [`04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md): privacidad y controles de seguridad.
 - [`05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md): marco normativo aplicable a APF/SABG.
 - [`06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md): línea base prevista para Windows Server/HTTPS.
+- [`07_checklist_revision_tic.md`](docs/07_checklist_revision_tic.md): checklist de auditoría TIC, brechas y criterios de no-go.
 
 ## 10. Estado de cumplimiento
 
