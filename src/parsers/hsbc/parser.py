@@ -8,6 +8,9 @@ from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
+from .utils.spei_received_counterparty_repair import (
+    repair_received_spei_counterparties,
+)
 
 
 def parse_hsbc(document: DocumentData) -> EstadoCuenta:
@@ -79,6 +82,15 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
 
     movimientos = extract_movimientos_words(
         spatial_words
+    )
+
+    # Reparación posterior, deliberadamente acotada a SPEI recibidos
+    # donde una misma word OCR cruza la frontera Participante Emisor /
+    # Nombre del Ordenante. Si no existe esa evidencia geométrica y un
+    # participante bancario validable, los movimientos quedan intactos.
+    repair_received_spei_counterparties(
+        movimientos,
+        spatial_words,
     )
 
     # ============================================================
