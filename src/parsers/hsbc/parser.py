@@ -8,6 +8,9 @@ from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
+from .utils.spei_received_party_repair import (
+    repair_received_spei_parties_in_movements,
+)
 
 
 def parse_hsbc(document: DocumentData) -> EstadoCuenta:
@@ -80,6 +83,16 @@ def parse_hsbc(document: DocumentData) -> EstadoCuenta:
 
     movimientos = extract_movimientos_words(
         spatial_words
+    )
+
+    # Refuerzo conservador para SPEI recibidos. Sólo actúa cuando una
+    # misma word invade geométricamente Participante Emisor y Nombre
+    # del Ordenante y el fragmento izquierdo valida contra un
+    # participante conocido. Los casos normales conservan la ruta
+    # histórica sin cambios.
+    repair_received_spei_parties_in_movements(
+        spatial_words,
+        movimientos,
     )
 
     # ============================================================
