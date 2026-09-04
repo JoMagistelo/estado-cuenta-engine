@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 from threading import Lock
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 import pypdfium2 as pdfium
@@ -135,7 +135,6 @@ class PaddleOCRPDFReader:
         except ValueError:
             return cls.RENDER_DPI
 
-        # Evita configuraciones accidentales demasiado pequeñas/grandes.
         return max(150, min(dpi, 600))
 
     @classmethod
@@ -157,20 +156,18 @@ class PaddleOCRPDFReader:
                 from paddleocr import PaddleOCR
             except ModuleNotFoundError as exc:
                 raise RuntimeError(
-                    "PaddleOCR no está instalado. Instala primero "
-                    "PaddlePaddle y después paddleocr>=3.7.0. "
-                    "Consulta docs/paddleocr_fallback.md."
+                    "PaddleOCR no está instalado. Instala PaddlePaddle y "
+                    "PaddleOCR 3.x. Consulta docs/paddleocr_fallback.md."
                 ) from exc
 
             try:
                 cls._engine = PaddleOCR(
                     lang=language,
                     device=device,
-                    engine="paddle",
-                    # No usamos unwarping/orientación global porque pueden
-                    # alterar la geometría base respecto al PDF. La orientación
-                    # de línea sí mejora reconocimiento sin cambiar el sistema
-                    # global de coordenadas que consumen los parsers.
+                    # Se deshabilitan transformaciones globales que podrían
+                    # alterar la geometría respecto al PDF. La orientación de
+                    # línea sí puede mejorar reconocimiento sin cambiar el
+                    # sistema global de coordenadas que consumen los parsers.
                     use_doc_orientation_classify=False,
                     use_doc_unwarping=False,
                     use_textline_orientation=True,
