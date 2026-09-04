@@ -1,0 +1,6 @@
+# Dependencias opcionales para habilitar el fallback PaddleOCR.
+#
+# PaddlePaddle se instala por separado porque el wheel depende del hardware
+# (CPU/GPU/CUDA). Consulta docs/paddleocr_fallback.md antes de instalar.
+
+paddleocr>=3,<4
