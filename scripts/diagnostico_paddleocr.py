@@ -10,23 +10,32 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from detectors.bank_detector import identify_bank_key
-from engine.statement_processor import process_single_statement
+from engine.statement_processor import process_single_statement_with_ocr_review
 from readers.reader_manager import ReaderManager
-from validators.movimiento_validator import validar_movimientos
 
 
-def _bool_text(value) -> str:
-    if value is True:
-        return "sí"
-    if value is False:
-        return "no"
-    return "no aplica"
+def _engine_label(engine: str | None) -> str:
+    labels = {
+        "tesseract": "Tesseract",
+        "paddleocr": "PaddleOCR",
+    }
+    normalized = str(engine or "").strip().lower()
+    return labels.get(normalized, normalized or "desconocido")
+
+
+def _print_candidate(candidate) -> None:
+    print(
+        f"{_engine_label(candidate.engine)}: "
+        f"{candidate.movement_count} movimientos / "
+        f"{candidate.validation_total} validaciones / "
+        f"{candidate.validation_failed} fallidas"
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Ejecuta un diagnóstico técnico del fallback OCR sin imprimir "
+            "Ejecuta un diagnóstico técnico de Tesseract/PaddleOCR sin imprimir "
             "contenido financiero ni datos personales."
         )
     )
@@ -36,6 +45,15 @@ def main() -> int:
         help=(
             "Nombre lógico del archivo para detección bancaria. "
             "Si se omite, se usa el nombre del PDF."
+        ),
+    )
+    parser.add_argument(
+        "--motor",
+        choices=("recomendado", "tesseract", "paddleocr"),
+        default="recomendado",
+        help=(
+            "Motor cuya salida se considera seleccionada para el diagnóstico. "
+            "Por defecto se utiliza la recomendación automática."
         ),
     )
     args = parser.parse_args()
@@ -57,7 +75,7 @@ def main() -> int:
             print("ERROR: no se pudo identificar el banco.", file=sys.stderr)
             return 3
 
-        estado, selected_document = process_single_statement(
+        _, _, review = process_single_statement_with_ocr_review(
             document=tesseract_document,
             bank_key=bank_key,
         )
@@ -68,63 +86,54 @@ def main() -> int:
         )
         return 4
 
-    final_validations = []
-    if estado.movimientos and estado.resumen_financiero:
-        try:
-            final_validations = validar_movimientos(
-                movimientos=estado.movimientos,
-                resumen=estado.resumen_financiero,
-            )
-        except Exception:
-            final_validations = []
-
-    metadata = selected_document.metadata or {}
-    final_failed = sum(
-        1 for validation in final_validations if not validation.correcto
-    )
-
     print("=== Diagnóstico OCR controlado ===")
     print(f"Banco detectado: {bank_key}")
-    print("OCR primario: tesseract")
-    print(f"OCR seleccionado: {metadata.get('reader', 'desconocido')}")
+    print("OCR primario: Tesseract")
+
+    if review is None:
+        print("Segundo OCR: no requerido o no habilitado")
+        print("Resultado seleccionado: Tesseract")
+        print("No se imprimieron datos personales ni valores financieros.")
+        return 0
+
+    if review.trigger_reasons:
+        print("Motivos de revisión: " + ", ".join(review.trigger_reasons))
+
+    for engine in review.available_engines():
+        _print_candidate(review.get_candidate(engine))
+
     print(
-        "Fallback PaddleOCR intentado: "
-        f"{_bool_text(metadata.get('paddle_fallback_attempted'))}"
+        "Recomendación automática: "
+        f"{_engine_label(review.recommended_engine)}"
     )
-    print(
-        "PaddleOCR seleccionado: "
-        f"{_bool_text(metadata.get('paddle_fallback_selected'))}"
+
+    if review.paddle_error_type:
+        print(
+            "PaddleOCR no produjo candidato: "
+            f"{review.paddle_error_type}"
+        )
+
+    requested_engine = (
+        review.recommended_engine
+        if args.motor == "recomendado"
+        else args.motor
     )
 
-    if "tesseract_validation_total" in metadata:
+    if requested_engine not in review.available_engines():
         print(
-            "Validaciones Tesseract: "
-            f"{metadata.get('tesseract_validation_total', 0)} total / "
-            f"{metadata.get('tesseract_validation_failed', 0)} fallidas"
+            f"ERROR: {_engine_label(requested_engine)} no está disponible "
+            "para este documento.",
+            file=sys.stderr,
         )
+        return 5
 
-    if "paddle_validation_total" in metadata:
-        print(
-            "Validaciones PaddleOCR: "
-            f"{metadata.get('paddle_validation_total', 0)} total / "
-            f"{metadata.get('paddle_validation_failed', 0)} fallidas"
-        )
-
-    if metadata.get("paddle_fallback_error_type"):
-        print(
-            "Error técnico PaddleOCR: "
-            f"{metadata['paddle_fallback_error_type']}"
-        )
-
-    if metadata.get("paddle_fallback_skipped"):
-        print(
-            "Fallback omitido por: "
-            f"{metadata['paddle_fallback_skipped']}"
-        )
-
+    selected = review.select(requested_engine)
+    print(f"Resultado seleccionado: {_engine_label(selected.engine)}")
     print(
-        "Validaciones del resultado final: "
-        f"{len(final_validations)} total / {final_failed} fallidas"
+        "Resultado seleccionado: "
+        f"{selected.movement_count} movimientos / "
+        f"{selected.validation_total} validaciones / "
+        f"{selected.validation_failed} fallidas"
     )
     print("No se imprimieron datos personales ni valores financieros.")
     return 0
