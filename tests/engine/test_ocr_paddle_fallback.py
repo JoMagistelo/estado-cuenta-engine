@@ -1,5 +1,9 @@
+from types import SimpleNamespace
+
+from readers.models import DocumentData
 from validators.resultado_validacion import ResultadoValidacion
 
+from engine import statement_processor
 from engine.ocr_fallback_policy import (
     paddle_fallback_enabled,
     should_attempt_paddle_fallback,
@@ -85,3 +89,116 @@ def test_validation_profile_contains_no_financial_values():
     assert profile.passed == 1
     assert profile.failed == 1
     assert profile.failed_names == ("Abonos",)
+
+
+def test_failed_tesseract_validation_can_select_better_paddle(monkeypatch):
+    monkeypatch.setenv("PADDLEOCR_FALLBACK_ENABLED", "1")
+    monkeypatch.setenv("PADDLEOCR_FALLBACK_BANKS", "hsbc")
+
+    tesseract_estado = SimpleNamespace(name="tesseract")
+    paddle_estado = SimpleNamespace(name="paddle")
+
+    tesseract_document = DocumentData(
+        raw_text="HSBC",
+        normalized_text="",
+        spatial_words=[],
+        metadata={
+            "ocr": True,
+            "reader": "tesseract",
+            "source_path": "statement.pdf",
+            "start_page": 0,
+        },
+    )
+    paddle_document = DocumentData(
+        raw_text="HSBC",
+        normalized_text="",
+        spatial_words=[],
+        metadata={
+            "ocr": True,
+            "reader": "paddleocr",
+        },
+    )
+
+    tesseract_validations = [
+        _validation("Abonos", False),
+        _validation("Cargos", True),
+    ]
+    paddle_validations = [
+        _validation("Abonos", True),
+        _validation("Cargos", True),
+    ]
+
+    monkeypatch.setattr(
+        statement_processor.ReaderManager,
+        "read_paddle_ocr",
+        lambda *args, **kwargs: paddle_document,
+    )
+    monkeypatch.setattr(
+        statement_processor,
+        "_process_once",
+        lambda document, bank_key: (paddle_estado, document),
+    )
+    monkeypatch.setattr(
+        statement_processor,
+        "_validation_results",
+        lambda estado: (
+            tesseract_validations
+            if estado is tesseract_estado
+            else paddle_validations
+        ),
+    )
+
+    estado, document = statement_processor._try_paddle_fallback(
+        tesseract_estado,
+        tesseract_document,
+        "hsbc",
+    )
+
+    assert estado is paddle_estado
+    assert document is paddle_document
+    assert document.metadata["paddle_fallback_selected"] is True
+    assert document.metadata["fallback_from"] == "tesseract"
+
+
+def test_paddle_error_preserves_tesseract_result(monkeypatch):
+    monkeypatch.setenv("PADDLEOCR_FALLBACK_ENABLED", "1")
+    monkeypatch.setenv("PADDLEOCR_FALLBACK_BANKS", "hsbc")
+
+    tesseract_estado = SimpleNamespace(name="tesseract")
+    tesseract_document = DocumentData(
+        raw_text="HSBC",
+        normalized_text="",
+        spatial_words=[],
+        metadata={
+            "ocr": True,
+            "reader": "tesseract",
+            "source_path": "statement.pdf",
+            "start_page": 0,
+        },
+    )
+
+    monkeypatch.setattr(
+        statement_processor,
+        "_validation_results",
+        lambda estado: [_validation("Abonos", False)],
+    )
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("reader unavailable")
+
+    monkeypatch.setattr(
+        statement_processor.ReaderManager,
+        "read_paddle_ocr",
+        _raise,
+    )
+
+    estado, document = statement_processor._try_paddle_fallback(
+        tesseract_estado,
+        tesseract_document,
+        "hsbc",
+    )
+
+    assert estado is tesseract_estado
+    assert document is tesseract_document
+    assert document.metadata["paddle_fallback_selected"] is False
+    assert document.metadata["paddle_fallback_error_type"] == "RuntimeError"
