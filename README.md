@@ -14,7 +14,9 @@ El sistema:
 
 - procesa PDF digital y documentos que requieren OCR;
 - utiliza Tesseract de forma local como OCR primario;
-- dispone de PaddleOCR como fallback local opcional cuando Tesseract presenta fallas explícitas de validación financiera;
+- dispone de PaddleOCR como segundo motor OCR local opcional cuando el resultado de Tesseract requiere revisión;
+- conserva y compara ambos candidatos OCR cuando PaddleOCR es ejecutado;
+- permite seleccionar en Flet y Streamlit qué candidato OCR revisar y utilizar para la exportación;
 - identifica institución/emisor;
 - aplica parsers especializados por banco/layout;
 - normaliza datos de cuenta, resumen y movimientos;
@@ -37,7 +39,7 @@ ReaderManager
  │     │
  │     └─► clasificación Digital / OCR
  │
- ├─► Digital: palabras espaciales
+ ├─► Digital: palabras espaciales ───────────────► parser / validación
  │
  └─► OCR: TesseractPDFReader
               │
@@ -45,25 +47,30 @@ ReaderManager
         Parser especializado
               │
               ▼
-       Validación financiera
+       Validadores existentes
               │
-      ┌───────┴────────┐
-      │                │
-   correcta          falla
-      │                │
-      │        PaddleOCR opcional
-      │                │
-      │        mismo parser/validator
-      │                │
-      └───────┬────────┘
-              ▼
-       Modelo EstadoCuenta
-              │
-              ▼
-        Mapeo / exportación
+      ┌───────┴──────────────┐
+      │                      │
+ resultado suficiente   requiere revisión
+      │                      │
+      │              PaddleOCR local
+      │                      │
+      │              mismo parser/validator
+      │                      │
+      │              Tesseract + PaddleOCR
+      │                      │
+      │              comparación / selección
+      └──────────────┬───────┘
+                     ▼
+              Modelo EstadoCuenta
+                     │
+                     ▼
+              Mapeo / exportación
 ```
 
-Tesseract continúa siendo el OCR primario. PaddleOCR está deshabilitado por defecto y sólo se ejecuta cuando una validación financiera obtenida a partir de Tesseract falla y el fallback ha sido habilitado expresamente. PaddleOCR sólo sustituye el resultado primario cuando reduce las validaciones fallidas sin reducir su cobertura.
+Tesseract continúa siendo el OCR primario. PaddleOCR está deshabilitado por defecto y se intenta únicamente cuando el resultado primario presenta señales objetivas de revisión, como ausencia de movimientos, validaciones fallidas o validaciones principales no disponibles.
+
+Cuando existen dos candidatos, el sistema genera una recomendación conservadora pero **no elimina ninguno de los resultados**. Flet y Streamlit permiten alternar Tesseract/PaddleOCR; el candidato seleccionado es el que alimenta la vista y la exportación Excel. Los documentos digitales no participan en esta comparación.
 
 La lógica bancaria se mantiene separada de lectura, detección, validación, exportación e interfaces para facilitar pruebas y mantenimiento.
 
@@ -75,11 +82,11 @@ assets/                 Recursos visuales
 src/
   catalog/              Firmas y catálogos técnicos
   detectors/            Detección de banco y tipo documental
-  engine/               Orquestación del pipeline y política de fallback
+  engine/               Orquestación del pipeline y política OCR
   exporters/            Exportación de resultados
   extractors/           Extractores transversales
   mappers/              Conversión a tablas/salidas
-  models/               Modelos de dominio y resultados
+  models/               Modelos de dominio, resultados y revisión OCR
   parsers/              Parsers especializados
   readers/              Lectura digital, Tesseract y PaddleOCR opcional
   utils/                 Utilidades
@@ -103,7 +110,7 @@ EstadoCuentaEngine.spec Configuración de build PyInstaller
 Crear entorno:
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 ```
@@ -120,10 +127,16 @@ Instalar interfaz Flet:
 python -m pip install -e ".[desktop]"
 ```
 
-Instalar PaddleOCR cuando TIC autorice el fallback en el runtime institucional:
+Instalar PaddleOCR para Streamlit cuando se autorice la revisión dual:
 
 ```powershell
 python -m pip install -e ".[streamlit,paddleocr]"
+```
+
+Instalar PaddleOCR para pruebas locales con Flet:
+
+```powershell
+python -m pip install -e ".[desktop,paddleocr]"
 ```
 
 PaddleOCR requiere modelos locales previamente aprobados y configurados. Estado Cuenta Engine no descarga modelos automáticamente durante el procesamiento. Consulte [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md).
@@ -179,7 +192,8 @@ Los estados de cuenta contienen información financiera y datos personales. Regl
 - no enviar documentos o resultados a servicios externos sin autorización institucional;
 - mantener temporales y salidas bajo control de acceso y retención definidos;
 - utilizar datos sintéticos o corpus autorizado para pruebas;
-- operar PaddleOCR mediante inferencia local con modelos previamente instalados cuando el fallback esté habilitado.
+- operar PaddleOCR mediante inferencia local con modelos previamente instalados cuando el segundo OCR esté habilitado;
+- mantener la comparación Tesseract/PaddleOCR en memoria durante la sesión, sin persistir automáticamente copias alternas del contenido OCR.
 
 Consultar [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md), [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md) y [`SECURITY.md`](SECURITY.md).
 
@@ -241,7 +255,7 @@ El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](
 - [`11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md): vulnerabilidades e incidentes.
 - [`12_checklist_liberacion_produccion.md`](docs/12_checklist_liberacion_produccion.md): checklist de liberación.
 - [`13_control_cambios.md`](docs/13_control_cambios.md): criterios de control de cambios.
-- [`14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md): instalación, seguridad, UAT y operación del fallback PaddleOCR.
+- [`14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md): seguridad, modelos, comparación dual, UAT y operación de PaddleOCR.
 
 ## 12. Responsabilidades de entrega
 
