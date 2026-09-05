@@ -20,13 +20,15 @@ Fortalecer el repositorio sin alterar la lógica de extracción ni los resultado
 
 El PR #13 introdujo una base útil de ingeniería, pero no debía aplicarse sin ajustes si el requisito es equivalencia estricta de resultados.
 
-Se identificaron tres cambios con posible impacto funcional o de compatibilidad:
+Se identificaron dos cambios funcionales que debían revertirse y una modificación de identidad de paquete que no era necesaria:
 
 1. eliminación de una señal RFC heredada del catálogo de Nu;
 2. cambio de semántica en la validación de saldo `0.0`;
-3. restricción de `requires-python` desde `>=3.10` a `>=3.12,<3.14` y cambio del nombre de distribución.
+3. cambio del nombre de distribución del paquete.
 
-La rama de esta auditoría conserva las mejoras estructurales de #13, pero restaura esos contratos para evitar una regresión accidental.
+La restricción propuesta por #13 a Python `>=3.12,<3.14` sí resultó correcta después de auditar el repositorio completo: `app/main_flet.py` en el propio `master` utiliza sintaxis de f-strings disponible desde Python 3.12. La primera matriz CI confirmó que Python 3.10 no puede compilar la aplicación actual. Por tanto, la línea consolidada conserva Python 3.12–3.13 como contrato real, en vez de prometer compatibilidad no existente.
+
+La rama de esta auditoría conserva las mejoras estructurales de #13 y restaura los contratos que sí podían alterar resultados.
 
 ## 3. Áreas revisadas
 
@@ -98,7 +100,7 @@ Se mantiene como componente de terceros sin reformatear ni alterar binarios. Par
 
 ## 4. Dependencias
 
-`pyproject.toml` es la fuente canónica. Se conserva la identidad histórica de la distribución y el contrato de Python `>=3.10,<3.14` mientras la CI comprueba 3.10, 3.11, 3.12 y 3.13.
+`pyproject.toml` es la fuente canónica. Se conserva la identidad histórica de la distribución y se documenta el contrato real de Python `>=3.12,<3.14`. La CI comprueba Python 3.12 y 3.13.
 
 Las dependencias están separadas en:
 
@@ -114,7 +116,7 @@ La eliminación de `requirements.txt` evita convertir un `pip freeze` accidental
 
 El workflow `Production readiness` ejecuta:
 
-1. matriz Windows con Python 3.10, 3.11, 3.12 y 3.13;
+1. matriz Windows con Python 3.12 y 3.13;
 2. instalación del paquete desde `pyproject.toml`;
 3. compilación de `app/`, `src/` y `tests/`;
 4. Ruff con reglas de errores críticos de sintaxis/nombres;
