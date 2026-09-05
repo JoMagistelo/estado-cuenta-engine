@@ -1,0 +1,43 @@
+name: Aplicar ajuste Flet OCR
+
+on:
+  push:
+    branches:
+      - feat/paddleocr-dual-review
+    paths:
+      - .github/workflows/_apply_flet_ocr_patch.yml
+      - scripts/_apply_flet_ocr_patch.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch-flet:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feat/paddleocr-dual-review
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Aplicar transformación
+        run: python scripts/_apply_flet_ocr_patch.py
+
+      - name: Verificar sintaxis Flet
+        run: python -m py_compile app/main_flet.py
+
+      - name: Confirmar y publicar cambio final
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/main_flet.py
+          git rm .github/workflows/_apply_flet_ocr_patch.yml scripts/_apply_flet_ocr_patch.py
+          git commit -m "feat: agrega selector dual OCR en Flet"
+          git push origin HEAD:feat/paddleocr-dual-review
