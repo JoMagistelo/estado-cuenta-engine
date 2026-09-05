@@ -36,7 +36,10 @@ jobs:
           python -m pip install --group dev
 
       - name: Compile all Python sources
-        run: python -m compileall -q app src tests
+        run: python -m compileall -q app src tests scripts
+
+      - name: Verify diagnostic CLI
+        run: python scripts/diagnostico_paddleocr.py --help
 
       - name: Static correctness checks
         run: ruff check .
