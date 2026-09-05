@@ -1,181 +1,175 @@
-# Propuesta técnica y ruta a producción
+# Especificación técnica para integración institucional
 
-## Estado Cuenta Engine
+## Estado Cuenta Engine — SABG / DGEC
 
-**Estado:** desarrollo activo  
-**Fecha de corte:** 4 de septiembre de 2026
+**Fecha de corte:** 5 de septiembre de 2026
 
 ## 1. Resumen ejecutivo
 
-Estado Cuenta Engine automatiza la lectura, clasificación, extracción, normalización, validación y exportación de información contenida en estados de cuenta bancarios. El motor está diseñado para apoyar procesos institucionales autorizados de la Secretaría Anticorrupción y Buen Gobierno, con aplicación prevista en la Dirección General de Evaluación de Confianza (DGEC).
+Estado Cuenta Engine es un motor modular para lectura, clasificación, extracción, normalización, validación y exportación de información contenida en estados de cuenta bancarios.
 
-La solución ya soporta PDFs digitales y OCR local con Tesseract, varios parsers especializados, procesamiento por lotes y exportación a Excel. Sin embargo, **todavía no debe considerarse lista para producción**: faltan definiciones y evidencias de seguridad, protección de datos, despliegue, continuidad, operación y gobierno de cambios.
+La solución soporta PDFs digitales y documentos que requieren OCR local con Tesseract, incorpora parsers especializados por institución y genera una salida estructurada para consumo operativo o integración con otros componentes institucionales.
 
-## 2. Arquitectura funcional actual
+La versión está preparada para entrega técnica a TIC con:
+
+- dependencias declaradas en `pyproject.toml`;
+- pruebas automatizadas;
+- validación de Python 3.12 y 3.13;
+- build Windows mediante PyInstaller;
+- auditoría de vulnerabilidades de dependencias;
+- hashes de integridad;
+- documentación de despliegue Windows Server/IIS;
+- lineamientos de seguridad y protección de datos.
+
+## 2. Arquitectura funcional
 
 | Etapa | Componente | Función |
 |---|---|---|
 | 1 | `ReaderManager` | lectura inicial y selección de camino Digital/OCR |
 | 2 | `document_type_detector` | clasificación del documento |
 | 3 | `bank_detector` | identificación de institución |
-| 4 | `statement_processor` | resolución de parser base/OCR/normalizador |
+| 4 | `statement_processor` | resolución del parser correspondiente |
 | 5 | `parsers/*` | extracción especializada |
-| 6 | `models/*` | representación unificada |
+| 6 | `models/*` | representación de dominio |
 | 7 | `validators/*` | validaciones de consistencia |
 | 8 | `mappers/*` / `exporters/*` | transformación y salida |
 
-## 3. Principios para una liberación institucional
+El diseño mantiene separadas la lectura, detección, lógica bancaria, validación y presentación para facilitar mantenimiento y pruebas de regresión.
 
-La liberación debe basarse en evidencia y no solamente en funcionamiento técnico. Cada versión candidata debe poder responder:
+## 3. Modos de procesamiento
 
-1. ¿Qué versión exacta se está desplegando?
-2. ¿Qué dependencias y binarios contiene?
-3. ¿Qué datos personales procesa y con qué finalidad?
-4. ¿Dónde se almacenan los originales, temporales y resultados?
-5. ¿Quién puede acceder a cada etapa?
-6. ¿Qué eventos se registran y durante cuánto tiempo?
-7. ¿Cómo se detecta y atiende un incidente?
-8. ¿Cómo se recupera el servicio ante falla?
-9. ¿Qué pruebas funcionales, de regresión y de seguridad fueron aprobadas?
-10. ¿Qué unidad autoriza la puesta en producción?
+### Digital
 
-## 4. Brechas principales identificadas
+Utiliza texto y palabras con coordenadas extraídas directamente del PDF.
 
-### 4.1 Gobierno y cumplimiento
+### OCR
 
-Pendiente formalizar con las áreas competentes:
+Cuando el documento no contiene texto utilizable, el pipeline utiliza Tesseract de forma local y produce una representación espacial compatible con los parsers especializados.
 
-- responsable funcional del sistema;
-- responsable técnico/operativo;
-- propietario de la información;
-- clasificación de activos e información;
-- matriz de roles y accesos;
-- proceso de alta, cambio y baja de usuarios;
-- proceso de gestión de cambios y versiones;
-- tratamiento de incidentes y vulneraciones de datos;
-- conservación y disposición documental.
+Los documentos no se envían a servicios externos como parte del procesamiento normal.
 
-### 4.2 Protección de datos personales
+## 4. Interfaces
 
-Por la naturaleza de los estados de cuenta, el sistema puede tratar nombres, identificadores fiscales, números de cuenta/CLABE, saldos, movimientos, contrapartes, conceptos y otra información financiera vinculada a personas físicas.
+### Flet
 
-Antes de producción deben integrarse, como mínimo:
+Interfaz de escritorio disponible y empaquetable mediante PyInstaller para Windows.
 
-- inventario de datos personales y sistemas de tratamiento;
-- análisis de riesgos de privacidad;
-- análisis de brecha;
-- plan de trabajo de controles;
-- reglas de conservación/supresión;
-- procedimiento de ejercicio de derechos aplicable al proceso institucional;
-- aviso(s) de privacidad que correspondan al tratamiento;
-- Documento de Seguridad;
-- análisis de procedencia y, en su caso, Evaluación de Impacto en Protección de Datos Personales.
+### Streamlit
 
-## 5. Ciberseguridad
+Interfaz web disponible para despliegue interno. En el escenario institucional previsto se publica detrás de IIS/reverse proxy y no se expone directamente a la red de usuarios.
 
-La Política General de Ciberseguridad para la Administración Pública Federal publicada el 17 de diciembre de 2025 establece un marco común para dependencias y entidades de la APF. La incorporación de este sistema a producción debe alinearse al Plan Institucional de Ciberseguridad de la SABG y a los lineamientos técnicos que emita la Agencia de Transformación Digital y Telecomunicaciones (ATDT).
+### Integración con SIEC
 
-Para este proyecto se consideran prioritarios:
+El motor está desacoplado de la identidad institucional. Si SIEC requiere integración programática, se recomienda incorporar una capa API dedicada sobre el mismo motor en lugar de utilizar Streamlit como contrato entre sistemas.
 
-- inventario y clasificación de activos;
-- gestión de riesgos;
-- identidad y control de acceso;
+La API podrá agregar autenticación, autorización, límites de archivo, trazabilidad y versionado sin modificar los parsers.
+
+## 5. Seguridad y privacidad
+
+El sistema procesa información financiera y datos personales. Los principios técnicos son:
+
+- procesamiento local dentro de infraestructura autorizada;
 - mínimo privilegio;
-- endurecimiento del servidor;
-- gestión de vulnerabilidades y parches;
-- seguridad de dependencias/cadena de suministro;
-- respaldo y recuperación;
-- monitoreo y detección;
-- respuesta a incidentes;
-- capacitación y operación segura.
+- secretos fuera del código;
+- TLS en la capa de publicación;
+- minimización de logs;
+- separación de temporales y salidas;
+- control de acceso institucional;
+- trazabilidad de versiones y artefactos;
+- gestión de vulnerabilidades y terceros.
 
-## 6. Arquitectura productiva prevista
+El detalle se encuentra en [`04_seguridad_datos_personales.md`](04_seguridad_datos_personales.md) y [`11_gestion_vulnerabilidades_incidentes.md`](11_gestion_vulnerabilidades_incidentes.md).
 
-### Decisiones conocidas
+## 6. Cadena de suministro de software
 
-- plataforma prevista: **Windows Server** institucional;
-- comunicaciones: **HTTPS/TLS**;
-- certificado: institucional, conforme al procedimiento y autoridad que determine TIC/SABG;
-- motor Python desplegado en infraestructura controlada;
-- repositorio productivo y artefactos bajo control institucional.
+`pyproject.toml` es la fuente canónica de dependencias Python.
 
-### Decisiones abiertas
+La automatización de calidad genera:
 
-- Streamlit como interfaz operativa, prototipo o componente interno;
-- uso o retiro de Flet en producción;
-- exposición de una API dedicada;
-- integración con la aplicación Angular existente;
-- servidor web/reverse proxy y terminación TLS;
-- mecanismo de autenticación institucional;
-- persistencia de resultados y base de datos;
-- integración con directorio institucional;
-- estrategia de alta disponibilidad.
+- inventario de paquetes instalados;
+- auditoría de vulnerabilidades conocidas;
+- build del paquete;
+- build del ejecutable Windows;
+- hash SHA-256 del ejecutable;
+- hash SHA-256 del runtime Tesseract versionado.
 
-Estas decisiones deben cerrarse mediante revisión de arquitectura con TIC antes de comprometer interfaces productivas.
+Tesseract se trata como componente de terceros sujeto a versión, procedencia, licencia, integridad y revisión de vulnerabilidades.
 
-## 7. Recomendación para integración Angular
+## 7. Despliegue institucional
 
-Si Angular consume el motor, la opción arquitectónica preferible es separar:
+La arquitectura recomendada para la interfaz web es:
 
 ```text
-Angular
-  │
-  ▼
-API / servicio institucional autenticado
-  │
-  ▼
+Usuario institucional
+        │
+        ▼
+HTTPS
+        │
+        ▼
+IIS / reverse proxy institucional
+        │
+        ▼
+Streamlit en interfaz local
+        │
+        ▼
 Estado Cuenta Engine
-  │
-  ├─ procesamiento Digital
-  ├─ OCR
-  ├─ parsers
-  └─ validadores
 ```
 
-Esto permite versionar contratos, aplicar autenticación/autorización, límites de tamaño, trazabilidad, control de concurrencia y políticas de seguridad sin exponer directamente internals de Streamlit.
+IIS/TIC administra publicación, TLS, DNS, red y controles de plataforma. La aplicación administra exclusivamente su lógica funcional.
 
-La decisión definitiva queda pendiente.
+La guía completa se encuentra en [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md).
 
-## 8. Entregables sugeridos para revisión TIC
+## 8. Requisitos de integración institucional
 
-Antes de producción se propone contar con:
+La puesta en servicio requiere que TIC defina o confirme:
 
-- README y arquitectura actualizados;
-- matriz normativa y de cumplimiento;
-- diagrama de contexto y flujo de datos;
-- inventario de activos y dependencias;
-- Documento de Seguridad de datos personales;
-- análisis de riesgos y brecha;
-- análisis de procedencia de evaluación de impacto;
-- matriz de accesos/roles;
-- guía de instalación productiva;
-- guía de respaldo/restauración;
+- Windows Server soportado;
+- IIS/reverse proxy;
+- DNS y certificado TLS;
+- cuenta de servicio;
+- ACL y rutas de trabajo;
+- firewall/segmentación;
+- mecanismo de identidad y autorización;
+- monitoreo y logs;
+- respaldo y recuperación;
+- gestión de parches;
 - procedimiento de incidentes;
-- evidencia de pruebas funcionales y de regresión;
-- evidencia de revisión de vulnerabilidades;
-- bitácora de versiones y cambios;
-- plan de reversa/rollback;
-- acta o evidencia de aceptación técnica y funcional.
+- operación y soporte.
 
-## 9. Criterio de salida a producción
+Las áreas competentes deberán completar los instrumentos de protección de datos, clasificación, archivo y gestión de riesgos aplicables.
 
-Una versión sólo debe promoverse a producción cuando:
+## 9. Calidad y regresión
 
-- el código candidato esté identificado y congelado para revisión;
-- las pruebas de regresión estén aprobadas;
-- las vulnerabilidades críticas/altas estén tratadas conforme al criterio institucional;
-- la arquitectura y controles hayan sido revisados por TIC;
-- protección de datos haya validado los instrumentos que correspondan;
-- exista respaldo y procedimiento de recuperación probado;
-- HTTPS/TLS y el certificado institucional estén instalados correctamente;
-- exista una ruta de rollback;
-- la operación tenga responsables y procedimiento de soporte definidos.
+Los parsers y reglas de extracción se consideran comportamiento crítico. Cualquier modificación funcional debe:
 
-## 10. Referencias
+- identificar el banco/layout afectado;
+- incluir pruebas específicas;
+- preservar casos previamente correctos;
+- validarse con corpus autorizado cuando corresponda;
+- separar cambios funcionales de refactors cosméticos extensos.
 
-Consultar:
+## 10. Entregables técnicos
 
+La entrega técnica del producto se compone de:
+
+- código fuente de la versión;
+- `pyproject.toml`;
+- documentación técnica;
+- suite de pruebas;
+- configuración de build;
+- ejecutable Windows cuando corresponda;
+- inventario de dependencias;
+- auditoría de vulnerabilidades;
+- hashes de integridad;
+- notas de versión;
+- guía de despliegue y rollback.
+
+## 11. Referencias internas
+
+- [`02_arquitectura.md`](02_arquitectura.md)
 - [`04_seguridad_datos_personales.md`](04_seguridad_datos_personales.md)
 - [`05_normativa_tic_apf.md`](05_normativa_tic_apf.md)
 - [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md)
-- [`07_checklist_revision_tic.md`](07_checklist_revision_tic.md)
+- [`09_verificacion_tecnica_version.md`](09_verificacion_tecnica_version.md)
+- [`10_matriz_evidencias_tic.md`](10_matriz_evidencias_tic.md)
+- [`12_checklist_liberacion_produccion.md`](12_checklist_liberacion_produccion.md)
