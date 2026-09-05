@@ -36,7 +36,10 @@ jobs:
           python -m pip install --group dev
 
       - name: Compile all Python sources
-        run: python -m compileall -q app src tests
+        run: python -m compileall -q app src tests scripts
+
+      - name: Verify diagnostic CLI
+        run: python scripts/diagnostico_paddleocr.py --help
 
       - name: Static correctness checks
         run: ruff check .
@@ -48,8 +51,14 @@ jobs:
         run: python -m build
 
   security-audit:
-    name: Runtime dependency and integrity evidence
+    name: Runtime PaddleOCR / Python ${{ matrix.python-version }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "1"
 
     steps:
       - name: Checkout
@@ -58,14 +67,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install deployable application dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[streamlit,desktop]"
+          python -m pip install -e ".[streamlit,desktop,paddleocr]"
+
+      - name: Verify local Paddle runtime imports
+        shell: pwsh
+        run: |
+          python -c "import paddle, paddleocr; print('Python runtime OK'); print('PaddlePaddle', paddle.__version__); print('PaddleOCR', paddleocr.__version__)"
 
       - name: Create runtime dependency inventory
         shell: pwsh
@@ -96,7 +110,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: security-evidence
+          name: security-evidence-python-${{ matrix.python-version }}
           path: build/security/
           if-no-files-found: warn
           retention-days: 30
