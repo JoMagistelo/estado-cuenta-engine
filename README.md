@@ -143,9 +143,11 @@ Ver [`docs/06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_w
 Requisitos generales:
 
 - Windows 10/11 o Windows Server para el escenario objetivo;
-- Python 3.10, 3.11, 3.12 o 3.13;
+- Python 3.12 o 3.13;
 - Git;
 - entorno virtual aislado.
+
+El mínimo de Python 3.12 refleja el código actual de la interfaz Flet y se valida en CI; no se declara soporte para versiones que el `master` vigente no puede compilar.
 
 Para Streamlit:
 
