@@ -106,12 +106,19 @@ class PaddleOCRPDFReader:
             "PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR"
         )
 
+        language = os.getenv(
+            "PADDLEOCR_LANG",
+            cls.DEFAULT_LANGUAGE,
+        ).strip() or cls.DEFAULT_LANGUAGE
+        if language.lower() != cls.DEFAULT_LANGUAGE:
+            raise PaddleOCRConfigurationError(
+                "Estado Cuenta Engine admite PaddleOCR únicamente en español "
+                "para documentos bancarios de México. Configura "
+                "PADDLEOCR_LANG=es."
+            )
+
         return {
-            "language": os.getenv(
-                "PADDLEOCR_LANG",
-                cls.DEFAULT_LANGUAGE,
-            ).strip()
-            or cls.DEFAULT_LANGUAGE,
+            "language": cls.DEFAULT_LANGUAGE,
             "device": os.getenv(
                 "PADDLEOCR_DEVICE",
                 cls.DEFAULT_DEVICE,
