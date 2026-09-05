@@ -1,48 +1,27 @@
-from __future__ import annotations
+"""Validaciones de consistencia entre movimientos y resumen financiero."""
 
-from typing import List
+from __future__ import annotations
 
 from models.movimiento import Movimiento
 from models.resumen_financiero import ResumenFinanciero
-from .resultado_validacion import ResultadoValidacion
+from validators.resultado_validacion import ResultadoValidacion
 
 
+# Tolerancia monetaria del contrato actual basado en float. Una migración a
+# Decimal debe abordarse de forma transversal en modelos, parsers y exportadores.
 TOLERANCIA = 0.01
 
 
 def validar_movimientos(
-    movimientos: List[Movimiento],
+    movimientos: list[Movimiento],
     resumen: ResumenFinanciero,
-):
-    """
-    Ejecuta las validaciones financieras que sean posibles.
-
-    Una validación solamente se genera cuando existen todos los
-    datos necesarios para realizarla.
-
-    Esto evita que la ausencia de un campo opcional del resumen
-    provoque un error de ejecución y detenga el procesamiento
-    completo de los estados de cuenta.
-    """
-
-    resultados = []
-
-    # =====================================================
-    # TOTAL ABONOS
-    # =====================================================
+) -> list[ResultadoValidacion]:
+    """Ejecuta únicamente las validaciones cuyos datos están disponibles."""
+    resultados: list[ResultadoValidacion] = []
 
     if resumen.depositos_abonos is not None:
-
-        total_abonos = sum(
-            m.abono or 0
-            for m in movimientos
-        )
-
-        diferencia = (
-            total_abonos
-            - resumen.depositos_abonos
-        )
-
+        total_abonos = sum(m.abono or 0 for m in movimientos)
+        diferencia = total_abonos - resumen.depositos_abonos
         resultados.append(
             ResultadoValidacion(
                 nombre="Total depósitos / abonos",
@@ -54,22 +33,9 @@ def validar_movimientos(
             )
         )
 
-    # =====================================================
-    # TOTAL CARGOS
-    # =====================================================
-
     if resumen.retiros_cargos is not None:
-
-        total_cargos = sum(
-            m.cargo or 0
-            for m in movimientos
-        )
-
-        diferencia = (
-            total_cargos
-            - resumen.retiros_cargos
-        )
-
+        total_cargos = sum(m.cargo or 0 for m in movimientos)
+        diferencia = total_cargos - resumen.retiros_cargos
         resultados.append(
             ResultadoValidacion(
                 nombre="Total retiros / cargos",
@@ -81,32 +47,13 @@ def validar_movimientos(
             )
         )
 
-    # =====================================================
-    # SALDO FINAL
-    # =====================================================
-
     if movimientos and resumen.saldo_final is not None:
-
         ultimo = movimientos[-1]
-
-        saldo_movimiento = (
-            ultimo.saldo_liquidacion
-            or ultimo.saldo_operacion
-            or None
-        )
-
-        # -------------------------------------------------
-        # Solo podemos validar si tenemos un saldo real
-        # en el último movimiento.
-        # -------------------------------------------------
+        # No convertir 0.0 a ausencia: cero es un saldo válido.
+        saldo_movimiento = ultimo.saldo_liquidacion or ultimo.saldo_operacion
 
         if saldo_movimiento is not None:
-
-            diferencia = (
-                saldo_movimiento
-                - resumen.saldo_final
-            )
-
+            diferencia = saldo_movimiento - resumen.saldo_final
             resultados.append(
                 ResultadoValidacion(
                     nombre="Saldo final",
@@ -118,31 +65,21 @@ def validar_movimientos(
                 )
             )
 
-    # =====================================================
-    # ECUACIÓN FINANCIERA
-    # =====================================================
-
     if all(
-        x is not None
-        for x in [
+        value is not None
+        for value in (
             resumen.saldo_anterior,
             resumen.depositos_abonos,
             resumen.retiros_cargos,
             resumen.saldo_final,
-        ]
+        )
     ):
-
         saldo_calculado = (
             resumen.saldo_anterior
             + resumen.depositos_abonos
             - resumen.retiros_cargos
         )
-
-        diferencia = (
-            saldo_calculado
-            - resumen.saldo_final
-        )
-
+        diferencia = saldo_calculado - resumen.saldo_final
         resultados.append(
             ResultadoValidacion(
                 nombre="Ecuación financiera",
