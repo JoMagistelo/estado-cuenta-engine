@@ -23,6 +23,11 @@ class PaddleOCRPDFReader:
     modelos en runtime y no utiliza la API alojada de PaddleOCR. Los modelos de
     detección y reconocimiento deben estar previamente instalados en rutas
     locales autorizadas.
+
+    En CPU se desactiva MKL-DNN/oneDNN para evitar una ruta de inferencia que
+    puede lanzar ``NotImplementedError`` con PaddlePaddle 3.x al ejecutar
+    modelos PP-OCRv5 sobre Windows. La prioridad de este reader es estabilidad
+    y reproducibilidad, no aceleración específica del backend.
     """
 
     MAX_TEXT_PAGES = 5
@@ -94,6 +99,7 @@ class PaddleOCRPDFReader:
                 "recognition_model": config["recognition_model_name"],
                 "coordinate_space": "pdf_points",
                 "network_model_downloads": False,
+                "mkldnn_enabled": False,
             },
         )
 
@@ -196,6 +202,13 @@ class PaddleOCRPDFReader:
             # modelos. Para este proyecto se fuerza modo local antes del import.
             os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "1"
 
+            # PaddlePaddle 3.x puede entrar por oneDNN/MKL-DNN en CPU y lanzar
+            # NotImplementedError durante predict() con ciertos grafos PP-OCRv5.
+            # La variable se establece antes de importar PaddleOCR y además el
+            # constructor recibe enable_mkldnn=False para hacer la política
+            # explícita y reproducible.
+            os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
+
             try:
                 from paddleocr import PaddleOCR
             except ModuleNotFoundError as exc:
@@ -206,8 +219,6 @@ class PaddleOCRPDFReader:
 
             try:
                 cls._engine = PaddleOCR(
-                    lang=language,
-                    ocr_version="PP-OCRv5",
                     device=device,
                     text_detection_model_name=detection_model_name,
                     text_detection_model_dir=detection_model_dir,
@@ -216,6 +227,7 @@ class PaddleOCRPDFReader:
                     use_doc_orientation_classify=False,
                     use_doc_unwarping=False,
                     use_textline_orientation=False,
+                    enable_mkldnn=False,
                 )
             except Exception as exc:
                 raise PaddleOCRConfigurationError(
