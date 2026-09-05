@@ -3,11 +3,11 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "estado-cuenta-engine"
-version = "1.0.0"
+name = "extractor-de-movimientos-financieros"
+version = "1.0"
 description = "Motor institucional para lectura, extracción, validación y exportación de estados de cuenta."
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "openpyxl>=3.1.5,<4",
     "pdfplumber>=0.11.9,<0.12",
@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 streamlit = [
-    "pandas>=3.0,<4",
+    "pandas>=2.2,<4",
     "streamlit>=1.55,<2",
 ]
 desktop = [
@@ -29,7 +29,8 @@ desktop = [
 dev = [
     "build>=1.3,<2",
     "pip-audit>=2.9,<3",
-    "pytest>=9,<10",
+    "pytest>=9,<10; python_version >= '3.11'",
+    "pytest>=8,<9; python_version < '3.11'",
     "ruff>=0.14,<1",
 ]
 packaging = [
@@ -42,19 +43,18 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
+
 [tool.ruff]
-target-version = "py312"
+target-version = "py310"
 line-length = 100
-extend-exclude = [
-    "app",
-    "tests",
-    "src/parsers",
-    "src/readers",
-    "vendor",
-]
+extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F"]
+select = ["E9", "F63", "F7", "F82"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
