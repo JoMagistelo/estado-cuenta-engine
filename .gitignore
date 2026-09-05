@@ -1,28 +1,35 @@
-# Entorno virtual
+# Entornos y cachés Python
 .venv/
-
-# Archivos compilados de Python y caché
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Empaquetado (Packaging)
-*.egg-info/
-dist/
+# Build y distribución
 build/
+dist/
+*.egg-info/
 
+# Configuración local y secretos
+.env
+.env.*
+!.env.example
 
-# Archivos temporales
-*.tmp
-
-# Configuración de VS Code
-.vscode/
-
-# Datos de prueba
-data/
-
-# Logs y archivos generados
-
+# Salidas y datos operativos
 logs/
-
 output/
+data/
+*.log
+*.pdf
+*.xls
+*.xlsx
+
+# IDE / sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

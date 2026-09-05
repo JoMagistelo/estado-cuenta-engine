@@ -1,0 +1,105 @@
+name: Production readiness
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install project and quality tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install --group dev
+
+      - name: Compile all Python sources
+        run: python -m compileall -q app src tests
+
+      - name: Static correctness checks
+        run: ruff check .
+
+      - name: Unit and synthetic regression suite
+        run: pytest -m "not integration" -q
+
+      - name: Build Python package
+        run: python -m build
+
+  ui-smoke:
+    name: UI dependency smoke tests
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install UI extras
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[streamlit,desktop]"
+
+      - name: Verify UI dependencies and sources
+        shell: pwsh
+        run: |
+          python -c "import flet, pandas, streamlit; print('UI dependencies OK')"
+          python -m compileall -q app
+
+  desktop-build:
+    name: PyInstaller Windows build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install desktop and packaging dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[desktop]"
+          python -m pip install --group packaging
+
+      - name: Build desktop executable
+        run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
+
+      - name: Verify executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/Extractor_de_Movimientos_Financieros.exe")) {
+            throw "No se generó el ejecutable esperado."
+          }
