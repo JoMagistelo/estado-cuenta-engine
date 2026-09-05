@@ -1,78 +1,16 @@
-# Línea base de despliegue productivo en Windows Server
+# Guía de despliegue institucional en Windows Server e IIS
 
 ## Estado Cuenta Engine — SABG / DGEC
 
-**Estado:** arquitectura prevista, pendiente de aprobación TIC  
-**Fecha de corte:** 4 de septiembre de 2026
-
-> Este documento no es una instrucción para publicar el sistema sin autorización. Define una línea base para discutir con TIC y convertir posteriormente en procedimiento operativo aprobado.
+**Fecha de corte:** 5 de septiembre de 2026
 
 ## 1. Objetivo
 
-Desplegar Estado Cuenta Engine en infraestructura Windows Server institucional, protegiendo la confidencialidad, integridad y disponibilidad de los estados de cuenta y de los datos derivados.
+Definir la arquitectura técnica recomendada para desplegar Estado Cuenta Engine en infraestructura institucional Windows Server, utilizando IIS como punto de publicación HTTPS y manteniendo el proceso de aplicación aislado de la exposición directa a red.
 
-## 2. Principios
+Esta guía describe responsabilidades y requisitos técnicos. Los valores definitivos de DNS, certificados, cuentas, rutas, políticas de seguridad y operación serán los que establezca TIC.
 
-- servidor administrado por TIC;
-- mínimo privilegio;
-- separación de ambientes;
-- acceso sólo desde redes autorizadas;
-- HTTPS/TLS obligatorio;
-- certificado institucional gestionado conforme al procedimiento SABG/TIC;
-- secretos fuera del repositorio;
-- datos temporales controlados;
-- trazabilidad sin exposición de contenido financiero;
-- parches y vulnerabilidades gestionados;
-- respaldo y recuperación probados;
-- liberaciones reproducibles y reversibles.
-
-## 3. Ambientes
-
-Se recomienda separar al menos:
-
-```text
-DESARROLLO  ->  PRUEBAS/UAT  ->  PRODUCCIÓN
-```
-
-### Desarrollo
-
-- datos sintéticos o anonimizados;
-- acceso de desarrolladores;
-- depuración habilitada sólo cuando sea necesario.
-
-### Pruebas/UAT
-
-- versión candidata a producción;
-- datos de prueba controlados;
-- configuración similar a producción;
-- validación funcional y de seguridad.
-
-### Producción
-
-- sin modo debug;
-- sin herramientas de desarrollo innecesarias;
-- acceso administrativo limitado;
-- cambios sólo mediante proceso de liberación.
-
-## 4. Repositorio y artefactos
-
-El repositorio que contiene código productivo debe quedar bajo control institucional y con acceso restringido según funciones.
-
-El repositorio público actual puede utilizarse únicamente si no contiene información, secretos ni componentes cuya publicación esté restringida y si TIC lo autoriza. Para producción se recomienda evaluar migración o espejo controlado en repositorio institucional privado.
-
-Cada liberación debe identificar:
-
-- tag o commit SHA;
-- fecha;
-- responsable de liberación;
-- dependencias;
-- resultados de pruebas;
-- vulnerabilidades conocidas aceptadas/tratadas;
-- hash del artefacto desplegado cuando aplique.
-
-## 5. Topología recomendada
-
-### Opción A — operación web interna
+## 2. Arquitectura recomendada
 
 ```text
 Usuario institucional
@@ -81,295 +19,333 @@ Usuario institucional
 HTTPS / certificado institucional
         │
         ▼
-Reverse proxy / servidor web aprobado
+IIS
+(reverse proxy / terminación TLS)
         │
         ▼
-Aplicación Streamlit (red local / localhost)
+127.0.0.1:8501
+Streamlit
         │
         ▼
 Estado Cuenta Engine
+        │
+        ├─ Lectura PDF digital
+        └─ OCR local Tesseract
 ```
 
-En esta opción Streamlit es interfaz de usuario, no API pública.
+Principios:
 
-### Opción B — integración futura con Angular
+- IIS es el único componente expuesto a la red institucional;
+- Streamlit escucha únicamente en interfaz local cuando IIS y la aplicación residen en el mismo servidor;
+- el puerto interno de Streamlit no debe publicarse directamente a usuarios;
+- TLS se administra en IIS con certificado institucional;
+- los documentos permanecen dentro de infraestructura autorizada;
+- el motor no requiere servicios externos para procesar estados de cuenta;
+- Tesseract opera localmente.
+
+Si TIC utiliza un reverse proxy institucional distinto de IIS, deberá conservar los mismos principios de aislamiento, TLS, control de acceso y trazabilidad.
+
+## 3. Componentes
+
+### IIS
+
+Responsable de:
+
+- publicación HTTPS;
+- certificado TLS institucional;
+- nombre DNS;
+- reglas de red y exposición;
+- reverse proxy hacia el proceso Streamlit;
+- cabeceras y controles definidos por TIC;
+- soporte de WebSocket requerido por la interfaz Streamlit;
+- logging de infraestructura conforme a política institucional.
+
+La implementación concreta del reverse proxy —por ejemplo mediante módulos autorizados por TIC— debe ajustarse al baseline institucional de IIS.
+
+### Streamlit
+
+Responsable de:
+
+- interfaz web de carga y consulta;
+- gestión de sesión de la aplicación;
+- invocación del pipeline;
+- presentación y descarga de resultados.
+
+En servidor debe ejecutarse en modo headless, sin abrir navegador, sin modo de desarrollo y limitado a la interfaz/puerto internos definidos por TIC.
+
+### Estado Cuenta Engine
+
+Responsable de:
+
+- clasificación Digital/OCR;
+- lectura de documento;
+- detección de institución;
+- parsing especializado;
+- normalización y validación;
+- exportación de resultados.
+
+El motor no administra identidad institucional, certificados, DNS ni políticas de red.
+
+### Tesseract
+
+Se utiliza exclusivamente como OCR local. El runtime distribuido con la versión Windows debe quedar sujeto a inventario, versión, licencia, hash de integridad y revisión de vulnerabilidades dentro del expediente de liberación.
+
+## 4. Requisitos del servidor
+
+Configuración base esperada:
+
+- Windows Server soportado por la infraestructura institucional;
+- IIS con HTTPS habilitado;
+- Python 3.12 o 3.13 para la vía Streamlit;
+- almacenamiento local o institucional autorizado;
+- runtime Tesseract aprobado;
+- cuenta de servicio de mínimo privilegio;
+- sincronización de tiempo institucional;
+- antimalware/EDR y controles de plataforma definidos por TIC;
+- capacidad suficiente de CPU, memoria y espacio temporal para OCR.
+
+La versión exacta de Windows Server y los componentes IIS deben ser definidos por TIC conforme a su plataforma soportada.
+
+## 5. Cuenta de servicio
+
+La aplicación debe ejecutarse con una identidad de servicio institucional, no con una cuenta personal ni con privilegios administrativos salvo excepción formalmente justificada.
+
+Permisos mínimos:
+
+- lectura/ejecución sobre código y runtime;
+- lectura/escritura sobre directorios temporales autorizados;
+- escritura sobre salidas autorizadas cuando corresponda;
+- escritura sobre logs técnicos si éstos se almacenan localmente.
+
+La cuenta no debe tener acceso a recursos que no sean necesarios para el proceso.
+
+## 6. Estructura de directorios
+
+Ejemplo de separación operativa:
 
 ```text
-Angular
-  │
-  ▼
-HTTPS
-  │
-  ▼
-API institucional
-  │
-  ▼
-Estado Cuenta Engine
+C:\Apps\EstadoCuentaEngine\
+    app\
+    src\
+    .venv\
+    pyproject.toml
+
+D:\EstadoCuentaEngine\Work\
+D:\EstadoCuentaEngine\Output\
+D:\EstadoCuentaEngine\Logs\
 ```
 
-La API deberá diseñarse como capa explícita. No se recomienda que Angular dependa de mecanismos internos de Streamlit para integración programática.
+Las rutas son referenciales. TIC puede utilizar volúmenes, shares o ubicaciones equivalentes siempre que se apliquen ACL, respaldo y retención de acuerdo con la clasificación de información.
 
-La selección de IIS, reverse proxy, framework API, balanceador o componentes adicionales debe ser aprobada por TIC.
+No deben utilizarse perfiles personales, escritorios de usuario ni carpetas públicas como almacenamiento operativo.
 
-## 6. HTTPS y certificado institucional
+## 7. Instalación de la aplicación web
 
-Antes de producción:
+Procedimiento técnico de referencia:
 
-- obtener el certificado TLS mediante el procedimiento institucional que determine TIC/SABG/Buen Gobierno;
-- almacenar la llave privada en el almacén o mecanismo seguro aprobado;
-- restringir permisos de la llave privada a la cuenta/servicio necesario;
-- deshabilitar protocolos y cifrados obsoletos según estándar institucional;
-- definir renovación antes del vencimiento;
-- registrar responsable y fecha de expiración;
-- probar cadena de confianza y nombre DNS;
-- impedir HTTP plano o redirigirlo conforme al diseño aprobado.
-
-Nunca se debe guardar la llave privada en Git.
-
-## 7. DNS y red
-
-Definir con TIC:
-
-- nombre DNS institucional;
-- segmento de red;
-- origen de conexiones permitidas;
-- puertos permitidos;
-- reglas de firewall;
-- necesidad de WAF/reverse proxy;
-- acceso administrativo separado del acceso de usuarios;
-- restricciones de salida a Internet.
-
-Por defecto, el motor no necesita enviar datos bancarios a Internet. Las salidas de red deben limitarse a lo estrictamente necesario.
-
-## 8. Cuenta de servicio
-
-La aplicación debe ejecutarse con una cuenta de servicio institucional, no con una cuenta personal ni con privilegios de administrador local salvo justificación excepcional.
-
-La cuenta debe tener únicamente permisos necesarios sobre:
-
-- carpeta de aplicación;
-- carpeta temporal autorizada;
-- carpeta de salida autorizada;
-- logs técnicos;
-- recursos compartidos o base de datos cuando se incorporen.
-
-Debe prohibirse el inicio de sesión interactivo cuando la política institucional lo determine.
-
-## 9. Sistema de archivos
-
-Separar, idealmente:
-
-```text
-C:\Apps\EstadoCuentaEngine\      código/artefacto
-D:\EstadoCuenta\Input\          entradas temporales autorizadas
-D:\EstadoCuenta\Work\           trabajo temporal
-D:\EstadoCuenta\Output\         salidas autorizadas
-D:\EstadoCuenta\Logs\           logs técnicos minimizados
+```powershell
+py -3.12 -m venv C:\Apps\EstadoCuentaEngine\.venv
+C:\Apps\EstadoCuentaEngine\.venv\Scripts\python.exe -m pip install --upgrade pip
+C:\Apps\EstadoCuentaEngine\.venv\Scripts\python.exe -m pip install -e "C:\Apps\EstadoCuentaEngine[streamlit]"
 ```
 
-Las rutas son sólo ejemplos; TIC debe definir las ubicaciones definitivas.
+El entorno productivo debe instalarse desde la versión aprobada y no desde una estación personal.
 
-Controles:
+Cuando la política institucional requiera instalación sin acceso a Internet, las dependencias deberán entregarse mediante repositorio interno, caché o paquete offline aprobado por TIC.
 
-- ACL NTFS por grupo/rol;
-- herencia revisada;
-- no usar carpetas públicas o perfiles personales;
-- cuotas/límites para prevenir llenado de disco;
-- limpieza segura de temporales;
-- respaldo sólo de información que deba conservarse.
+## 8. Ejecución de Streamlit
 
-## 10. Entrada de PDFs
+Comando de referencia cuando IIS y Streamlit se encuentran en el mismo servidor:
 
-Si se implementa carga web/API:
+```powershell
+C:\Apps\EstadoCuentaEngine\.venv\Scripts\python.exe -m streamlit run `
+  C:\Apps\EstadoCuentaEngine\app\main_streamlit.py `
+  --server.address=127.0.0.1 `
+  --server.port=8501 `
+  --server.headless=true `
+  --browser.gatherUsageStats=false
+```
 
-- limitar tamaño máximo;
-- verificar extensión y tipo real de archivo;
-- rechazar formatos no permitidos;
-- renombrar internamente con identificador seguro;
-- evitar path traversal;
-- no confiar en el nombre enviado por el usuario;
-- integrar antimalware/escaneo conforme a infraestructura institucional;
-- limitar número de archivos y concurrencia;
-- registrar ID de transacción, no contenido del archivo.
+La forma definitiva de registrar el proceso como servicio de Windows debe utilizar el mecanismo aprobado por TIC. La aplicación debe reiniciarse de forma controlada tras reinicio del servidor y registrar fallas de arranque.
 
-## 11. OCR y consumo de recursos
+## 9. Configuración IIS
 
-Tesseract es una operación intensiva. El pipeline actual limita por defecto el worker OCR en el procesamiento incremental.
+La publicación institucional debe contemplar:
 
-En producción se debe medir:
+- sitio HTTPS con certificado emitido/aprobado institucionalmente;
+- binding al nombre DNS autorizado;
+- reverse proxy hacia `http://127.0.0.1:8501` o destino interno equivalente;
+- soporte de WebSocket;
+- bloqueo del acceso directo al puerto interno desde otras redes;
+- límites de tamaño de solicitud acordes al tamaño máximo de PDF autorizado;
+- timeouts compatibles con procesamiento OCR;
+- logs y rotación conforme a política TIC;
+- redirección o bloqueo de HTTP plano según estándar institucional.
 
-- CPU por documento;
+No deben incluirse llaves privadas, contraseñas o secretos dentro del repositorio o del código.
+
+## 10. Integración con SIEC
+
+La arquitectura prevista debe separar autenticación institucional del motor de extracción.
+
+Si SIEC será el punto de acceso de los usuarios, TIC deberá definir el mecanismo de integración: identidad federada, encabezados confiables, token institucional, API o esquema equivalente aprobado.
+
+Streamlit es una interfaz web; no debe utilizarse como contrato de integración entre sistemas. Si SIEC requiere invocación programática, deberá incorporarse una capa API explícita sobre el motor.
+
+Una API institucional deberá definir al menos:
+
+- autenticación y autorización;
+- identidad de servicio;
+- límites de archivo;
+- timeouts y concurrencia;
+- códigos de respuesta;
+- trazabilidad de solicitudes;
+- manejo seguro de errores;
+- versionado del contrato;
+- política de retención de entrada y salida.
+
+Los parsers y el motor pueden reutilizarse sin cambios detrás de dicha capa.
+
+## 11. Protección de documentos
+
+Los estados de cuenta contienen información financiera y datos personales. En producción:
+
+- limitar acceso mediante ACL y roles institucionales;
+- evitar persistencia innecesaria de PDFs;
+- controlar directorios temporales;
+- no registrar contenido del documento en logs;
+- no almacenar secretos o PII en nombres de archivo cuando pueda evitarse;
+- aplicar las reglas institucionales de conservación y archivo;
+- analizar archivos de entrada con los controles antimalware definidos por TIC cuando corresponda.
+
+## 12. Logs y monitoreo
+
+Los logs técnicos deben priorizar información operativa:
+
+- fecha/hora;
+- identificador de proceso;
+- versión desplegada;
+- método Digital/OCR;
+- institución detectada cuando sea necesario;
+- duración;
+- código de resultado/error.
+
+Evitar:
+
+- texto completo extraído;
+- nombres de personas;
+- RFC, CURP, cuentas o CLABE completas;
+- conceptos de movimientos;
+- contenido del PDF.
+
+La retención, centralización, SIEM y acceso a logs serán definidos por TIC.
+
+## 13. Recursos y OCR
+
+Tesseract puede consumir CPU y memoria de forma intensiva. Antes de dimensionar producción se recomienda medir con el corpus autorizado:
+
+- páginas por documento;
+- tiempo medio y percentiles de procesamiento;
 - memoria máxima;
-- tiempo por página;
+- CPU máxima;
 - espacio temporal;
-- concurrencia aceptable;
-- comportamiento ante PDFs grandes/corruptos.
+- concurrencia esperada;
+- comportamiento ante PDFs grandes o dañados.
 
-Establecer límites para impedir agotamiento de recursos.
+Los límites operativos deben quedar configurados para evitar agotamiento de recursos.
 
-## 12. Autenticación y autorización
+## 14. Seguridad de red
 
-Pendiente de definición con TIC.
+El servidor debe aplicar:
 
-Como mínimo se deberá resolver:
+- acceso de usuarios únicamente por HTTPS;
+- puerto interno de Streamlit no expuesto externamente;
+- administración del servidor limitada a redes/roles autorizados;
+- reglas de firewall mínimas;
+- salidas a Internet restringidas conforme a política institucional;
+- DNS y certificados administrados por TIC.
 
-- quién puede cargar documentos;
-- quién puede consultar resultados;
-- quién puede exportar;
-- quién administra el servicio;
-- segregación de funciones;
-- expiración/bloqueo de sesiones;
-- MFA cuando aplique;
-- integración con identidad institucional cuando sea posible.
+El procesamiento bancario no requiere enviar documentos a servicios externos.
 
-No se recomienda implementar un directorio paralelo de usuarios si existe un mecanismo institucional autorizado reutilizable.
+## 15. Respaldo y recuperación
 
-## 13. Sesiones y archivos por usuario
+Debe existir procedimiento para:
 
-La aplicación debe impedir que un usuario pueda recuperar archivos o resultados de otra sesión por URL, nombre de archivo, caché o ubicación temporal.
+- respaldar configuración necesaria;
+- conservar artefactos de liberación aprobados;
+- restaurar la aplicación;
+- restaurar certificados/configuración conforme al procedimiento institucional;
+- volver a la versión previa;
+- validar funcionamiento después de restauración.
 
-Si Streamlit permanece en producción, se deberá revisar específicamente:
+No se recomienda respaldar indiscriminadamente archivos temporales ni duplicados de estados de cuenta.
 
-- manejo de sesión;
-- caché;
-- estado compartido;
-- descargas;
-- uploads temporales;
-- configuración de servidor;
-- cabeceras de seguridad en la capa frontal;
-- límites de carga.
+## 16. Actualizaciones y vulnerabilidades
 
-## 14. Secretos
+Cada liberación debe incluir:
 
-No almacenar secretos en:
+- inventario de dependencias Python;
+- resultado de auditoría de vulnerabilidades;
+- revisión del runtime Tesseract;
+- hash SHA-256 del artefacto distribuido;
+- resultado de pruebas automatizadas;
+- validación funcional correspondiente.
 
-- `README`;
-- código Python;
-- archivos `.py` de configuración;
-- variables versionadas;
-- archivos `.env` dentro del repositorio;
-- scripts de despliegue compartidos.
+Los parches de Windows Server, IIS, Python y demás componentes de plataforma corresponden al proceso institucional de gestión de vulnerabilidades y cambios.
 
-Usar el mecanismo institucional aprobado (almacén de certificados, variables protegidas, vault o equivalente definido por TIC).
+## 17. Liberación
 
-## 15. Logs
-
-Registrar sólo lo necesario para auditoría y soporte:
-
-- timestamp;
-- ID de solicitud/proceso;
-- usuario/cuenta identificada de manera controlada;
-- versión del servicio;
-- parser/método;
-- resultado técnico;
-- código de error;
-- duración.
-
-Evitar datos financieros completos y texto extraído.
-
-Definir:
-
-- ubicación;
-- ACL;
-- rotación;
-- tamaño máximo;
-- retención;
-- envío a SIEM/monitor institucional cuando aplique;
-- sincronización de tiempo del servidor.
-
-## 16. Backups y recuperación
-
-Antes de producción debe existir procedimiento probado de:
-
-- respaldo de configuración necesaria;
-- respaldo de datos que legalmente deban conservarse;
-- restauración;
-- recuperación del servicio;
-- rollback de aplicación;
-- recuperación de certificados/configuración.
-
-No respaldar indiscriminadamente temporales o duplicados de estados de cuenta.
-
-## 17. Vulnerabilidades y parches
-
-Liberación inicial y periódica:
-
-- escaneo de dependencias Python;
-- revisión de CVE de Tesseract y librerías incluidas;
-- revisión de Windows Server e IIS/reverse proxy si aplica;
-- inventario de software;
-- parcheo programado;
-- retest después de cambios relevantes;
-- eliminación de componentes no utilizados.
-
-## 18. Endurecimiento
-
-Aplicar el baseline de hardening que establezca TIC. Como apoyo, y sólo si TIC lo autoriza, pueden usarse guías Microsoft/CIS para revisar:
-
-- servicios innecesarios;
-- SMB y protocolos heredados;
-- PowerShell y administración remota;
-- firewall;
-- Defender/EDR;
-- auditoría avanzada;
-- permisos locales;
-- política de bloqueo;
-- cifrado de disco/volumen cuando corresponda.
-
-## 19. Liberación
-
-Flujo propuesto:
+Secuencia recomendada:
 
 ```text
-PR aprobado
-  ↓
-pruebas automáticas
-  ↓
-revisión de dependencias
-  ↓
-build/artefacto identificado
-  ↓
-UAT
-  ↓
-pruebas de seguridad
-  ↓
-aprobación TIC + funcional
-  ↓
-backup / punto de reversa
-  ↓
-despliegue
-  ↓
-smoke test
-  ↓
-monitoreo
+Versión candidata
+      │
+      ▼
+CI / pruebas automatizadas
+      │
+      ▼
+Auditoría de dependencias
+      │
+      ▼
+Build + hash de integridad
+      │
+      ▼
+UAT funcional
+      │
+      ▼
+Revisión TIC / seguridad
+      │
+      ▼
+Despliegue controlado
+      │
+      ▼
+Smoke test
+      │
+      ▼
+Monitoreo
 ```
 
-## 20. Rollback
+## 18. Verificación posterior al despliegue
 
-Cada despliegue debe tener:
+Comprobar al menos:
 
-- versión previa identificada;
-- pasos de reversa;
-- compatibilidad de configuración/datos;
-- responsable autorizado;
-- criterio de activación del rollback.
+- sitio HTTPS disponible con certificado válido;
+- acceso HTTP no autorizado bloqueado o redirigido conforme a política;
+- puerto interno de Streamlit no accesible desde red de usuarios;
+- carga de PDF autorizada;
+- procesamiento Digital correcto;
+- procesamiento OCR correcto;
+- exportación correcta;
+- logs sin datos personales innecesarios;
+- reinicio controlado del servicio;
+- rollback disponible.
 
-## 21. Pendientes de decisión TIC
+## 19. Responsabilidades
 
-- [ ] Windows Server versión exacta;
-- [ ] servidor web/reverse proxy;
-- [ ] Streamlit productivo sí/no;
-- [ ] Flet productivo sí/no;
-- [ ] API dedicada sí/no;
-- [ ] integración Angular sí/no;
-- [ ] autenticación institucional;
-- [ ] MFA;
-- [ ] DNS;
-- [ ] certificado TLS y responsable de renovación;
-- [ ] base de datos/persistencia;
-- [ ] SIEM/monitor;
-- [ ] antivirus/EDR;
-- [ ] respaldo;
-- [ ] RTO/RPO;
-- [ ] retención y archivística;
-- [ ] procedimiento de soporte.
+**Equipo de aplicación:** código, dependencias declaradas, pruebas, documentación técnica, artefacto y evidencia de integridad.
+
+**TIC / infraestructura:** Windows Server, IIS, DNS, TLS, red, cuenta de servicio, hardening, monitoreo, respaldos, gestión de parches y operación.
+
+**Área funcional:** validación de resultados y aceptación funcional.
+
+**Áreas competentes de seguridad/protección de datos:** controles, riesgos, Documento de Seguridad, incidentes y demás instrumentos aplicables.
