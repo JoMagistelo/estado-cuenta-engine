@@ -30,6 +30,14 @@ def test_paddle_fallback_is_disabled_by_default(monkeypatch):
     assert paddle_fallback_enabled("hsbc") is False
 
 
+def test_enabled_fallback_defaults_to_hsbc_only(monkeypatch):
+    monkeypatch.setenv("PADDLEOCR_FALLBACK_ENABLED", "1")
+    monkeypatch.delenv("PADDLEOCR_FALLBACK_BANKS", raising=False)
+
+    assert paddle_fallback_enabled("hsbc") is True
+    assert paddle_fallback_enabled("bbva") is False
+
+
 def test_paddle_fallback_can_be_restricted_by_bank(monkeypatch):
     monkeypatch.setenv("PADDLEOCR_FALLBACK_ENABLED", "1")
     monkeypatch.setenv("PADDLEOCR_FALLBACK_BANKS", "hsbc,banorte")
