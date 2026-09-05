@@ -143,7 +143,7 @@ Ver [`docs/06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_w
 Requisitos generales:
 
 - Windows 10/11 o Windows Server para el escenario objetivo;
-- Python 3.12 o 3.13;
+- Python 3.10, 3.11, 3.12 o 3.13;
 - Git;
 - entorno virtual aislado.
 
@@ -169,10 +169,12 @@ Para herramientas de calidad y pruebas:
 ```powershell
 python -m pip install --group dev
 ruff check .
-pytest
+pytest -m "not integration"
 ```
 
-No usar información real para validar una instalación de desarrollo. Consulte [`docs/00_setup.md`](docs/00_setup.md).
+Las pruebas con PDFs reales son opt-in y deben usar archivos autorizados fuera del repositorio mediante `ESTADO_CUENTA_TEST_PDF` o `ESTADO_CUENTA_TEST_PDFS`.
+
+No usar información real para validar una instalación de desarrollo fuera de un entorno institucional autorizado. Consulte [`docs/00_setup.md`](docs/00_setup.md).
 
 ## 10. Documentación
 
@@ -185,6 +187,7 @@ No usar información real para validar una instalación de desarrollo. Consulte 
 - [`06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md): línea base prevista para Windows Server/HTTPS.
 - [`07_checklist_revision_tic.md`](docs/07_checklist_revision_tic.md): checklist de auditoría TIC, brechas y criterios de no-go.
 - [`08_estandares_ingenieria.md`](docs/08_estandares_ingenieria.md): reglas de ingeniería, comentarios, dependencias y evidencia de liberación.
+- [`09_auditoria_integral_produccion.md`](docs/09_auditoria_integral_produccion.md): auditoría completa del código, riesgos y gates de equivalencia funcional.
 
 ## 11. Estado de cumplimiento
 
