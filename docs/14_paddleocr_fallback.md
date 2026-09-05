@@ -127,11 +127,15 @@ Controles implementados:
 La línea técnica utiliza:
 
 - PaddleOCR `>=3.7,<3.8`;
-- PaddlePaddle `>=3.3.1,<3.4`;
+- PaddlePaddle `3.2.0` fijado para el runtime CPU;
 - modelo de detección `PP-OCRv5_mobile_det`;
 - modelo de reconocimiento `latin_PP-OCRv5_mobile_rec`;
 - `PADDLEOCR_LANG=es` como único idioma admitido por la aplicación;
-- inferencia CPU como configuración inicial.
+- inferencia CPU como configuración inicial;
+- oneDNN/MKL-DNN habilitado por defecto para conservar rendimiento práctico en CPU;
+- límite del lado mayor de detección para evitar procesamiento innecesario de páginas completas a alta resolución.
+
+La versión 3.2.0 del runtime se fija deliberadamente para mantener una combinación reproducible con PaddleOCR 3.7 en Windows y Python 3.12/3.13. No debe actualizarse de forma independiente sin repetir pruebas funcionales y de rendimiento.
 
 PaddleOCR no proporciona un modelo independiente `es-MX`; el modelo latino oficial incluye español y reconocimiento numérico. La aplicación restringe el contrato funcional al español utilizado en documentación bancaria mexicana.
 
@@ -148,6 +152,8 @@ Para desarrollo local con Flet y PaddleOCR:
 ```powershell
 python -m pip install -e ".[desktop,paddleocr]"
 ```
+
+La instalación del extra fija PaddlePaddle 3.2.0. Si el ambiente ya contiene otra versión, el instalador debe reconciliarla con la versión declarada por el proyecto antes de ejecutar UAT.
 
 La automatización de calidad valida el runtime PaddleOCR/PaddlePaddle en Windows con Python 3.12 y Python 3.13.
 
@@ -191,9 +197,16 @@ $env:PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR = `
 $env:PADDLEOCR_DEVICE = "cpu"
 $env:PADDLEOCR_LANG = "es"
 $env:PADDLEOCR_DPI = "300"
+$env:PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN = "1600"
+$env:PADDLEOCR_ENABLE_MKLDNN = "1"
+$env:PADDLEOCR_CPU_THREADS = "10"
 ```
 
 `PADDLEOCR_LANG` debe permanecer en `es`. Cualquier otro valor es rechazado por el reader.
+
+`PADDLEOCR_ENABLE_MKLDNN=1` es la configuración operativa normal para CPU. Puede establecerse en `0` únicamente para diagnóstico de compatibilidad; esa configuración puede reducir de forma importante el rendimiento.
+
+`PADDLEOCR_CPU_THREADS` se acota internamente entre 1 y 32. `PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN` se acota entre 960 y 2400.
 
 Para la primera UAT se recomienda habilitar el fallback únicamente para HSBC. La ampliación a otros bancos debe realizarse con corpus de prueba representativo.
 
@@ -258,19 +271,20 @@ Si TIC requiere incorporar PaddleOCR dentro del ejecutable de escritorio, debe t
 Antes de habilitar PaddleOCR en producción:
 
 1. instalar el extra PaddleOCR en ambiente controlado;
-2. registrar e instalar modelos aprobados;
-3. validar que no existan descargas durante procesamiento;
-4. habilitar inicialmente HSBC;
-5. procesar casos donde Tesseract obtiene resultados correctos y confirmar que PaddleOCR no se ejecuta innecesariamente;
-6. procesar casos con taches de validación;
-7. procesar casos donde Tesseract no obtiene movimientos o validaciones suficientes;
-8. comparar Tesseract y PaddleOCR en Flet y Streamlit;
-9. alternar manualmente el motor y verificar que toda la vista cambie de candidato;
-10. exportar Excel con Tesseract seleccionado y con PaddleOCR seleccionado y comprobar que la exportación respete la selección;
-11. validar nombres, conceptos, acentos, `Ñ`, números, fechas, referencias e importes de documentación mexicana;
-12. medir CPU, memoria y tiempos;
-13. comprobar rollback por configuración;
-14. documentar aceptación funcional y técnica.
+2. confirmar `paddle.__version__ == "3.2.0"`;
+3. registrar e instalar modelos aprobados;
+4. validar que no existan descargas durante procesamiento;
+5. habilitar inicialmente HSBC;
+6. procesar casos donde Tesseract obtiene resultados correctos y confirmar que PaddleOCR no se ejecuta innecesariamente;
+7. procesar casos con taches de validación;
+8. procesar casos donde Tesseract no obtiene movimientos o validaciones suficientes;
+9. comparar Tesseract y PaddleOCR en Flet y Streamlit;
+10. alternar manualmente el motor y verificar que toda la vista cambie de candidato;
+11. exportar Excel con Tesseract seleccionado y con PaddleOCR seleccionado y comprobar que la exportación respete la selección;
+12. validar nombres, conceptos, acentos, `Ñ`, números, fechas, referencias e importes de documentación mexicana;
+13. medir CPU, memoria y tiempos;
+14. comprobar rollback por configuración;
+15. documentar aceptación funcional y técnica.
 
 ## 16. Criterios de aceptación TIC
 

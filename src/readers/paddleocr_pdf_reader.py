@@ -24,12 +24,11 @@ class PaddleOCRPDFReader:
     detección y reconocimiento deben estar previamente instalados en rutas
     locales autorizadas.
 
-    En CPU se desactiva MKL-DNN/oneDNN para evitar una ruta de inferencia que
-    puede lanzar ``NotImplementedError`` con PaddlePaddle 3.x al ejecutar
-    modelos PP-OCRv5 sobre Windows. Además, la detección limita el lado mayor
-    de la página para no enviar imágenes bancarias renderizadas a 300 DPI a
-    resolución completa al predictor CPU. La prioridad de este reader es
-    estabilidad y reproducibilidad.
+    El runtime institucional usa PaddlePaddle 3.2.0 y mantiene oneDNN/MKL-DNN
+    habilitado por defecto en CPU para conservar un tiempo de inferencia útil.
+    La aceleración puede deshabilitarse explícitamente para diagnóstico mediante
+    ``PADDLEOCR_ENABLE_MKLDNN=0``. La detección limita además el lado mayor de la
+    página para evitar inferencia innecesaria a resolución completa.
     """
 
     MAX_TEXT_PAGES = 5
@@ -39,9 +38,11 @@ class PaddleOCRPDFReader:
     DEFAULT_DETECTION_MODEL_NAME = "PP-OCRv5_mobile_det"
     DEFAULT_RECOGNITION_MODEL_NAME = "latin_PP-OCRv5_mobile_rec"
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN = 1600
+    DEFAULT_ENABLE_MKLDNN = True
+    DEFAULT_CPU_THREADS = 10
 
     _engine: Any | None = None
-    _engine_signature: tuple[str, ...] | None = None
+    _engine_signature: tuple[Any, ...] | None = None
     _engine_lock = Lock()
     _predict_lock = Lock()
 
@@ -104,14 +105,15 @@ class PaddleOCRPDFReader:
                 "recognition_model": config["recognition_model_name"],
                 "coordinate_space": "pdf_points",
                 "network_model_downloads": False,
-                "mkldnn_enabled": False,
+                "mkldnn_enabled": config["enable_mkldnn"],
+                "cpu_threads": config["cpu_threads"],
                 "text_det_limit_side_len": text_det_limit_side_len,
                 "text_det_limit_type": "max",
             },
         )
 
     @classmethod
-    def _load_config(cls) -> dict[str, str]:
+    def _load_config(cls) -> dict[str, Any]:
         detection_dir = cls._required_model_dir(
             "PADDLEOCR_TEXT_DETECTION_MODEL_DIR"
         )
@@ -149,6 +151,11 @@ class PaddleOCRPDFReader:
             or cls.DEFAULT_RECOGNITION_MODEL_NAME,
             "detection_model_dir": str(detection_dir),
             "recognition_model_dir": str(recognition_dir),
+            "enable_mkldnn": cls._configured_bool(
+                "PADDLEOCR_ENABLE_MKLDNN",
+                cls.DEFAULT_ENABLE_MKLDNN,
+            ),
+            "cpu_threads": cls._configured_cpu_threads(),
         }
 
     @staticmethod
@@ -168,6 +175,30 @@ class PaddleOCRPDFReader:
             )
 
         return path
+
+    @staticmethod
+    def _configured_bool(variable_name: str, default: bool) -> bool:
+        configured = os.getenv(variable_name, "").strip().lower()
+        if not configured:
+            return default
+        if configured in {"1", "true", "yes", "on", "si", "sí"}:
+            return True
+        if configured in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    @classmethod
+    def _configured_cpu_threads(cls) -> int:
+        configured = os.getenv("PADDLEOCR_CPU_THREADS", "").strip()
+        if not configured:
+            return cls.DEFAULT_CPU_THREADS
+
+        try:
+            threads = int(configured)
+        except ValueError:
+            return cls.DEFAULT_CPU_THREADS
+
+        return max(1, min(threads, 32))
 
     @classmethod
     def _configured_dpi(cls) -> int:
@@ -196,8 +227,6 @@ class PaddleOCRPDFReader:
         except ValueError:
             return cls.DEFAULT_TEXT_DET_LIMIT_SIDE_LEN
 
-        # 960 mantiene legibilidad de texto pequeño; 2400 evita volver a una
-        # carga cercana a la página completa de 300 DPI en CPU.
         return max(960, min(side_len, 2400))
 
     @classmethod
@@ -209,6 +238,8 @@ class PaddleOCRPDFReader:
         recognition_model_name: str,
         detection_model_dir: str,
         recognition_model_dir: str,
+        enable_mkldnn: bool,
+        cpu_threads: int,
     ):
         signature = (
             language,
@@ -217,22 +248,18 @@ class PaddleOCRPDFReader:
             recognition_model_name,
             detection_model_dir,
             recognition_model_dir,
+            enable_mkldnn,
+            cpu_threads,
         )
 
         with cls._engine_lock:
             if cls._engine is not None and cls._engine_signature == signature:
                 return cls._engine
 
-            # PaddleX comprueba por defecto conectividad con proveedores de
-            # modelos. Para este proyecto se fuerza modo local antes del import.
             os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "1"
-
-            # PaddlePaddle 3.x puede entrar por oneDNN/MKL-DNN en CPU y lanzar
-            # NotImplementedError durante predict() con ciertos grafos PP-OCRv5.
-            # La variable se establece antes de importar PaddleOCR y además el
-            # constructor recibe enable_mkldnn=False para hacer la política
-            # explícita y reproducible.
-            os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
+            os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = (
+                "1" if enable_mkldnn else "0"
+            )
 
             try:
                 from paddleocr import PaddleOCR
@@ -252,7 +279,8 @@ class PaddleOCRPDFReader:
                     use_doc_orientation_classify=False,
                     use_doc_unwarping=False,
                     use_textline_orientation=False,
-                    enable_mkldnn=False,
+                    enable_mkldnn=enable_mkldnn,
+                    cpu_threads=cpu_threads,
                 )
             except Exception as exc:
                 raise PaddleOCRConfigurationError(
@@ -282,11 +310,6 @@ class PaddleOCRPDFReader:
 
         image_array = np.asarray(image)
 
-        # El engine y sus modelos se mantienen en memoria. La inferencia se
-        # serializa para conservar un comportamiento estable si ocr_workers > 1.
-        # El detector limita el lado mayor: evita inferencia a resolución
-        # completa de una página renderizada a 300 DPI, pero conserva esa fuente
-        # para que las coordenadas y recortes mantengan suficiente detalle.
         with cls._predict_lock:
             result = engine.predict(
                 image_array,

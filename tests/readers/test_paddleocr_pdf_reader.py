@@ -80,6 +80,8 @@ def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
         str(recognition),
     )
     monkeypatch.setenv("PADDLEOCR_LANG", "es")
+    monkeypatch.delenv("PADDLEOCR_ENABLE_MKLDNN", raising=False)
+    monkeypatch.delenv("PADDLEOCR_CPU_THREADS", raising=False)
 
     config = PaddleOCRPDFReader._load_config()
 
@@ -88,6 +90,8 @@ def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
     assert config["recognition_model_dir"] == str(recognition.resolve())
     assert config["detection_model_name"] == "PP-OCRv5_mobile_det"
     assert config["recognition_model_name"] == "latin_PP-OCRv5_mobile_rec"
+    assert config["enable_mkldnn"] is True
+    assert config["cpu_threads"] == 10
 
 
 def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
@@ -110,7 +114,7 @@ def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
         PaddleOCRPDFReader._load_config()
 
 
-def test_cpu_engine_disables_mkldnn_for_stable_paddle_inference(monkeypatch):
+def test_cpu_engine_enables_mkldnn_and_threads_by_default(monkeypatch):
     captured_kwargs = {}
 
     class FakePaddleOCR:
@@ -135,16 +139,69 @@ def test_cpu_engine_disables_mkldnn_for_stable_paddle_inference(monkeypatch):
             recognition_model_name="latin_PP-OCRv5_mobile_rec",
             detection_model_dir="C:/modelos/det",
             recognition_model_dir="C:/modelos/rec",
+            enable_mkldnn=True,
+            cpu_threads=10,
         )
 
-        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "0"
-        assert captured_kwargs["enable_mkldnn"] is False
+        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "1"
+        assert captured_kwargs["enable_mkldnn"] is True
+        assert captured_kwargs["cpu_threads"] == 10
         assert captured_kwargs["device"] == "cpu"
         assert "lang" not in captured_kwargs
         assert "ocr_version" not in captured_kwargs
     finally:
         PaddleOCRPDFReader._engine = None
         PaddleOCRPDFReader._engine_signature = None
+
+
+def test_cpu_engine_can_disable_mkldnn_for_diagnostics(monkeypatch):
+    captured_kwargs = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PaddleOCR=FakePaddleOCR),
+    )
+
+    PaddleOCRPDFReader._engine = None
+    PaddleOCRPDFReader._engine_signature = None
+
+    try:
+        PaddleOCRPDFReader._get_engine(
+            language="es",
+            device="cpu",
+            detection_model_name="PP-OCRv5_mobile_det",
+            recognition_model_name="latin_PP-OCRv5_mobile_rec",
+            detection_model_dir="C:/modelos/det",
+            recognition_model_dir="C:/modelos/rec",
+            enable_mkldnn=False,
+            cpu_threads=4,
+        )
+
+        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "0"
+        assert captured_kwargs["enable_mkldnn"] is False
+        assert captured_kwargs["cpu_threads"] == 4
+    finally:
+        PaddleOCRPDFReader._engine = None
+        PaddleOCRPDFReader._engine_signature = None
+
+
+def test_cpu_threads_are_bounded_and_configurable(monkeypatch):
+    monkeypatch.delenv("PADDLEOCR_CPU_THREADS", raising=False)
+    assert PaddleOCRPDFReader._configured_cpu_threads() == 10
+
+    monkeypatch.setenv("PADDLEOCR_CPU_THREADS", "6")
+    assert PaddleOCRPDFReader._configured_cpu_threads() == 6
+
+    monkeypatch.setenv("PADDLEOCR_CPU_THREADS", "0")
+    assert PaddleOCRPDFReader._configured_cpu_threads() == 1
+
+    monkeypatch.setenv("PADDLEOCR_CPU_THREADS", "99")
+    assert PaddleOCRPDFReader._configured_cpu_threads() == 32
 
 
 def test_detection_side_limit_is_bounded_and_configurable(monkeypatch):
@@ -164,8 +221,14 @@ def test_detection_side_limit_is_bounded_and_configurable(monkeypatch):
     assert PaddleOCRPDFReader._configured_detection_side_len() == 1600
 
 
-def test_read_page_limits_detector_by_max_side():
+def test_read_page_limits_detector_by_max_side(monkeypatch):
     captured_kwargs = {}
+    fake_array = SimpleNamespace(shape=(200, 100, 3))
+    monkeypatch.setitem(
+        sys.modules,
+        "numpy",
+        SimpleNamespace(asarray=lambda image: fake_array),
+    )
 
     class FakeEngine:
         def predict(self, image, **kwargs):
