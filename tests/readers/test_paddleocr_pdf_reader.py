@@ -76,10 +76,32 @@ def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
         "PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR",
         str(recognition),
     )
+    monkeypatch.setenv("PADDLEOCR_LANG", "es")
 
     config = PaddleOCRPDFReader._load_config()
 
+    assert config["language"] == "es"
     assert config["detection_model_dir"] == str(detection.resolve())
     assert config["recognition_model_dir"] == str(recognition.resolve())
     assert config["detection_model_name"] == "PP-OCRv5_mobile_det"
     assert config["recognition_model_name"] == "latin_PP-OCRv5_mobile_rec"
+
+
+def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
+    detection = tmp_path / "det"
+    recognition = tmp_path / "rec"
+    detection.mkdir()
+    recognition.mkdir()
+
+    monkeypatch.setenv(
+        "PADDLEOCR_TEXT_DETECTION_MODEL_DIR",
+        str(detection),
+    )
+    monkeypatch.setenv(
+        "PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR",
+        str(recognition),
+    )
+    monkeypatch.setenv("PADDLEOCR_LANG", "en")
+
+    with pytest.raises(PaddleOCRConfigurationError, match="únicamente en español"):
+        PaddleOCRPDFReader._load_config()
