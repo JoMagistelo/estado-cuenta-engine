@@ -24,9 +24,9 @@ La versión actual del repositorio soporta:
 - modelo de dominio unificado (`EstadoCuenta`);
 - validación de movimientos contra el resumen financiero;
 - exportación a Excel;
-- interfaces actuales en Streamlit y Flet.
-
-La documentación histórica que describía un alcance exclusivo de BBVA y PDF digital ya no representa el estado del código.
+- interfaces actuales en Streamlit y Flet;
+- build Windows mediante PyInstaller;
+- imagen OCI opcional para Streamlit, sin sustituir el ejecutable actual.
 
 ## 3. Flujo técnico actual
 
@@ -65,7 +65,7 @@ Para OCR, `statement_processor` puede seleccionar un parser especializado `<banc
 ## 4. Estructura principal
 
 ```text
-app/                    Interfaces de usuario actuales (Streamlit / Flet)
+app/                    Interfaces actuales (Streamlit / Flet)
 assets/                 Recursos visuales
 src/
   catalog/              Firmas y catálogos técnicos
@@ -82,10 +82,11 @@ src/
 tests/                  Pruebas automatizadas y utilidades de prueba
 vendor/tesseract/       Runtime/modelos Tesseract actualmente versionados
 docs/                   Documentación técnica, normativa y de despliegue
+Dockerfile              Contenedor OCI opcional de Streamlit
 pyproject.toml          Metadatos, dependencias y configuración de calidad
 ```
 
-## 5. Política de dependencias
+## 5. Política de dependencias y cadena de suministro
 
 `pyproject.toml` es la **fuente canónica** del proyecto. Las dependencias se mantienen por responsabilidad:
 
@@ -95,7 +96,7 @@ pyproject.toml          Metadatos, dependencias y configuración de calidad
 
 No se versiona un `requirements.txt` obtenido mediante `pip freeze`. Las versiones exactas de una liberación deben resolverse de forma controlada y conservarse como evidencia del release, junto con el inventario de terceros, revisión de vulnerabilidades y, cuando corresponda, SBOM.
 
-La CI audita vulnerabilidades conocidas de las dependencias instaladas y genera evidencia del inventario resuelto. Dependabot propone actualizaciones de Python y GitHub Actions para revisión humana; ninguna actualización se aplica automáticamente a producción.
+La automatización de calidad audita vulnerabilidades conocidas de las dependencias instaladas, genera un inventario del entorno resuelto y registra hashes de integridad de artefactos relevantes. Las actualizaciones de dependencias requieren revisión humana y los mismos gates de calidad que cualquier otro cambio.
 
 ## 6. Protección de datos personales
 
@@ -103,8 +104,8 @@ Los estados de cuenta contienen datos personales y financieros y pueden revelar 
 
 Reglas obligatorias para desarrollo y pruebas:
 
-- **No subir a Git estados de cuenta reales**, capturas identificables, OCR/JSON derivados, archivos Excel resultantes ni bases de datos con información real.
-- **No incluir datos personales en logs, excepciones, screenshots, issues o pull requests.**
+- **No versionar estados de cuenta reales**, capturas identificables, OCR/JSON derivados, archivos Excel resultantes ni bases de datos con información real.
+- **No incluir datos personales en logs, excepciones, tickets o revisiones de cambio.**
 - Usar únicamente fixtures sintéticos o previamente anonimizados conforme al procedimiento institucional autorizado.
 - No enviar documentos, texto extraído o resultados a servicios externos, IA, nubes o APIs de terceros sin autorización institucional y análisis previo de transferencia/encargo, seguridad y privacidad.
 - No versionar contraseñas, tokens, llaves privadas, certificados ni archivos `.env`.
@@ -118,38 +119,40 @@ El proyecto se documenta tomando como referencia, entre otros instrumentos vigen
 
 La matriz normativa, su aplicabilidad y los entregables requeridos están en [`docs/05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md). La separación entre controles demostrables por el repositorio y controles institucionales se mantiene en [`docs/10_matriz_evidencias_tic.md`](docs/10_matriz_evidencias_tic.md).
 
-> Esta documentación facilita la revisión técnica y de cumplimiento, pero **no sustituye** los dictámenes, autorizaciones, evaluación de impacto, documento de seguridad, análisis de riesgos, Plan Institucional de Ciberseguridad ni demás instrumentos que determinen las áreas competentes.
+> Esta documentación facilita la revisión técnica y de cumplimiento, pero **no sustituye** dictámenes, autorizaciones, evaluación de impacto, Documento de Seguridad, análisis de riesgos, Plan Institucional de Ciberseguridad ni demás instrumentos que determinen las áreas competentes.
 
-## 8. Despliegue previsto
+## 8. Despliegue y portabilidad
 
-La línea de despliegue actualmente prevista es **Windows Server** en infraestructura institucional. Antes de producción deberán definirse y aprobarse, como mínimo:
+La aplicación conserva la vía Windows existente y añade una vía OCI opcional para Streamlit. Esto permite que TIC evalúe el esquema de despliegue sin obligar a reescribir el motor bancario.
+
+Antes de producción deberán definirse y aprobarse, como mínimo:
 
 - topología de red y segmentación;
-- cuenta de servicio y principio de mínimo privilegio;
+- cuenta o identidad de servicio y principio de mínimo privilegio;
 - autenticación, autorización por roles y, cuando corresponda, MFA;
 - cifrado en tránsito mediante HTTPS y certificado institucional autorizado;
 - cifrado y controles de acceso para información en reposo;
 - gestión de secretos y certificados fuera del código fuente;
 - bitácoras de auditoría sin exposición de datos personales;
 - respaldo, restauración, continuidad y recuperación;
-- análisis de vulnerabilidades, dependencias y pruebas de seguridad;
+- análisis de vulnerabilidades, dependencias e imágenes cuando aplique;
 - monitoreo y procedimiento de respuesta a incidentes;
 - política de conservación y eliminación de entradas, temporales y salidas.
 
-La interfaz de Streamlit existe hoy como aplicación. **No se ha definido todavía que Streamlit sea una API.** Si la aplicación Angular prevista requiere consumo programático, se deberá evaluar una capa API dedicada que encapsule el motor y permita controles de autenticación, autorización, trazabilidad y versionado. La decisión de integración queda abierta hasta revisión de arquitectura con TIC.
+La interfaz de Streamlit existe hoy como aplicación. **No debe tratarse como una API de integración.** Si SIEC requiere consumo programático, deberá evaluarse una capa API dedicada que encapsule el motor y permita controles de autenticación, autorización, trazabilidad, límites, versionado y manejo seguro de archivos.
 
-Ver [`docs/06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md).
+La portabilidad y la opción de contenedores se documentan en [`docs/13_portabilidad_y_contenedores.md`](docs/13_portabilidad_y_contenedores.md).
 
 ## 9. Instalación de desarrollo
 
 Requisitos generales:
 
-- Windows 10/11 o Windows Server para el escenario objetivo;
+- Windows 10/11 o Windows Server para el escenario actual;
 - Python 3.12 o 3.13;
 - Git;
 - entorno virtual aislado.
 
-El mínimo de Python 3.12 refleja el código actual de la interfaz Flet y se valida en CI; no se declara soporte para versiones que el `master` vigente no puede compilar.
+El mínimo de Python 3.12 refleja el código actual de la interfaz Flet y se valida en CI; no se declara soporte para versiones que el código vigente no puede compilar.
 
 Para Streamlit:
 
@@ -176,9 +179,16 @@ ruff check .
 pytest -m "not integration"
 ```
 
-Las pruebas con PDFs reales son opt-in y deben usar archivos autorizados fuera del repositorio mediante `ESTADO_CUENTA_TEST_PDF` o `ESTADO_CUENTA_TEST_PDFS`.
+Para validar el contenedor OCI opcional:
 
-No usar información real para validar una instalación de desarrollo fuera de un entorno institucional autorizado. Consulte [`docs/00_setup.md`](docs/00_setup.md).
+```powershell
+docker build -t estado-cuenta-engine .
+docker run --rm -p 8501:8501 estado-cuenta-engine
+```
+
+El motor no depende de Docker para funcionar. La imagen existe como alternativa de empaquetado y debe ejecutarse únicamente en infraestructura aprobada por TIC.
+
+Las pruebas con PDFs reales son opt-in y deben usar archivos autorizados fuera del repositorio mediante `ESTADO_CUENTA_TEST_PDF` o `ESTADO_CUENTA_TEST_PDFS`.
 
 ## 10. Documentación
 
@@ -195,6 +205,8 @@ No usar información real para validar una instalación de desarrollo fuera de u
 - [`10_matriz_evidencias_tic.md`](docs/10_matriz_evidencias_tic.md): controles demostrables por el repositorio y pendientes institucionales.
 - [`11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md): triage, remediación, incidentes y terceros.
 - [`12_checklist_liberacion_produccion.md`](docs/12_checklist_liberacion_produccion.md): expediente mínimo y criterios GO/NO-GO para una liberación.
+- [`13_portabilidad_y_contenedores.md`](docs/13_portabilidad_y_contenedores.md): portabilidad, imagen OCI e integración futura.
+- [`14_control_cambios.md`](docs/14_control_cambios.md): checklist portable de control de cambios.
 - [`SECURITY.md`](SECURITY.md): reglas para reportar vulnerabilidades sin exponer datos sensibles.
 
 ## 11. Estado de cumplimiento
