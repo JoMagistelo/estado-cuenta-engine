@@ -79,10 +79,15 @@ def test_paddle_must_improve_failures_without_reducing_coverage():
     paddle_less_coverage = [
         _validation("Abonos", True),
     ]
+    paddle_different_validators = [
+        _validation("Saldo final", True),
+        _validation("Ecuación financiera", True),
+    ]
 
     assert should_select_paddle_result(tesseract, paddle_better) is True
     assert should_select_paddle_result(tesseract, paddle_equal) is False
     assert should_select_paddle_result(tesseract, paddle_less_coverage) is False
+    assert should_select_paddle_result(tesseract, paddle_different_validators) is False
 
 
 def test_validation_profile_contains_no_financial_values():
@@ -96,6 +101,7 @@ def test_validation_profile_contains_no_financial_values():
     assert profile.total == 2
     assert profile.passed == 1
     assert profile.failed == 1
+    assert profile.names == ("Abonos", "Cargos")
     assert profile.failed_names == ("Abonos",)
 
 
