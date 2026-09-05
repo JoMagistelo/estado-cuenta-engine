@@ -32,7 +32,7 @@ Estado Cuenta Engine
         ├─ Lectura PDF digital
         └─ OCR local
             ├─ Tesseract (primario)
-            └─ PaddleOCR (fallback opcional)
+            └─ PaddleOCR (segundo OCR opcional)
 ```
 
 Principios:
@@ -44,7 +44,7 @@ Principios:
 - los documentos permanecen dentro de infraestructura autorizada;
 - el motor no utiliza servicios OCR alojados para procesar estados de cuenta;
 - Tesseract opera localmente como OCR primario;
-- PaddleOCR, cuando sea autorizado, opera localmente y sólo como fallback controlado;
+- PaddleOCR, cuando sea autorizado, opera localmente como segundo motor sólo para resultados que requieren revisión;
 - los modelos PaddleOCR deben existir previamente en almacenamiento institucional autorizado y no se descargan durante el procesamiento.
 
 Si TIC utiliza un reverse proxy institucional distinto de IIS, deberá conservar los mismos principios de aislamiento, TLS, control de acceso y trazabilidad.
@@ -59,9 +59,11 @@ Responsable de publicación HTTPS, certificado TLS, DNS, exposición de red, rev
 
 Responsable de la interfaz web y la invocación del pipeline. En servidor debe ejecutarse en modo headless, limitado a la interfaz/puerto interno definido por TIC.
 
+Cuando existen dos candidatos OCR, Streamlit permite comparar Tesseract/PaddleOCR y seleccionar el candidato que se visualizará y exportará.
+
 ### Estado Cuenta Engine
 
-Responsable de clasificación Digital/OCR, lectura, detección de institución, parsing especializado, normalización, validación y exportación.
+Responsable de clasificación Digital/OCR, lectura, detección de institución, parsing especializado, normalización, validación, revisión OCR y exportación.
 
 El motor no administra identidad institucional, certificados, DNS ni políticas de red.
 
@@ -71,9 +73,9 @@ OCR local primario. El runtime distribuido con la versión Windows queda sujeto 
 
 ### PaddleOCR / PaddlePaddle
 
-Runtime OCR opcional para recuperación de casos donde Tesseract falla validación financiera. Se instala únicamente cuando TIC autorice el fallback.
+Runtime OCR opcional para generar un segundo candidato cuando el resultado Tesseract requiere revisión. Se instala únicamente cuando TIC autorice esta capacidad.
 
-La aplicación exige modelos locales configurados expresamente y deshabilita la comprobación de proveedores de modelos. Los modelos deben formar parte del inventario institucional de terceros con procedencia, licencia e integridad verificadas.
+La aplicación exige modelos locales configurados expresamente y deshabilita la comprobación automática de proveedores de modelos. Los modelos deben formar parte del inventario institucional de terceros con procedencia, licencia e integridad verificadas.
 
 La política completa se encuentra en [`14_paddleocr_fallback.md`](14_paddleocr_fallback.md).
 
@@ -92,7 +94,7 @@ Configuración base esperada:
 - antimalware/EDR y controles de plataforma definidos por TIC;
 - capacidad suficiente de CPU, memoria y espacio temporal para OCR.
 
-PaddlePaddle incrementa de forma relevante el tamaño del runtime y el consumo potencial de memoria; el dimensionamiento debe validarse en UAT antes de habilitar el fallback en producción.
+PaddlePaddle incrementa de forma relevante el tamaño del runtime y el consumo potencial de memoria; el dimensionamiento debe validarse en UAT antes de habilitar el segundo OCR en producción.
 
 ## 5. Cuenta de servicio y ACL
 
@@ -151,7 +153,7 @@ C:\Apps\EstadoCuentaEngine\.venv\Scripts\python.exe -m pip install -e `
 
 Cuando la política institucional requiera instalación sin Internet, las dependencias y modelos deberán entregarse mediante repositorio interno, caché o paquete offline aprobado por TIC.
 
-## 8. Configuración del fallback PaddleOCR
+## 8. Configuración de revisión PaddleOCR
 
 Ejemplo para habilitación controlada inicial en HSBC:
 
@@ -166,9 +168,11 @@ $env:PADDLEOCR_DEVICE = "cpu"
 $env:PADDLEOCR_LANG = "es"
 ```
 
-El fallback permanece deshabilitado si `PADDLEOCR_FALLBACK_ENABLED` no está activo. La configuración productiva debe incorporarse al mecanismo institucional de variables/configuración del servicio y no a archivos con secretos dentro del código.
+La capacidad permanece deshabilitada si `PADDLEOCR_FALLBACK_ENABLED` no está activo. La configuración productiva debe incorporarse al mecanismo institucional de variables/configuración del servicio y no a archivos con secretos dentro del código.
 
 No se requiere salida a Internet para inferencia una vez instalados el runtime y los modelos locales autorizados.
+
+Cuando PaddleOCR produce un candidato alterno, la aplicación conserva ambos candidatos en memoria. El usuario autorizado puede seleccionar Tesseract o PaddleOCR en la interfaz; la selección vigente es la utilizada para la exportación.
 
 ## 9. Ejecución de Streamlit
 
@@ -217,19 +221,22 @@ En producción:
 - aplicar reglas institucionales de conservación y archivo;
 - analizar entradas con controles antimalware definidos por TIC cuando corresponda.
 
-El uso de PaddleOCR no cambia estas reglas: el mismo documento se reprocesa localmente dentro del flujo cuando la condición de fallback se cumple.
+El uso de PaddleOCR no cambia estas reglas: cuando corresponde, el mismo documento se reprocesa localmente y los dos candidatos se conservan en memoria para revisión sin persistir automáticamente copias alternas.
 
 ## 13. Logs y monitoreo
 
 Registrar información operativa como fecha/hora, identificador de proceso, versión, método Digital/OCR, duración y código de resultado/error.
 
-Para el fallback puede registrarse:
+Para la revisión OCR puede registrarse:
 
 - intento PaddleOCR sí/no;
+- motores disponibles;
+- motor recomendado;
 - motor seleccionado;
 - cantidad de validaciones disponibles por motor;
 - cantidad de validaciones fallidas por motor;
-- tipo de error técnico del fallback.
+- cantidad de movimientos por motor;
+- tipo de error técnico del segundo OCR.
 
 No registrar texto OCR completo, importes de validación, nombres, RFC, cuentas, CLABE, conceptos de movimientos ni contenido del PDF.
 
@@ -243,11 +250,11 @@ Antes de producción medir con corpus autorizado:
 - CPU máxima;
 - espacio temporal;
 - concurrencia esperada;
-- frecuencia real de activación del fallback;
+- frecuencia real de activación del segundo OCR;
 - costo adicional de PaddleOCR cuando se activa;
-- comportamiento ante lotes con múltiples fallas Tesseract.
+- comportamiento ante lotes con múltiples resultados Tesseract que requieren revisión.
 
-PaddleOCR sólo se ejecuta cuando Tesseract presenta una falla de validación y el fallback está habilitado, evitando duplicar procesamiento OCR en documentos que validan correctamente.
+PaddleOCR sólo se ejecuta cuando Tesseract presenta señales objetivas de revisión y la capacidad está habilitada. Los documentos digitales y los OCR primarios con validaciones principales correctas no duplican procesamiento.
 
 ## 15. Seguridad de red
 
@@ -290,18 +297,20 @@ Comprobar al menos:
 - carga de PDF;
 - procesamiento Digital;
 - OCR Tesseract;
-- fallback PaddleOCR si fue habilitado;
-- exportación;
+- activación PaddleOCR ante un caso de revisión si fue habilitado;
+- comparación Tesseract/PaddleOCR en interfaz;
+- cambio manual del candidato seleccionado;
+- exportación del candidato seleccionado;
 - logs sin datos personales innecesarios;
 - reinicio controlado;
 - rollback disponible.
 
 ## 19. Responsabilidades
 
-**Equipo de aplicación:** código, dependencias declaradas, pruebas, política de fallback, documentación técnica y evidencia de integridad.
+**Equipo de aplicación:** código, dependencias declaradas, pruebas, política de revisión OCR, documentación técnica y evidencia de integridad.
 
 **TIC / infraestructura:** Windows Server, IIS, DNS, TLS, red, cuenta de servicio, hardening, monitoreo, respaldos, gestión de parches, instalación/aprobación de PaddleOCR/PaddlePaddle/modelos y operación.
 
-**Área funcional:** validación de resultados, UAT del fallback y aceptación funcional.
+**Área funcional:** validación de resultados, UAT de comparación OCR y aceptación funcional.
 
 **Áreas competentes de seguridad/protección de datos:** controles, riesgos, Documento de Seguridad, incidentes y demás instrumentos aplicables.
