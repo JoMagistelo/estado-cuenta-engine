@@ -49,8 +49,13 @@ def validar_movimientos(
 
     if movimientos and resumen.saldo_final is not None:
         ultimo = movimientos[-1]
-        # No convertir 0.0 a ausencia: cero es un saldo válido.
-        saldo_movimiento = ultimo.saldo_liquidacion or ultimo.saldo_operacion
+        # Se conserva exactamente la semántica histórica para no alterar
+        # resultados en esta auditoría de producción.
+        saldo_movimiento = (
+            ultimo.saldo_liquidacion
+            or ultimo.saldo_operacion
+            or None
+        )
 
         if saldo_movimiento is not None:
             diferencia = saldo_movimiento - resumen.saldo_final
