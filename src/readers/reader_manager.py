@@ -9,26 +9,12 @@ from .pdf_word_reader import PDFWordReader
 from .tesseract_pdf_reader import TesseractPDFReader
 
 
-# ============================================================
-# RESULTADO DE LA PRIMERA ETAPA
-# ============================================================
-
-
 class PDFTextStageResult:
-    """
-    Resultado de la primera etapa de lectura.
+    """Resultado de la etapa inicial de lectura de texto.
 
-    Contiene:
-
-        document
-            -> DocumentData con raw_text pero todavía sin
-               spatial_words.
-
-        initial_empty_pages
-            -> páginas iniciales sin texto.
-
-        has_extractable_text
-            -> indica si existe texto extraíble.
+    `document` contiene `raw_text` y todavía no incluye palabras espaciales.
+    `initial_empty_pages` indica cuántas páginas iniciales no aportaron texto y
+    `has_extractable_text` permite al pipeline decidir si requiere OCR.
     """
 
     __slots__ = (
@@ -43,42 +29,26 @@ class PDFTextStageResult:
         initial_empty_pages: int,
         has_extractable_text: bool,
     ) -> None:
-
         self.document = document
         self.initial_empty_pages = initial_empty_pages
         self.has_extractable_text = has_extractable_text
 
 
-# ============================================================
-# READER MANAGER
-# ============================================================
-
-
 class ReaderManager:
-
-    # ========================================================
-    # LECTURA COMPLETA
-    # ========================================================
+    """Fachada de lectura digital y OCR utilizada por el pipeline."""
 
     @staticmethod
     def read(
         file_path: str | Path,
         start_page: int = 0,
     ) -> DocumentData:
-        """
-        Lee texto y palabras espaciales.
-
-        Esta función conserva el comportamiento original
-        de ReaderManager.read().
-        """
-
+        """Lee texto y palabras espaciales desde `start_page`."""
         file_path = Path(file_path)
 
         raw_text = PDFTextReader.read(
             file_path,
             start_page=start_page,
         )
-
         spatial_words = PDFWordReader.read(
             file_path,
             start_page=start_page,
@@ -88,37 +58,16 @@ class ReaderManager:
             raw_text=raw_text,
             normalized_text="",
             spatial_words=spatial_words,
-            metadata={
-                "start_page": start_page,
-            },
+            metadata={"start_page": start_page},
         )
-
-    # ========================================================
-    # PRIMERA ETAPA: SOLO TEXTO
-    # ========================================================
 
     @staticmethod
     def read_text_stage(
         file_path: str | Path,
         start_page: int = 0,
     ) -> PDFTextStageResult:
-        """
-        Primera etapa del pipeline.
-
-        Lee únicamente texto.
-
-        NO ejecuta PDFWordReader.
-
-        Esta operación permite decidir posteriormente si
-        el documento debe tratarse como:
-
-            - PDF digital
-            - PDF con extracción sospechosa
-            - PDF imagen / OCR
-        """
-
+        """Lee sólo texto para clasificar el documento antes del reader espacial."""
         file_path = Path(file_path)
-
         result = PDFTextReader.read_stage(
             file_path,
             start_page=start_page,
@@ -128,9 +77,7 @@ class ReaderManager:
             raw_text=result.raw_text,
             normalized_text="",
             spatial_words=[],
-            metadata={
-                "start_page": start_page,
-            },
+            metadata={"start_page": start_page},
         )
 
         return PDFTextStageResult(
@@ -139,46 +86,25 @@ class ReaderManager:
             has_extractable_text=result.has_extractable_text,
         )
 
-    # ========================================================
-    # SOLO PALABRAS ESPACIALES
-    # ========================================================
-
     @staticmethod
     def read_spatial_words(
         file_path: str | Path,
         start_page: int = 0,
     ) -> list[dict]:
-        """
-        Extrae únicamente las palabras espaciales.
-
-        No ejecuta PDFTextReader.
-
-        Esta es la lectura principal utilizada por los parsers
-        de documentos digitales.
-        """
-
+        """Extrae únicamente palabras y coordenadas para parsers digitales."""
         file_path = Path(file_path)
-
         return PDFWordReader.read(
             file_path,
             start_page=start_page,
         )
-
-    # ========================================================
-    # OCR
-    # ========================================================
 
     @staticmethod
     def read_ocr(
         file_path: str | Path,
         start_page: int = 0,
     ) -> DocumentData:
-        """
-        Procesa el PDF mediante Tesseract OCR.
-        """
-
+        """Procesa el PDF con el reader OCR Tesseract vigente."""
         file_path = Path(file_path)
-
         return TesseractPDFReader.read(
             file_path,
             start_page=start_page,
