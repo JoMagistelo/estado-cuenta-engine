@@ -47,6 +47,58 @@ jobs:
       - name: Build Python package
         run: python -m build
 
+  security-audit:
+    name: Dependency and integrity evidence
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install complete application and audit tooling
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[streamlit,desktop]"
+          python -m pip install --group dev
+
+      - name: Create dependency inventory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "build/security" | Out-Null
+          python -m pip list --format=json | Out-File -Encoding utf8 "build/security/python-packages.json"
+          python -m pip freeze --all | Out-File -Encoding utf8 "build/security/python-packages.txt"
+
+      - name: Audit known Python vulnerabilities
+        shell: pwsh
+        run: |
+          python -m pip_audit --local --strict --progress-spinner off --format json --output "build/security/pip-audit.json"
+
+      - name: Record vendored Tesseract integrity
+        shell: pwsh
+        run: |
+          $path = "vendor/tesseract/tesseract.exe"
+          if (-not (Test-Path $path)) {
+            throw "No se encontró el runtime Tesseract versionado."
+          }
+          $hash = Get-FileHash $path -Algorithm SHA256
+          "$($hash.Hash.ToLower())  $path" | Out-File -Encoding ascii "build/security/tesseract.sha256.txt"
+
+      - name: Upload security evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-evidence
+          path: build/security/
+          if-no-files-found: warn
+          retention-days: 30
+
   ui-smoke:
     name: UI dependency smoke tests
     runs-on: windows-latest
@@ -103,3 +155,18 @@ jobs:
           if (-not (Test-Path "dist/Extractor_de_Movimientos_Financieros.exe")) {
             throw "No se generó el ejecutable esperado."
           }
+
+      - name: Generate executable integrity manifest
+        shell: pwsh
+        run: |
+          $path = "dist/Extractor_de_Movimientos_Financieros.exe"
+          $hash = Get-FileHash $path -Algorithm SHA256
+          "$($hash.Hash.ToLower())  Extractor_de_Movimientos_Financieros.exe" | Out-File -Encoding ascii "dist/Extractor_de_Movimientos_Financieros.sha256.txt"
+
+      - name: Upload build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-build-evidence
+          path: dist/Extractor_de_Movimientos_Financieros.sha256.txt
+          if-no-files-found: error
+          retention-days: 30
