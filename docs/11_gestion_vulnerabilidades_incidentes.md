@@ -1,83 +1,87 @@
 # Gestión de vulnerabilidades e incidentes
 
+## Estado Cuenta Engine — SABG / DGEC
+
 ## 1. Objetivo
 
-Definir una guía técnica mínima para que los hallazgos de seguridad relacionados con Estado Cuenta Engine sean identificados, contenidos, corregidos y documentados de forma trazable, sin sustituir el procedimiento institucional de TIC/SABG.
+Definir el tratamiento técnico mínimo de vulnerabilidades e incidentes relacionados con la aplicación, alineado al procedimiento institucional que determine TIC/SABG.
 
-## 2. Vulnerabilidades de software
+## 2. Detección de vulnerabilidades
 
-### Detección
+Las fuentes mínimas de revisión son:
 
-Las fuentes mínimas son:
+- auditoría automatizada de dependencias Python;
+- avisos de seguridad de proveedores oficiales;
+- revisión de componentes de terceros incluidos en `vendor/`;
+- hallazgos de pruebas de seguridad;
+- revisión de código;
+- observaciones de TIC o del equipo de operación.
 
-- auditoría automatizada de dependencias Python en CI;
-- alertas y PR de Dependabot;
-- revisión de terceros incluidos en `vendor/`;
-- hallazgos de pruebas, revisión de código o TIC;
-- avisos de seguridad de los proveedores oficiales.
+## 3. Registro y clasificación
 
-### Triage
-
-Registrar como mínimo:
+Para cada hallazgo registrar:
 
 - componente y versión;
-- identificador CVE/GHSA u otra referencia cuando exista;
-- exposición real en la arquitectura;
-- severidad técnica;
+- identificador CVE u otra referencia cuando exista;
+- exposición real dentro de la arquitectura;
+- severidad;
 - posibilidad de explotación;
-- impacto potencial en confidencialidad, integridad y disponibilidad;
+- impacto en confidencialidad, integridad y disponibilidad;
 - impacto potencial en datos personales;
-- decisión: corregir, mitigar, aceptar temporalmente o retirar componente.
+- decisión de tratamiento;
+- responsable y fecha objetivo.
 
-Toda aceptación de riesgo debe tener responsable, justificación y fecha de revisión; no debe resolverse únicamente con un comentario informal en código.
+Las opciones de tratamiento pueden incluir corrección, mitigación, aceptación temporal formal o sustitución/retiro del componente.
 
-### Remediación
+## 4. Remediación
 
-1. crear cambio trazable;
-2. actualizar la dependencia o aplicar mitigación;
-3. ejecutar CI completo;
-4. validar que no cambien resultados funcionales cuando el componente esté en el flujo de extracción;
-5. actualizar inventario/evidencia de release;
-6. cerrar el hallazgo con evidencia.
+1. registrar un cambio trazable;
+2. aplicar actualización o mitigación;
+3. ejecutar la automatización de calidad completa;
+4. verificar regresión cuando el componente intervenga en extracción u OCR;
+5. actualizar inventario y evidencia de la versión;
+6. documentar el cierre del hallazgo.
 
-## 3. Binarios y componentes de terceros
+## 5. Componentes de terceros
 
-Para cada componente distribuido con la aplicación debe existir, antes de producción:
+Para cada componente distribuido con la aplicación deben identificarse:
 
 - nombre y versión;
 - fabricante/proyecto de origen;
-- URL o mecanismo de adquisición autorizado;
+- mecanismo de adquisición autorizado;
 - licencia;
-- hash criptográfico del paquete/binario aprobado;
+- hash criptográfico;
 - fecha de incorporación;
 - responsable de revisión;
 - procedimiento de actualización;
-- revisión de vulnerabilidades conocidas.
+- vulnerabilidades conocidas relevantes.
 
-El runtime Tesseract incluido actualmente en `vendor/` debe completar esta evidencia antes de considerarse aprobado para una liberación institucional.
+El runtime Tesseract debe formar parte de este inventario en cada liberación.
 
-## 4. Incidentes
+## 6. Criterios de escalamiento de incidentes
 
-Un evento debe escalarse al procedimiento institucional cuando pueda involucrar, entre otros:
+Un evento debe escalarse al procedimiento institucional cuando pueda involucrar:
 
 - acceso no autorizado;
 - pérdida, copia o exposición de estados de cuenta o resultados;
-- credenciales o secretos comprometidos;
-- alteración no autorizada del software o sus artefactos;
-- malware o ejecución de código no esperado;
+- compromiso de credenciales, certificados o secretos;
+- alteración no autorizada del software o artefactos;
+- malware o ejecución no esperada;
 - indisponibilidad significativa;
-- resultados financieros alterados por manipulación;
+- manipulación de resultados;
 - vulneración potencial de datos personales.
 
-## 5. Secuencia técnica mínima
+## 7. Secuencia técnica de respuesta
 
 ### Identificar
 
-Registrar fecha/hora, componente afectado, versión, entorno y síntoma sin copiar datos personales innecesarios.
+Registrar fecha/hora, versión, entorno, componente afectado y síntoma sin copiar datos personales innecesarios.
 
 ### Contener
 
-Aislar el componente, suspender una liberación, revocar credenciales o bloquear acceso conforme al procedimiento y facultades institucionales. No borrar evidencia necesaria para investigación.
+Aplicar las medidas autorizadas por TIC: aislamiento, suspensión de una versión, bloqueo de acceso o revocación de credenciales, según el caso.
+
+No eliminar evidencia necesaria para investigación.
 
 ### Preservar evidencia
 
@@ -85,36 +89,53 @@ Conservar de forma controlada:
 
 - hashes;
 - logs autorizados;
-- commit/tag;
+- versión/referencia del código;
 - artefactos relevantes;
-- resultados de CI;
+- resultados de pruebas y auditorías;
 - línea temporal de acciones.
 
 ### Erradicar y recuperar
 
-Aplicar corrección, reconstruir desde fuente confiable, validar integridad, ejecutar pruebas y restaurar servicio de acuerdo con TIC.
+Aplicar la corrección, reconstruir desde fuente confiable, validar integridad, ejecutar pruebas y restaurar el servicio conforme al procedimiento institucional.
 
 ### Cerrar
 
-Documentar causa raíz, alcance, corrección, acciones preventivas y responsables. Si hubo datos personales, seguir además el procedimiento legal e institucional aplicable a vulneraciones.
+Documentar:
 
-## 6. Logs y privacidad
+- causa raíz;
+- alcance;
+- corrección;
+- acciones preventivas;
+- responsables;
+- evidencia de validación.
 
-Los logs no deben transformarse en una copia secundaria de los estados de cuenta. Evitar registrar:
+Cuando existan datos personales afectados, aplicar además el procedimiento institucional correspondiente a vulneraciones.
+
+## 8. Logs y privacidad
+
+Los logs no deben convertirse en una copia secundaria de los estados de cuenta.
+
+Evitar registrar:
 
 - contenido completo del PDF;
-- nombres completos cuando no sean necesarios;
-- cuentas, CLABE, RFC o referencias completas;
+- nombres completos;
+- cuentas, CLABE, RFC/CURP o referencias completas;
 - conceptos de movimientos;
 - archivos exportados;
 - secretos o tokens.
 
-Preferir identificadores técnicos, códigos de error, conteos, nombre lógico del parser, versión y correlación no reversible cuando sea suficiente.
+Preferir identificadores técnicos, código de error, versión, método Digital/OCR, parser y duración.
 
-La retención, acceso y destrucción de logs debe ser definida por TIC/SABG.
+## 9. Operación institucional
 
-## 7. Responsabilidades
+TIC deberá definir:
 
-El repositorio aporta controles técnicos y evidencia. La designación de responsables de incidente, ciberseguridad, protección de datos, infraestructura y comunicación corresponde a la estructura institucional aplicable.
+- canal de reporte;
+- responsables y escalamiento;
+- severidades institucionales;
+- tiempos de atención;
+- herramientas de monitoreo;
+- retención de evidencia;
+- coordinación con protección de datos y áreas jurídicas cuando corresponda.
 
-No deben publicarse en este repositorio datos de contacto internos sensibles; el canal operativo se documentará en el medio institucional autorizado.
+Los datos de contacto internos y procedimientos operativos sensibles deben mantenerse en los medios institucionales destinados para ese fin.
