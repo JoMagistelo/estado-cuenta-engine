@@ -210,7 +210,7 @@ El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](
 - [`00_setup.md`](docs/00_setup.md): instalación y entorno técnico.
 - [`01_vision.md`](docs/01_vision.md): alcance y propósito.
 - [`02_arquitectura.md`](docs/02_arquitectura.md): arquitectura del motor.
-- [`03_propuesta_tecnica.md`](docs/03_propuesta_tecnica.md): especificación para integración institucional.
+- [`03_especificacion_tecnica.md`](docs/03_especificacion_tecnica.md): especificación para integración institucional.
 - [`04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md): privacidad y manejo de información.
 - [`05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md): marco normativo de referencia.
 - [`06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md): despliegue Windows Server/IIS.
@@ -220,7 +220,7 @@ El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](
 - [`10_matriz_evidencias_tic.md`](docs/10_matriz_evidencias_tic.md): matriz de controles y evidencias.
 - [`11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md): vulnerabilidades e incidentes.
 - [`12_checklist_liberacion_produccion.md`](docs/12_checklist_liberacion_produccion.md): checklist de liberación.
-- [`14_control_cambios.md`](docs/14_control_cambios.md): criterios de control de cambios.
+- [`13_control_cambios.md`](docs/13_control_cambios.md): criterios de control de cambios.
 
 ## 12. Responsabilidades de entrega
 
