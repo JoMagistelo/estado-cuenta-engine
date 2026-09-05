@@ -23,7 +23,7 @@ Un control marcado como implementado en el repositorio no equivale a certificaci
 
 | Dominio | Estado | Evidencia actual | Pendiente / responsable |
 |---|---|---|---|
-| Control de cambios | Implementado | PR, historial Git, CI, plantilla de PR | TIC puede exigir aprobación/segregación adicional |
+| Control de cambios | Parcial | PR, historial Git, CI, plantilla de PR | confirmar/configurar protección de `master` o ruleset que obligue PR y status checks; definir segregación de aprobación |
 | Equivalencia funcional | Implementado/Parcial | suite sintética, compileall, Ruff, build | UAT con corpus autorizado y resultados esperados |
 | Gestión de dependencias Python | Implementado | `pyproject.toml`, rangos controlados, Dependabot, auditoría CI | conservar inventario exacto por release |
 | Vulnerabilidades de dependencias | Implementado | `pip-audit` en CI | proceso institucional de excepción/remediación |
@@ -66,7 +66,21 @@ El workflow `Production readiness` debe demostrar en cada PR:
 
 Estas evidencias permiten a TIC revisar un cambio sin depender del equipo personal del desarrollador.
 
-## 4. Evidencia que debe conservarse por liberación
+## 4. Configuración administrativa del repositorio
+
+Los controles de GitHub que viven fuera del código deben revisarse en la configuración del repositorio. Como mínimo, para una rama productiva se recomienda que TIC/administración de GitHub confirme:
+
+- prohibición de push directo a `master` para desarrolladores ordinarios;
+- pull request obligatorio;
+- status checks de `Production readiness` obligatorios;
+- rama actualizada antes de merge cuando la política interna lo requiera;
+- revisión/aprobación por persona distinta del autor cuando exista el equipo suficiente;
+- restricción de force-push y eliminación de la rama protegida;
+- permisos mínimos para administrar Actions, secretos, environments y reglas del repositorio.
+
+En la revisión del 5 de septiembre de 2026 la API accesible no reportó rulesets del repositorio. La integración utilizada no tiene permiso para consultar la protección clásica de ramas, por lo que este control se mantiene **parcial** hasta verificación administrativa.
+
+## 5. Evidencia que debe conservarse por liberación
 
 Para una versión candidata a producción se recomienda integrar un expediente de liberación con:
 
@@ -83,7 +97,7 @@ Para una versión candidata a producción se recomienda integrar un expediente d
 - autorización TIC/seguridad correspondiente;
 - rollback documentado.
 
-## 5. No-go para producción
+## 6. No-go para producción
 
 No liberar si ocurre cualquiera de los siguientes:
 
@@ -97,7 +111,7 @@ No liberar si ocurre cualquiera de los siguientes:
 - falta de respaldo/rollback aplicable;
 - falta de aprobación requerida por TIC o protección de datos.
 
-## 6. Referencias normativas principales
+## 7. Referencias normativas principales
 
 - Política General de Ciberseguridad para la APF, DOF 17/12/2025: https://www.dof.gob.mx/nota_detalle.php?codigo=5776454&fecha=17/12/2025
 - LGPDPPSO vigente, Cámara de Diputados: https://www.diputados.gob.mx/LeyesBiblio/pdf/LGPDPPSO.pdf
