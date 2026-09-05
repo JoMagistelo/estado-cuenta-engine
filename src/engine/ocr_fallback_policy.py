@@ -37,9 +37,11 @@ def paddle_fallback_enabled(bank_key: str) -> bool:
     if not _env_flag("PADDLEOCR_FALLBACK_ENABLED", default=False):
         return False
 
+    # El primer rollout controlado se limita a HSBC. Ampliar a otros bancos
+    # requiere configuración explícita y UAT del corpus correspondiente.
     configured = os.getenv(
         "PADDLEOCR_FALLBACK_BANKS",
-        "*",
+        "hsbc",
     ).strip().lower()
 
     if configured in _FALSE_VALUES or configured == "none":
