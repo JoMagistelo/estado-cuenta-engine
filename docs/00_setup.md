@@ -8,10 +8,12 @@ Entorno de referencia actual:
 
 - Windows 10/11 para desarrollo;
 - Windows Server como plataforma objetivo de producción, pendiente de definición final por TIC;
-- Python 3.10, 3.11, 3.12 o 3.13;
+- Python 3.12 o 3.13;
 - Git;
 - PowerShell;
 - entorno virtual de Python aislado.
+
+El mínimo de Python 3.12 no es arbitrario: la interfaz Flet actual utiliza sintaxis válida desde Python 3.12. La CI valida explícitamente Python 3.12 y 3.13 para no declarar compatibilidad que el código actual no ofrece.
 
 El repositorio incluye actualmente un runtime de Tesseract bajo `vendor/tesseract/`. Antes de producción TIC deberá revisar su procedencia, versión, licenciamiento, integridad, vulnerabilidades y mecanismo de actualización.
 
