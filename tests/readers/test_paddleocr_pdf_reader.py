@@ -221,8 +221,14 @@ def test_detection_side_limit_is_bounded_and_configurable(monkeypatch):
     assert PaddleOCRPDFReader._configured_detection_side_len() == 1600
 
 
-def test_read_page_limits_detector_by_max_side():
+def test_read_page_limits_detector_by_max_side(monkeypatch):
     captured_kwargs = {}
+    fake_array = SimpleNamespace(shape=(200, 100, 3))
+    monkeypatch.setitem(
+        sys.modules,
+        "numpy",
+        SimpleNamespace(asarray=lambda image: fake_array),
+    )
 
     class FakeEngine:
         def predict(self, image, **kwargs):
