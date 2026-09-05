@@ -8,6 +8,10 @@ from validators.resultado_validacion import ResultadoValidacion
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off", ""}
+_PRIMARY_VALIDATION_NAMES = {
+    "Total depósitos / abonos",
+    "Total retiros / cargos",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,8 +42,6 @@ def paddle_fallback_enabled(bank_key: str) -> bool:
     if not _env_flag("PADDLEOCR_FALLBACK_ENABLED", default=False):
         return False
 
-    # El primer rollout controlado se limita a HSBC. Ampliar a otros bancos
-    # requiere configuración explícita y UAT del corpus correspondiente.
     configured = os.getenv(
         "PADDLEOCR_FALLBACK_BANKS",
         "hsbc",
@@ -80,41 +82,93 @@ def validation_profile(
     )
 
 
+def fallback_trigger_reasons(
+    validaciones: list[ResultadoValidacion],
+    *,
+    has_movements: bool,
+) -> tuple[str, ...]:
+    """Describe por qué conviene generar un segundo candidato OCR.
+
+    Las razones son exclusivamente señales observables del resultado actual:
+    ausencia de movimientos, validaciones con tache o validadores principales
+    que no pudieron calcularse y por ello se muestran como guion en la UI.
+    """
+    reasons: list[str] = []
+    profile = validation_profile(validaciones)
+
+    if not has_movements:
+        reasons.append("sin_movimientos")
+
+    if profile.failed > 0:
+        reasons.append("validacion_fallida")
+
+    present_names = set(profile.names)
+    if not _PRIMARY_VALIDATION_NAMES.issubset(present_names):
+        reasons.append("validacion_principal_ausente")
+
+    if profile.total == 0:
+        reasons.append("sin_validaciones")
+
+    return tuple(dict.fromkeys(reasons))
+
+
 def should_attempt_paddle_fallback(
     bank_key: str,
     validaciones: list[ResultadoValidacion],
+    *,
+    has_movements: bool = True,
 ) -> bool:
-    """Activa PaddleOCR sólo ante un tache explícito de los validadores actuales."""
+    """Activa PaddleOCR cuando el OCR primario requiere revisión objetiva."""
     if not paddle_fallback_enabled(bank_key):
         return False
 
-    profile = validation_profile(validaciones)
-    return profile.total > 0 and profile.failed > 0
+    return bool(
+        fallback_trigger_reasons(
+            validaciones,
+            has_movements=has_movements,
+        )
+    )
 
 
 def should_select_paddle_result(
     tesseract_validaciones: list[ResultadoValidacion],
     paddle_validaciones: list[ResultadoValidacion],
+    *,
+    tesseract_has_movements: bool = True,
+    paddle_has_movements: bool = True,
 ) -> bool:
-    """Selecciona Paddle sólo si mejora fallas con cobertura equivalente."""
+    """Genera una recomendación conservadora entre ambos candidatos OCR.
+
+    La recomendación nunca elimina la posibilidad de selección manual en UI.
+    Ante empate o evidencia insuficiente se conserva Tesseract.
+    """
     tesseract = validation_profile(tesseract_validaciones)
     paddle = validation_profile(paddle_validaciones)
 
-    if tesseract.failed == 0:
+    if not tesseract_has_movements and paddle_has_movements:
+        return True
+
+    if tesseract_has_movements and not paddle_has_movements:
         return False
 
-    if paddle.total == 0:
-        return False
-
-    # No basta con conservar el número de validaciones: Paddle debe conservar
-    # cada validador que estaba disponible con Tesseract. Así nunca se compara
-    # una mejora aparente construida con un conjunto distinto de validadores.
     tesseract_names = set(tesseract.names)
     paddle_names = set(paddle.names)
+
+    # Paddle nunca se recomienda si pierde un validador que sí pudo calcular
+    # Tesseract. Así no se confunde menor cobertura con una aparente mejora.
     if not tesseract_names.issubset(paddle_names):
         return False
 
-    if paddle.total < tesseract.total:
-        return False
+    tesseract_primary = len(tesseract_names & _PRIMARY_VALIDATION_NAMES)
+    paddle_primary = len(paddle_names & _PRIMARY_VALIDATION_NAMES)
 
-    return paddle.failed < tesseract.failed
+    if paddle_primary > tesseract_primary and paddle.failed <= tesseract.failed:
+        return True
+
+    if paddle.failed < tesseract.failed:
+        return True
+
+    if tesseract.total == 0 and paddle.total > 0:
+        return True
+
+    return False
