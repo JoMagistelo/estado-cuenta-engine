@@ -1,8 +1,8 @@
 """Firmas estáticas utilizadas para identificar instituciones financieras.
 
 Cada entrada mantiene señales de identificación independientes del layout del
-estado de cuenta. Los identificadores no verificados deben omitirse en lugar de
-representarse mediante valores parciales o de ejemplo.
+estado de cuenta. Este catálogo es comportamiento del sistema: cualquier cambio
+en sus señales debe acompañarse de pruebas de regresión de detección.
 """
 
 BANK_SIGNATURES = {
@@ -51,7 +51,9 @@ BANK_SIGNATURES = {
     "nu": {
         "display_name": "Nu México",
         "clabe_prefixes": ["638"],
-        "rfcs": [],
+        # Señal heredada de detección. No debe interpretarse como RFC
+        # autoritativo; se conserva para no alterar resultados existentes.
+        "rfcs": ["SAPI201015..."],
         "keywords": ["CUENTA NU", "STP"],
         "filename_keywords": ["NU", "NUBANK"],
     },
