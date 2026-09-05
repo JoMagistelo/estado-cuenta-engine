@@ -43,9 +43,9 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] mecanismo institucional de distribución definido;
 - [ ] firma de código aplicada si TIC la requiere.
 
-## 4. Fallback OCR PaddleOCR
+## 4. Revisión OCR Tesseract / PaddleOCR
 
-Aplicar esta sección únicamente cuando el fallback vaya a habilitarse en el ambiente objetivo.
+Aplicar esta sección únicamente cuando el segundo OCR vaya a habilitarse en el ambiente objetivo.
 
 - [ ] `PADDLEOCR_FALLBACK_ENABLED` habilitado únicamente después de UAT;
 - [ ] bancos/layouts autorizados definidos en `PADDLEOCR_FALLBACK_BANKS`;
@@ -55,12 +55,19 @@ Aplicar esta sección únicamente cuando el fallback vaya a habilitarse en el am
 - [ ] no existe descarga de modelos durante una solicitud de procesamiento;
 - [ ] no se utiliza API OCR alojada;
 - [ ] egress del servidor no es necesario para procesar documentos;
-- [ ] fallback sólo se activa ante falla explícita de validación de Tesseract;
-- [ ] Paddle sólo se selecciona cuando mejora fallas sin reducir cobertura de validación;
-- [ ] casos donde Tesseract valida correctamente permanecen sin cambios;
+- [ ] PaddleOCR no se ejecuta para documentos digitales;
+- [ ] PaddleOCR no se ejecuta cuando Tesseract obtiene un resultado suficiente con las validaciones principales correctas;
+- [ ] PaddleOCR se activa ante casos representativos con taches, validaciones principales ausentes o falta de movimientos;
+- [ ] Tesseract y PaddleOCR se conservan como candidatos separados cuando ambos procesan el documento;
+- [ ] la recomendación automática no pierde validadores disponibles en Tesseract;
+- [ ] Flet permite alternar Tesseract/PaddleOCR;
+- [ ] Streamlit permite alternar Tesseract/PaddleOCR;
+- [ ] al cambiar motor cambian datos de cuenta, resumen, movimientos y validaciones del candidato visible;
+- [ ] la exportación Excel utiliza el candidato seleccionado;
+- [ ] casos donde Tesseract procesa correctamente permanecen sin cambios;
 - [ ] CPU/memoria/tiempo medidos con corpus autorizado;
 - [ ] rollback mediante `PADDLEOCR_FALLBACK_ENABLED=0` probado;
-- [ ] logs del fallback revisados sin importes ni PII.
+- [ ] logs/diagnósticos revisados sin importes ni PII.
 
 ## 5. Protección de datos personales
 
@@ -120,8 +127,10 @@ Aplicar esta sección únicamente cuando el fallback vaya a habilitarse en el am
 - [ ] carga de PDF funcional;
 - [ ] procesamiento Digital validado;
 - [ ] procesamiento OCR Tesseract validado;
-- [ ] fallback PaddleOCR validado si está habilitado;
-- [ ] exportación validada;
+- [ ] segundo OCR PaddleOCR validado si está habilitado;
+- [ ] comparación Tesseract/PaddleOCR visible cuando corresponda;
+- [ ] selección manual de ambos candidatos validada;
+- [ ] exportación del candidato seleccionado validada;
 - [ ] reinicio controlado del servicio validado;
 - [ ] logs revisados;
 - [ ] rollback disponible.
@@ -146,7 +155,7 @@ Conservar en el sistema institucional correspondiente:
 - hash del ejecutable;
 - información del runtime Tesseract;
 - cuando aplique, inventario/hashes/licencias de PaddleOCR, PaddlePaddle y modelos autorizados;
-- evidencia UAT, incluyendo fallback OCR cuando esté habilitado;
+- evidencia UAT de activación, comparación, selección y exportación OCR cuando la capacidad esté habilitada;
 - autorización de cambio;
 - aprobaciones aplicables;
 - procedimiento de rollback.
