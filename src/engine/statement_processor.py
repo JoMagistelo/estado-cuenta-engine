@@ -3,7 +3,13 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Callable
 
+from engine.ocr_fallback_policy import (
+    should_attempt_paddle_fallback,
+    should_select_paddle_result,
+    validation_profile,
+)
 from readers.models import DocumentData
+from readers.reader_manager import ReaderManager
 from utils.text_normalizer import normalize_text
 
 from parsers.bbva import parse_bbva
@@ -15,6 +21,7 @@ from parsers.scotiabank import parse_scotiabank
 from parsers.cetes import parse_cetes
 from parsers.mifel import parse_mifel
 from parsers.mercado_pago import parse_mercado_pago
+from validators.movimiento_validator import validar_movimientos
 
 
 # Registro público de parsers conocidos. `banorte_ocr` se conserva por
@@ -38,14 +45,19 @@ NormalizerFn = Callable[[list[dict]], list[dict]]
 
 
 def _is_ocr_document(document: DocumentData) -> bool:
-    """Indica si el documento fue producido por el reader OCR actual."""
+    """Indica si el documento fue producido por un reader OCR."""
     metadata = document.metadata or {}
 
     if bool(metadata.get("ocr")):
         return True
 
     reader = str(metadata.get("reader", "")).strip().lower()
-    return reader == "tesseract"
+    return reader in {"tesseract", "paddleocr"}
+
+
+def _reader_name(document: DocumentData) -> str:
+    metadata = document.metadata or {}
+    return str(metadata.get("reader", "")).strip().lower()
 
 
 def _import_optional_module(module_name: str):
@@ -115,17 +127,11 @@ def _apply_coordinate_normalizer(
     return document
 
 
-def process_single_statement(
+def _process_once(
     document: DocumentData,
     bank_key: str,
 ):
-    """Procesa un documento con el parser correspondiente a su banco.
-
-    Los documentos digitales utilizan el parser base. Para OCR se intenta,
-    en orden, un parser OCR especializado, un normalizador de coordenadas y,
-    finalmente, el parser base. La firma y el orden de resolución se mantienen
-    para preservar compatibilidad con el pipeline existente.
-    """
+    """Ejecuta una sola candidata de lectura sin fallback entre motores OCR."""
     document.normalized_text = normalize_text(document.raw_text)
 
     parser_fn = PARSER_REGISTRY.get(bank_key)
@@ -148,4 +154,129 @@ def process_single_statement(
             )
 
     estado = parser_fn(document)
+    return estado, document
+
+
+def _validation_results(estado) -> list:
+    """Obtiene la misma validación financiera usada por el pipeline."""
+    movimientos = getattr(estado, "movimientos", None) or []
+    resumen = getattr(estado, "resumen_financiero", None)
+
+    if not movimientos or resumen is None:
+        return []
+
+    try:
+        return validar_movimientos(
+            movimientos=movimientos,
+            resumen=resumen,
+        )
+    except Exception:
+        # La evaluación opcional del fallback no debe introducir una nueva
+        # falla sobre un resultado que el flujo histórico ya pudo parsear.
+        return []
+
+
+def _try_paddle_fallback(
+    estado_tesseract,
+    document_tesseract: DocumentData,
+    bank_key: str,
+):
+    """Reintenta con PaddleOCR si Tesseract falla validación financiera.
+
+    Tesseract se conserva salvo que PaddleOCR obtenga menos validaciones
+    fallidas sin reducir la cantidad de validaciones disponibles.
+    """
+    if _reader_name(document_tesseract) != "tesseract":
+        return estado_tesseract, document_tesseract
+
+    tesseract_validaciones = _validation_results(estado_tesseract)
+    if not should_attempt_paddle_fallback(
+        bank_key,
+        tesseract_validaciones,
+    ):
+        return estado_tesseract, document_tesseract
+
+    metadata = document_tesseract.metadata or {}
+    source_path = metadata.get("source_path")
+    if not source_path:
+        metadata["paddle_fallback_attempted"] = False
+        metadata["paddle_fallback_skipped"] = "source_path_missing"
+        document_tesseract.metadata = metadata
+        return estado_tesseract, document_tesseract
+
+    try:
+        start_page = int(metadata.get("start_page", 0) or 0)
+    except (TypeError, ValueError):
+        start_page = 0
+
+    tesseract_profile = validation_profile(tesseract_validaciones)
+
+    try:
+        paddle_document = ReaderManager.read_paddle_ocr(
+            source_path,
+            start_page=start_page,
+        )
+        estado_paddle, paddle_document = _process_once(
+            paddle_document,
+            bank_key,
+        )
+        paddle_validaciones = _validation_results(estado_paddle)
+    except Exception as exc:
+        metadata["paddle_fallback_attempted"] = True
+        metadata["paddle_fallback_selected"] = False
+        metadata["paddle_fallback_error_type"] = type(exc).__name__
+        metadata["tesseract_validation_total"] = tesseract_profile.total
+        metadata["tesseract_validation_failed"] = tesseract_profile.failed
+        document_tesseract.metadata = metadata
+        return estado_tesseract, document_tesseract
+
+    paddle_profile = validation_profile(paddle_validaciones)
+    select_paddle = should_select_paddle_result(
+        tesseract_validaciones,
+        paddle_validaciones,
+    )
+
+    comparison_metadata = {
+        "paddle_fallback_attempted": True,
+        "paddle_fallback_selected": select_paddle,
+        "tesseract_validation_total": tesseract_profile.total,
+        "tesseract_validation_failed": tesseract_profile.failed,
+        "paddle_validation_total": paddle_profile.total,
+        "paddle_validation_failed": paddle_profile.failed,
+    }
+
+    if select_paddle:
+        paddle_document.metadata.update(comparison_metadata)
+        paddle_document.metadata["fallback_from"] = "tesseract"
+        return estado_paddle, paddle_document
+
+    metadata.update(comparison_metadata)
+    document_tesseract.metadata = metadata
+    return estado_tesseract, document_tesseract
+
+
+def process_single_statement(
+    document: DocumentData,
+    bank_key: str,
+):
+    """Procesa un documento con el parser correspondiente a su banco.
+
+    Los documentos digitales conservan el flujo histórico. En OCR, Tesseract
+    sigue siendo el motor primario. Si sus validaciones financieras contienen
+    una falla explícita y el fallback está habilitado, se intenta PaddleOCR con
+    modelos locales. Paddle sólo sustituye a Tesseract cuando mejora de forma
+    medible la validación sin reducir su cobertura.
+    """
+    estado, document = _process_once(
+        document,
+        bank_key,
+    )
+
+    if _is_ocr_document(document):
+        estado, document = _try_paddle_fallback(
+            estado,
+            document,
+            bank_key,
+        )
+
     return estado, document
