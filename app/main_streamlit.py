@@ -39,10 +39,6 @@ from exporters.excel import export_batch_excel
 # ============================================================
 
 PROCESSING_UI_POLL_INTERVAL = 0.5
-OCR_ENGINE_LABELS = {
-    "tesseract": "Tesseract",
-    "paddleocr": "PaddleOCR",
-}
 
 
 # ============================================================
@@ -167,12 +163,6 @@ def safe_value(
         return "N/A"
 
     return str(value)
-
-
-def ocr_engine_label(engine: str | None) -> str:
-    if not engine:
-        return "OCR"
-    return OCR_ENGINE_LABELS.get(engine, engine)
 
 
 # ============================================================
@@ -411,6 +401,10 @@ def start_processing(
         daemon=True,
     )
 
+    # --------------------------------------------------------
+    # ESTADO DE SESIÓN
+    # --------------------------------------------------------
+
     st.session_state.processing_queue = (
         processing_queue
     )
@@ -495,6 +489,10 @@ def consume_processing_events() -> bool:
 
         message_type = message[0]
 
+        # ====================================================
+        # EVENTO NORMAL
+        # ====================================================
+
         if message_type == "event":
 
             event = message[1]
@@ -522,6 +520,10 @@ def consume_processing_events() -> bool:
 
             item = items[index]
 
+            # ------------------------------------------------
+            # STARTED
+            # ------------------------------------------------
+
             if event.kind == "started":
 
                 item["processing_method"] = (
@@ -535,6 +537,10 @@ def consume_processing_events() -> bool:
                 item["error"] = None
 
                 changed = True
+
+            # ------------------------------------------------
+            # COMPLETED
+            # ------------------------------------------------
 
             elif event.kind == "completed":
 
@@ -562,6 +568,10 @@ def consume_processing_events() -> bool:
 
                 changed = True
 
+            # ------------------------------------------------
+            # ERROR INDIVIDUAL
+            # ------------------------------------------------
+
             elif event.kind == "error":
 
                 item["processing_method"] = (
@@ -581,6 +591,10 @@ def consume_processing_events() -> bool:
                 )
 
                 changed = True
+
+        # ====================================================
+        # ERROR GLOBAL
+        # ====================================================
 
         elif message_type == "worker_error":
 
@@ -611,6 +625,10 @@ def consume_processing_events() -> bool:
                     )
 
             changed = True
+
+        # ====================================================
+        # FINISHED
+        # ====================================================
 
         elif message_type == "finished":
 
@@ -768,7 +786,11 @@ def render_processing_status() -> None:
 # ============================================================
 
 def render_processing_summary() -> None:
-    """Muestra todos los archivos seleccionados."""
+    """
+    Muestra todos los archivos seleccionados.
+
+    No importa si todavía no terminaron.
+    """
 
     items = (
         st.session_state.processing_items
@@ -805,21 +827,11 @@ def render_processing_summary() -> None:
             )
         )
 
-        result = item.get("result")
-
         if method:
 
-            process_display = method
-
-            if (
-                method == "OCR"
-                and result is not None
-                and result.selected_ocr_engine
-            ):
-                process_display = (
-                    "OCR · "
-                    f"{ocr_engine_label(result.selected_ocr_engine)}"
-                )
+            process_display = (
+                method
+            )
 
         else:
 
@@ -863,7 +875,7 @@ def render_processing_summary() -> None:
 
 
 # ============================================================
-# SELECTOR DE ARCHIVO
+# SELECTOR
 # ============================================================
 
 def get_completed_results() -> list[Any]:
@@ -890,6 +902,10 @@ def render_result_selector():
         result.file_name
         for result in results
     ]
+
+    # --------------------------------------------------------
+    # MANTENER SELECCIÓN
+    # --------------------------------------------------------
 
     current_selected = (
         st.session_state.selected_file
@@ -939,76 +955,6 @@ def render_result_selector():
 
 
 # ============================================================
-# SELECTOR Y COMPARACIÓN OCR
-# ============================================================
-
-def render_ocr_selector(result) -> None:
-    review = getattr(result, "ocr_review", None)
-    if review is None:
-        return
-
-    engines = list(result.available_ocr_engines())
-
-    if len(engines) < 2:
-        if review.paddle_error_type:
-            st.caption(
-                "PaddleOCR fue considerado como segundo motor, "
-                "pero no estuvo disponible para esta ejecución."
-            )
-        return
-
-    selected_engine = result.selected_ocr_engine or engines[0]
-    recommended_engine = result.recommended_ocr_engine or "tesseract"
-
-    st.subheader("🔎 Comparación OCR")
-
-    selected = st.radio(
-        "Resultado que deseas revisar y conservar para la exportación:",
-        options=engines,
-        index=engines.index(selected_engine),
-        format_func=ocr_engine_label,
-        horizontal=True,
-        key=f"ocr_engine_{id(result)}",
-    )
-
-    if selected != result.selected_ocr_engine:
-        result.select_ocr_engine(selected)
-
-    recommendation_label = ocr_engine_label(recommended_engine)
-    selected_label = ocr_engine_label(result.selected_ocr_engine)
-
-    if result.selected_ocr_engine == recommended_engine:
-        st.caption(
-            f"Selección actual: {selected_label} · "
-            f"recomendación automática: {recommendation_label}."
-        )
-    else:
-        st.caption(
-            f"Selección manual: {selected_label} · "
-            f"recomendación automática: {recommendation_label}."
-        )
-
-    columns = st.columns(len(engines))
-
-    for column, engine in zip(columns, engines):
-        candidate = review.get_candidate(engine)
-        label = ocr_engine_label(engine)
-        failed = candidate.validation_failed
-        total = candidate.validation_total
-
-        with column:
-            st.markdown(f"**{label}**")
-            st.write(f"Movimientos: {candidate.movement_count}")
-            st.write(f"Validaciones: {total}")
-            st.write(f"Taches: {failed}")
-
-    st.info(
-        "Puedes alternar entre ambos motores. Los datos, movimientos, "
-        "validaciones y el Excel reflejarán el motor seleccionado."
-    )
-
-
-# ============================================================
 # RENDER DOCUMENTO IMAGEN
 # ============================================================
 
@@ -1022,19 +968,33 @@ def render_image_document(
     )
 
     st.info(
-        "El documento requiere OCR para su extracción estructurada."
+        "🚧 El motor detectó correctamente "
+        "que el archivo es un PDF basado "
+        "en imagen. La extracción de datos "
+        "mediante OCR está pendiente de "
+        "implementación."
+    )
+
+    st.markdown(
+        """
+        **Estado del procesamiento**
+
+        - 📄 Tipo: PDF basado en imagen
+        - 🖼️ Detección: correcta
+        - 🔎 OCR: pendiente de implementación
+        - 🏦 Detección de banco: pendiente de OCR
+        - 📊 Extracción financiera: pendiente de OCR
+        """
     )
 
 
 # ============================================================
-# RENDER RESULTADO
+# RENDER DIGITAL
 # ============================================================
 
 def render_digital_result(
     result,
 ) -> None:
-
-    render_ocr_selector(result)
 
     estado = (
         result.estado_cuenta
@@ -1058,6 +1018,10 @@ def render_digital_result(
     dc = (
         estado.datos_cuenta
     )
+
+    # ========================================================
+    # MÉTRICAS PRINCIPALES
+    # ========================================================
 
     cols_info = st.columns(4)
 
@@ -1116,6 +1080,10 @@ def render_digital_result(
 
         else "N/A",
     )
+
+    # ========================================================
+    # DATOS CUENTA
+    # ========================================================
 
     st.subheader(
         "1. 📌 Datos de la Cuenta"
@@ -1183,6 +1151,10 @@ def render_digital_result(
             "No se encontraron datos "
             "de la cuenta."
         )
+
+    # ========================================================
+    # RESUMEN FINANCIERO
+    # ========================================================
 
     st.subheader(
         "2. 📊 Resumen Financiero"
@@ -1281,6 +1253,10 @@ def render_digital_result(
             "financiero."
         )
 
+    # ========================================================
+    # DETALLES ADICIONALES
+    # ========================================================
+
     with st.expander(
         "Ver más detalles del resumen financiero"
     ):
@@ -1344,6 +1320,10 @@ def render_digital_result(
                     rf.abonos_objetados
                 ),
             )
+
+    # ========================================================
+    # OTROS PRODUCTOS
+    # ========================================================
 
     st.subheader(
         "3. 💰 Otros Productos y Comisiones"
@@ -1421,6 +1401,10 @@ def render_digital_result(
             "productos o comisiones en "
             "este estado de cuenta."
         )
+
+    # ========================================================
+    # VALIDACIONES
+    # ========================================================
 
     with st.expander(
         "✓ Validaciones Financieras"
@@ -1514,6 +1498,10 @@ def render_digital_result(
                 "disponibles."
             )
 
+    # ========================================================
+    # MOVIMIENTOS
+    # ========================================================
+
     movimientos = (
         estado.movimientos
         or []
@@ -1565,6 +1553,10 @@ def render_digital_result(
                 df[col],
                 errors="coerce",
             )
+
+    # --------------------------------------------------------
+    # COLUMNAS
+    # --------------------------------------------------------
 
     columnas_mostrar = [
 
@@ -1619,6 +1611,10 @@ def render_digital_result(
         ]
         .copy()
     )
+
+    # --------------------------------------------------------
+    # CONFIGURACIÓN
+    # --------------------------------------------------------
 
     column_config = {
 
@@ -1713,15 +1709,31 @@ def render_audit_view() -> None:
     sigue procesando archivos.
     """
 
+    # ========================================================
+    # CONSUMIR EVENTOS
+    # ========================================================
+
     consume_processing_events()
+
+    # ========================================================
+    # ESTADO DEL PROCESAMIENTO
+    # ========================================================
 
     render_processing_status()
 
     st.divider()
 
+    # ========================================================
+    # TABLA GENERAL
+    # ========================================================
+
     render_processing_summary()
 
     st.divider()
+
+    # ========================================================
+    # RESULTADOS TERMINADOS
+    # ========================================================
 
     st.header(
         "🔍 Auditoría de Resultados"
@@ -1732,6 +1744,10 @@ def render_audit_view() -> None:
     if result is None:
 
         return
+
+    # ========================================================
+    # RESULTADO
+    # ========================================================
 
     if (
         result.bank_key
@@ -1748,6 +1764,21 @@ def render_audit_view() -> None:
             result
         )
 
+
+# ============================================================
+# FRAGMENTO DE ACTUALIZACIÓN
+# ============================================================
+#
+# Streamlit ejecuta este fragmento periódicamente.
+#
+# Esto permite que:
+#
+#   - la tabla cambie conforme llegan eventos
+#   - aparezcan resultados terminados
+#   - el selector reciba nuevos archivos
+#   - no sea necesario tocar ningún widget
+#
+# ============================================================
 
 @st.fragment(
     run_every=PROCESSING_UI_POLL_INTERVAL
@@ -1786,8 +1817,10 @@ def render_export_section() -> None:
     ):
 
         st.markdown(
-            "El Excel utilizará, para cada documento OCR, el motor "
-            "que esté seleccionado actualmente en la auditoría."
+            "Haz clic en el botón para generar "
+            "un único archivo Excel con los "
+            "datos de todos los estados de "
+            "cuenta terminados."
         )
 
         if st.button(
@@ -1894,6 +1927,10 @@ def main():
         layout="wide",
     )
 
+    # ========================================================
+    # ENCABEZADO
+    # ========================================================
+
     st.title(
         "📄 Motor de Estados de Cuenta"
     )
@@ -1910,9 +1947,23 @@ def main():
         """
     )
 
+    # ========================================================
+    # ESTADO DEL WORKER
+    # ========================================================
+
     worker_running = (
         st.session_state.worker_running
     )
+
+    # ========================================================
+    # UPLOADER
+    # ========================================================
+    #
+    # Mientras existe un lote procesándose,
+    # evitamos iniciar otro lote simultáneamente
+    # en la misma sesión.
+    #
+    # ========================================================
 
     uploaded_files = st.file_uploader(
 
@@ -1924,6 +1975,10 @@ def main():
 
         disabled=worker_running,
     )
+
+    # ========================================================
+    # CREAR NUEVO LOTE
+    # ========================================================
 
     if uploaded_files:
 
@@ -1948,6 +2003,10 @@ def main():
             st.session_state.batch_signature
         )
 
+        # ----------------------------------------------------
+        # SOLAMENTE INICIAR SI ES UN LOTE NUEVO
+        # ----------------------------------------------------
+
         if (
             current_signature
             != previous_signature
@@ -1970,6 +2029,10 @@ def main():
                         "iniciar el procesamiento: "
                         f"{ex}"
                     )
+
+    # ========================================================
+    # ERROR GLOBAL
+    # ========================================================
 
     if (
         st.session_state.worker_error
@@ -1995,10 +2058,22 @@ def main():
                     st.session_state.worker_traceback
                 )
 
+    # ========================================================
+    # AUDITORÍA DINÁMICA
+    # ========================================================
+
     processing_fragment()
+
+    # ========================================================
+    # EXPORTACIÓN
+    # ========================================================
 
     render_export_section()
 
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
     main()

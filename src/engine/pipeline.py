@@ -8,7 +8,7 @@ from concurrent.futures import (
 from dataclasses import dataclass
 from pathlib import Path
 
-from engine.statement_processor import process_single_statement_with_ocr_review
+from engine.statement_processor import process_single_statement
 from models.processing_result import ProcessingResult
 from readers.models import DocumentData
 from readers.reader_manager import ReaderManager
@@ -376,8 +376,7 @@ def _process_prepared_statement(
         utiliza el DocumentData ya preparado.
 
     OCR:
-        ejecuta Tesseract como motor primario y, cuando corresponde,
-        conserva también el candidato PaddleOCR para revisión.
+        ejecuta Tesseract únicamente aquí.
     """
 
     document = prepared.document
@@ -423,37 +422,31 @@ def _process_prepared_statement(
         )
 
     # ========================================================
-    # PARSER + REVISIÓN OCR
+    # PARSER
     # ========================================================
 
-    estado_cuenta, document, ocr_review = (
-        process_single_statement_with_ocr_review(
+    estado_cuenta, document = (
+        process_single_statement(
             document=document,
             bank_key=bank_key,
         )
     )
 
     # ========================================================
-    # VALIDACIONES DEL CANDIDATO SELECCIONADO
+    # VALIDACIONES
     # ========================================================
 
-    if ocr_review is not None:
-        selected_candidate = ocr_review.get_candidate(
-            ocr_review.selected_engine
+    validaciones = []
+
+    if (
+        estado_cuenta.movimientos
+        and estado_cuenta.resumen_financiero
+    ):
+
+        validaciones = validar_movimientos(
+            movimientos=estado_cuenta.movimientos,
+            resumen=estado_cuenta.resumen_financiero,
         )
-        validaciones = list(selected_candidate.validaciones)
-    else:
-        validaciones = []
-
-        if (
-            estado_cuenta.movimientos
-            and estado_cuenta.resumen_financiero
-        ):
-
-            validaciones = validar_movimientos(
-                movimientos=estado_cuenta.movimientos,
-                resumen=estado_cuenta.resumen_financiero,
-            )
 
     # ========================================================
     # RESULTADO
@@ -467,7 +460,6 @@ def _process_prepared_statement(
         normalized_text=document.normalized_text,
         validaciones=validaciones,
         processing_method=prepared.processing_method,
-        ocr_review=ocr_review,
     )
 
 
@@ -552,7 +544,7 @@ def process_bank_statements_incremental(
     documentos OCR.
 
     El OCR se limita por defecto a un worker para evitar que
-    varios procesos pesados de Tesseract/Paddle compitan entre sí.
+    varios procesos pesados de Tesseract compitan entre sí.
     """
 
     total = len(pdf_paths)
