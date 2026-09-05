@@ -13,7 +13,8 @@ Estado Cuenta Engine procesa estados de cuenta bancarios y convierte su contenid
 El sistema:
 
 - procesa PDF digital y documentos que requieren OCR;
-- utiliza Tesseract de forma local para OCR;
+- utiliza Tesseract de forma local como OCR primario;
+- dispone de PaddleOCR como fallback local opcional cuando Tesseract presenta fallas explícitas de validación financiera;
 - identifica institución/emisor;
 - aplica parsers especializados por banco/layout;
 - normaliza datos de cuenta, resumen y movimientos;
@@ -39,22 +40,30 @@ ReaderManager
  ├─► Digital: palabras espaciales
  │
  └─► OCR: TesseractPDFReader
-       │
-       ▼
-Detección de institución
-       │
-       ▼
-Parser especializado
-       │
-       ▼
-Modelo EstadoCuenta
-       │
-       ▼
-Validaciones
-       │
-       ▼
-Mapeo / exportación
+              │
+              ▼
+        Parser especializado
+              │
+              ▼
+       Validación financiera
+              │
+      ┌───────┴────────┐
+      │                │
+   correcta          falla
+      │                │
+      │        PaddleOCR opcional
+      │                │
+      │        mismo parser/validator
+      │                │
+      └───────┬────────┘
+              ▼
+       Modelo EstadoCuenta
+              │
+              ▼
+        Mapeo / exportación
 ```
+
+Tesseract continúa siendo el OCR primario. PaddleOCR está deshabilitado por defecto y sólo se ejecuta cuando una validación financiera obtenida a partir de Tesseract falla y el fallback ha sido habilitado expresamente. PaddleOCR sólo sustituye el resultado primario cuando reduce las validaciones fallidas sin reducir su cobertura.
 
 La lógica bancaria se mantiene separada de lectura, detección, validación, exportación e interfaces para facilitar pruebas y mantenimiento.
 
@@ -66,13 +75,13 @@ assets/                 Recursos visuales
 src/
   catalog/              Firmas y catálogos técnicos
   detectors/            Detección de banco y tipo documental
-  engine/               Orquestación del pipeline
+  engine/               Orquestación del pipeline y política de fallback
   exporters/            Exportación de resultados
   extractors/           Extractores transversales
   mappers/              Conversión a tablas/salidas
   models/               Modelos de dominio y resultados
   parsers/              Parsers especializados
-  readers/              Lectura digital y OCR
+  readers/              Lectura digital, Tesseract y PaddleOCR opcional
   utils/                 Utilidades
   validators/            Validaciones de consistencia
 tests/                  Pruebas automatizadas
@@ -111,6 +120,14 @@ Instalar interfaz Flet:
 python -m pip install -e ".[desktop]"
 ```
 
+Instalar PaddleOCR cuando TIC autorice el fallback en el runtime institucional:
+
+```powershell
+python -m pip install -e ".[streamlit,paddleocr]"
+```
+
+PaddleOCR requiere modelos locales previamente aprobados y configurados. Estado Cuenta Engine no descarga modelos automáticamente durante el procesamiento. Consulte [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md).
+
 Instalar herramientas de calidad:
 
 ```powershell
@@ -143,8 +160,9 @@ La automatización de calidad valida:
 - suite Pytest sintética/autocontenida;
 - build del paquete Python;
 - dependencias de Flet/Streamlit;
+- instalación e import del runtime opcional PaddleOCR/PaddlePaddle en Windows;
 - build real del ejecutable Windows con PyInstaller;
-- auditoría de vulnerabilidades Python;
+- auditoría de vulnerabilidades Python, incluido el stack Paddle cuando forma parte del runtime evaluado;
 - inventario de dependencias;
 - hash SHA-256 del runtime Tesseract;
 - hash SHA-256 del ejecutable construido.
@@ -160,9 +178,10 @@ Los estados de cuenta contienen información financiera y datos personales. Regl
 - no almacenar contraseñas, tokens, llaves privadas o certificados en código;
 - no enviar documentos o resultados a servicios externos sin autorización institucional;
 - mantener temporales y salidas bajo control de acceso y retención definidos;
-- utilizar datos sintéticos o corpus autorizado para pruebas.
+- utilizar datos sintéticos o corpus autorizado para pruebas;
+- operar PaddleOCR mediante inferencia local con modelos previamente instalados cuando el fallback esté habilitado.
 
-Consultar [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md) y [`SECURITY.md`](SECURITY.md).
+Consultar [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md), [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md) y [`SECURITY.md`](SECURITY.md).
 
 ## 9. Despliegue institucional
 
@@ -201,9 +220,10 @@ Cada versión candidata debe identificar:
 - vulnerabilidades conocidas;
 - componentes de terceros;
 - versión/procedencia/licencia de Tesseract;
+- cuando PaddleOCR esté habilitado: versiones de PaddleOCR/PaddlePaddle y procedencia/licencia/hash de los modelos locales;
 - hash del artefacto entregado.
 
-El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](docs/09_verificacion_tecnica_version.md) y [`docs/11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md).
+El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](docs/09_verificacion_tecnica_version.md), [`docs/11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md) y [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md).
 
 ## 11. Documentación
 
@@ -221,12 +241,13 @@ El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](
 - [`11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md): vulnerabilidades e incidentes.
 - [`12_checklist_liberacion_produccion.md`](docs/12_checklist_liberacion_produccion.md): checklist de liberación.
 - [`13_control_cambios.md`](docs/13_control_cambios.md): criterios de control de cambios.
+- [`14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md): instalación, seguridad, UAT y operación del fallback PaddleOCR.
 
 ## 12. Responsabilidades de entrega
 
 **Aplicación:** código fuente, dependencias, pruebas, documentación, build y evidencia de integridad.
 
-**TIC:** infraestructura, IIS, DNS, TLS, identidad, red, hardening, monitoreo, respaldos, parches y operación.
+**TIC:** infraestructura, IIS, DNS, TLS, identidad, red, hardening, monitoreo, respaldos, parches, aprobación/instalación de runtimes y modelos de terceros, y operación.
 
 **DGEC:** validación funcional y aceptación de resultados.
 
