@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from readers.paddleocr_pdf_reader import (
     PaddleOCRConfigurationError,
@@ -144,3 +145,46 @@ def test_cpu_engine_disables_mkldnn_for_stable_paddle_inference(monkeypatch):
     finally:
         PaddleOCRPDFReader._engine = None
         PaddleOCRPDFReader._engine_signature = None
+
+
+def test_detection_side_limit_is_bounded_and_configurable(monkeypatch):
+    monkeypatch.delenv("PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN", raising=False)
+    assert PaddleOCRPDFReader._configured_detection_side_len() == 1600
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN", "1200")
+    assert PaddleOCRPDFReader._configured_detection_side_len() == 1200
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN", "500")
+    assert PaddleOCRPDFReader._configured_detection_side_len() == 960
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN", "5000")
+    assert PaddleOCRPDFReader._configured_detection_side_len() == 2400
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN", "invalido")
+    assert PaddleOCRPDFReader._configured_detection_side_len() == 1600
+
+
+def test_read_page_limits_detector_by_max_side():
+    captured_kwargs = {}
+
+    class FakeEngine:
+        def predict(self, image, **kwargs):
+            assert image.shape == (200, 100, 3)
+            captured_kwargs.update(kwargs)
+            return []
+
+    words, page_text = PaddleOCRPDFReader._read_page(
+        engine=FakeEngine(),
+        image=Image.new("RGB", (100, 200)),
+        logical_page=1,
+        page_width=612.0,
+        doctop_offset=0.0,
+        text_det_limit_side_len=1200,
+    )
+
+    assert words == []
+    assert page_text == ""
+    assert captured_kwargs == {
+        "text_det_limit_side_len": 1200,
+        "text_det_limit_type": "max",
+    }
