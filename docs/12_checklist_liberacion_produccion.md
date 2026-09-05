@@ -2,41 +2,40 @@
 
 ## Estado Cuenta Engine — SABG / DGEC
 
-Este documento sirve como expediente mínimo de una versión candidata. No sustituye los formatos oficiales que establezcan TIC, ciberseguridad, protección de datos, archivos o las áreas competentes.
+Este documento concentra los puntos técnicos que deben verificarse antes de promover una versión a producción institucional.
 
-## 1. Identificación de la liberación
+## 1. Identificación de la versión
 
-- [ ] versión/tag definido;
-- [ ] commit exacto registrado;
-- [ ] PR de liberación aprobado;
+- [ ] versión definida;
+- [ ] referencia exacta del código fuente registrada;
+- [ ] notas de cambio disponibles;
 - [ ] responsable funcional identificado;
 - [ ] responsable técnico identificado;
-- [ ] fecha/ventana de liberación autorizada.
+- [ ] ventana de liberación autorizada.
 
 ## 2. Calidad y equivalencia funcional
 
-- [ ] CI obligatorio en verde;
-- [ ] Python soportado validado;
-- [ ] `compileall` en verde;
-- [ ] Ruff en verde;
+- [ ] compilación completa en verde;
+- [ ] análisis estático en verde;
 - [ ] suite Pytest sintética en verde;
-- [ ] build Python en verde;
-- [ ] smoke de interfaces en verde;
-- [ ] PyInstaller Windows en verde;
-- [ ] UAT ejecutada con corpus autorizado;
-- [ ] resultados esperados de extracción comparados;
+- [ ] build del paquete Python en verde;
+- [ ] smoke de dependencias Flet/Streamlit en verde;
+- [ ] build PyInstaller Windows en verde;
+- [ ] UAT ejecutada con corpus autorizado cuando corresponda;
+- [ ] resultados esperados de extracción comparados para cambios funcionales;
 - [ ] cambios en parsers identificados explícitamente;
-- [ ] no existen cambios accidentales fuera del alcance.
+- [ ] revisión final del diff sin modificaciones accidentales.
 
 ## 3. Seguridad de software y cadena de suministro
 
-- [ ] auditoría de dependencias sin vulnerabilidades conocidas bloqueantes;
-- [ ] inventario exacto de dependencias guardado como evidencia;
+- [ ] auditoría de dependencias sin vulnerabilidades bloqueantes;
+- [ ] inventario exacto de dependencias conservado;
 - [ ] dependencias nuevas justificadas y revisadas;
-- [ ] componentes en `vendor/` inventariados;
+- [ ] runtime Tesseract identificado;
 - [ ] versión/procedencia/licencia de Tesseract verificadas;
-- [ ] vulnerabilidades conocidas de terceros evaluadas;
-- [ ] hash SHA-256 del EXE registrado;
+- [ ] vulnerabilidades conocidas de Tesseract evaluadas;
+- [ ] hash SHA-256 del ejecutable registrado;
+- [ ] hash de Tesseract registrado;
 - [ ] mecanismo institucional de distribución definido;
 - [ ] firma de código aplicada si TIC la requiere.
 
@@ -44,64 +43,91 @@ Este documento sirve como expediente mínimo de una versión candidata. No susti
 
 - [ ] clasificación institucional de la información definida;
 - [ ] finalidades y usuarios autorizados identificados;
-- [ ] minimización de datos revisada;
+- [ ] principio de minimización revisado;
 - [ ] Documento de Seguridad aplicable actualizado;
 - [ ] análisis de riesgos y brecha actualizado;
 - [ ] procedencia de Evaluación de Impacto determinada;
-- [ ] aviso de privacidad/instrumentos aplicables revisados;
+- [ ] instrumentos de privacidad aplicables revisados;
 - [ ] retención y eliminación definidas conforme a archivo y protección de datos;
-- [ ] pruebas y evidencias no exponen información real en Git/CI.
+- [ ] pruebas y evidencias no contienen información real fuera de entornos autorizados.
 
-## 5. Arquitectura e infraestructura
+## 5. Windows Server e IIS
 
-- [ ] arquitectura productiva aprobada por TIC;
-- [ ] integración con SIEC/API definida y documentada;
+- [ ] servidor Windows definido por TIC;
+- [ ] IIS configurado como punto de publicación HTTPS;
+- [ ] certificado TLS institucional instalado;
+- [ ] nombre DNS institucional configurado;
+- [ ] reverse proxy hacia Streamlit configurado;
+- [ ] soporte de WebSocket validado;
+- [ ] puerto interno de Streamlit no expuesto a usuarios;
+- [ ] límites de tamaño y timeouts revisados;
+- [ ] cuenta de servicio de mínimo privilegio configurada;
+- [ ] ACL de carpetas revisadas;
+- [ ] firewall/segmentación aplicados;
+- [ ] hardening de servidor aplicado conforme al estándar TIC;
+- [ ] antimalware/EDR activo según política institucional.
+
+## 6. Identidad e integración
+
+- [ ] mecanismo de acceso desde SIEC definido;
 - [ ] autenticación institucional configurada;
-- [ ] autorización/RBAC y mínimo privilegio configurados;
-- [ ] identidad de servicio definida cuando corresponda;
-- [ ] TLS/certificados institucionales configurados;
-- [ ] hardening de Windows Server aplicado;
-- [ ] firewall/red/segmentación revisados;
-- [ ] secretos fuera del código y con rotación definida;
-- [ ] antimalware/EDR y controles de plataforma conforme a TIC.
+- [ ] autorización/RBAC definida;
+- [ ] identidad de servicio definida cuando aplique;
+- [ ] MFA aplicado cuando corresponda;
+- [ ] si existe integración programática, contrato API documentado;
+- [ ] secretos y certificados administrados fuera del código.
 
-## 6. Operación
+## 7. Operación
 
 - [ ] monitoreo y alertamiento configurados;
 - [ ] logs minimizados y sin PII innecesaria;
-- [ ] retención/acceso a logs definidos;
+- [ ] retención y acceso a logs definidos;
 - [ ] procedimiento de incidentes activo;
-- [ ] responsables y escalamiento institucional confirmados;
+- [ ] responsables de escalamiento confirmados;
 - [ ] respaldos configurados;
 - [ ] restauración probada;
-- [ ] RPO/RTO definidos si aplica;
-- [ ] rollback técnico probado/documentado;
-- [ ] capacidad/recursos del servidor validados.
+- [ ] RPO/RTO definidos cuando aplique;
+- [ ] rollback técnico documentado;
+- [ ] capacidad de CPU/memoria/almacenamiento validada para carga OCR esperada.
 
-## 7. Aprobaciones
+## 8. Verificación posterior al despliegue
+
+- [ ] HTTPS disponible y certificado válido;
+- [ ] acceso al puerto interno bloqueado desde red de usuarios;
+- [ ] carga de PDF funcional;
+- [ ] procesamiento Digital validado;
+- [ ] procesamiento OCR validado;
+- [ ] exportación validada;
+- [ ] reinicio controlado del servicio validado;
+- [ ] logs revisados;
+- [ ] rollback disponible.
+
+## 9. Aprobaciones
 
 - [ ] validación funcional DGEC;
 - [ ] aprobación TIC/infraestructura;
-- [ ] revisión de ciberseguridad;
+- [ ] revisión de ciberseguridad cuando aplique;
 - [ ] revisión de protección de datos cuando aplique;
 - [ ] revisión jurídica/archivo cuando aplique;
-- [ ] excepciones de riesgo formalmente aceptadas, con vigencia y responsable.
+- [ ] excepciones de riesgo formalmente documentadas cuando existan.
 
-## 8. Evidencia mínima que debe conservarse
+## 10. Evidencia mínima de la liberación
 
-- commit/tag;
-- URL del PR;
-- resultados de CI;
-- reporte de vulnerabilidades;
+Conservar en el sistema institucional correspondiente:
+
+- versión y referencia exacta del código;
+- resultado de CI/pruebas;
 - inventario de dependencias;
+- resultado de auditoría de vulnerabilidades;
 - hash del ejecutable;
+- información del runtime Tesseract;
 - evidencia UAT;
-- acta/ticket/autorización de cambio;
+- autorización de cambio;
 - aprobaciones aplicables;
-- plan de rollback.
+- procedimiento de rollback.
 
-## 9. Criterio de liberación
+## 11. Criterio GO / NO-GO
 
-La liberación es **NO-GO** mientras exista un punto obligatorio pendiente que TIC o el responsable institucional haya clasificado como bloqueante.
+La versión es **NO-GO** mientras exista un punto clasificado como bloqueante por TIC, seguridad, protección de datos o el responsable funcional.
 
-El hecho de que el repositorio compile, pase pruebas y genere el EXE demuestra calidad técnica del artefacto; no sustituye los controles de infraestructura, identidad, operación y protección de datos requeridos para producción.
+Una versión técnicamente correcta debe compilar, pasar pruebas, construir su artefacto y contar con evidencia de integridad. La autorización de producción se completa con los controles institucionales de infraestructura, identidad, seguridad, operación y protección de datos.
