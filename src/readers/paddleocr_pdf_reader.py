@@ -26,8 +26,10 @@ class PaddleOCRPDFReader:
 
     En CPU se desactiva MKL-DNN/oneDNN para evitar una ruta de inferencia que
     puede lanzar ``NotImplementedError`` con PaddlePaddle 3.x al ejecutar
-    modelos PP-OCRv5 sobre Windows. La prioridad de este reader es estabilidad
-    y reproducibilidad, no aceleración específica del backend.
+    modelos PP-OCRv5 sobre Windows. Además, la detección limita el lado mayor
+    de la página para no enviar imágenes bancarias renderizadas a 300 DPI a
+    resolución completa al predictor CPU. La prioridad de este reader es
+    estabilidad y reproducibilidad.
     """
 
     MAX_TEXT_PAGES = 5
@@ -36,6 +38,7 @@ class PaddleOCRPDFReader:
     DEFAULT_DEVICE = "cpu"
     DEFAULT_DETECTION_MODEL_NAME = "PP-OCRv5_mobile_det"
     DEFAULT_RECOGNITION_MODEL_NAME = "latin_PP-OCRv5_mobile_rec"
+    DEFAULT_TEXT_DET_LIMIT_SIDE_LEN = 1600
 
     _engine: Any | None = None
     _engine_signature: tuple[str, ...] | None = None
@@ -55,6 +58,7 @@ class PaddleOCRPDFReader:
         config = cls._load_config()
         engine = cls._get_engine(**config)
         dpi = cls._configured_dpi()
+        text_det_limit_side_len = cls._configured_detection_side_len()
 
         pdf = pdfium.PdfDocument(str(file_path))
         all_words: list[dict[str, Any]] = []
@@ -75,6 +79,7 @@ class PaddleOCRPDFReader:
                 logical_page=logical_page,
                 page_width=page_width,
                 doctop_offset=doctop_offset,
+                text_det_limit_side_len=text_det_limit_side_len,
             )
 
             all_words.extend(words)
@@ -100,6 +105,8 @@ class PaddleOCRPDFReader:
                 "coordinate_space": "pdf_points",
                 "network_model_downloads": False,
                 "mkldnn_enabled": False,
+                "text_det_limit_side_len": text_det_limit_side_len,
+                "text_det_limit_type": "max",
             },
         )
 
@@ -176,6 +183,24 @@ class PaddleOCRPDFReader:
         return max(150, min(dpi, 600))
 
     @classmethod
+    def _configured_detection_side_len(cls) -> int:
+        configured = os.getenv(
+            "PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN",
+            "",
+        ).strip()
+        if not configured:
+            return cls.DEFAULT_TEXT_DET_LIMIT_SIDE_LEN
+
+        try:
+            side_len = int(configured)
+        except ValueError:
+            return cls.DEFAULT_TEXT_DET_LIMIT_SIDE_LEN
+
+        # 960 mantiene legibilidad de texto pequeño; 2400 evita volver a una
+        # carga cercana a la página completa de 300 DPI en CPU.
+        return max(960, min(side_len, 2400))
+
+    @classmethod
     def _get_engine(
         cls,
         language: str,
@@ -246,6 +271,7 @@ class PaddleOCRPDFReader:
         logical_page: int,
         page_width: float,
         doctop_offset: float,
+        text_det_limit_side_len: int,
     ) -> tuple[list[dict[str, Any]], str]:
         try:
             import numpy as np
@@ -258,8 +284,15 @@ class PaddleOCRPDFReader:
 
         # El engine y sus modelos se mantienen en memoria. La inferencia se
         # serializa para conservar un comportamiento estable si ocr_workers > 1.
+        # El detector limita el lado mayor: evita inferencia a resolución
+        # completa de una página renderizada a 300 DPI, pero conserva esa fuente
+        # para que las coordenadas y recortes mantengan suficiente detalle.
         with cls._predict_lock:
-            result = engine.predict(image_array)
+            result = engine.predict(
+                image_array,
+                text_det_limit_side_len=text_det_limit_side_len,
+                text_det_limit_type="max",
+            )
 
         image_width = max(float(image.width), 1.0)
         pixel_to_pdf = page_width / image_width
