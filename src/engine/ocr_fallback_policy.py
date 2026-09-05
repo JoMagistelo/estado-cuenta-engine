@@ -15,6 +15,7 @@ class ValidationProfile:
     total: int
     passed: int
     failed: int
+    names: tuple[str, ...]
     failed_names: tuple[str, ...]
 
 
@@ -61,6 +62,7 @@ def paddle_fallback_enabled(bank_key: str) -> bool:
 def validation_profile(
     validaciones: list[ResultadoValidacion],
 ) -> ValidationProfile:
+    names = tuple(validation.nombre for validation in validaciones)
     failed_names = tuple(
         validation.nombre
         for validation in validaciones
@@ -73,6 +75,7 @@ def validation_profile(
         total=total,
         passed=total - failed,
         failed=failed,
+        names=names,
         failed_names=failed_names,
     )
 
@@ -81,7 +84,7 @@ def should_attempt_paddle_fallback(
     bank_key: str,
     validaciones: list[ResultadoValidacion],
 ) -> bool:
-    """Activa PaddleOCR sólo ante una falla explícita de validación."""
+    """Activa PaddleOCR sólo ante un tache explícito de los validadores actuales."""
     if not paddle_fallback_enabled(bank_key):
         return False
 
@@ -93,7 +96,7 @@ def should_select_paddle_result(
     tesseract_validaciones: list[ResultadoValidacion],
     paddle_validaciones: list[ResultadoValidacion],
 ) -> bool:
-    """Selecciona Paddle sólo si mejora fallas sin reducir cobertura."""
+    """Selecciona Paddle sólo si mejora fallas con cobertura equivalente."""
     tesseract = validation_profile(tesseract_validaciones)
     paddle = validation_profile(paddle_validaciones)
 
@@ -101,6 +104,14 @@ def should_select_paddle_result(
         return False
 
     if paddle.total == 0:
+        return False
+
+    # No basta con conservar el número de validaciones: Paddle debe conservar
+    # cada validador que estaba disponible con Tesseract. Así nunca se compara
+    # una mejora aparente construida con un conjunto distinto de validadores.
+    tesseract_names = set(tesseract.names)
+    paddle_names = set(paddle.names)
+    if not tesseract_names.issubset(paddle_names):
         return False
 
     if paddle.total < tesseract.total:
