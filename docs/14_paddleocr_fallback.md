@@ -1,4 +1,4 @@
-# PaddleOCR como fallback OCR controlado
+# Revisión OCR dual: Tesseract y PaddleOCR
 
 ## Estado Cuenta Engine — SABG / DGEC
 
@@ -6,146 +6,167 @@
 
 ## 1. Objetivo
 
-PaddleOCR se incorpora como un segundo motor OCR local para aumentar la capacidad de recuperación de documentos escaneados cuando el resultado obtenido con Tesseract presenta inconsistencias financieras verificables.
+Estado Cuenta Engine mantiene **Tesseract como motor OCR primario** e incorpora PaddleOCR como segundo motor local de recuperación y comparación para documentos escaneados cuya extracción primaria requiere revisión.
 
-La integración no reemplaza a Tesseract ni modifica los parsers bancarios. El criterio de activación y de selección se apoya en las mismas validaciones financieras utilizadas por el pipeline del sistema.
+La integración está diseñada para:
 
-El alcance lingüístico de esta integración es **español para documentación bancaria utilizada en México**. No se habilitan otros idiomas en esta versión.
+- conservar el comportamiento actual cuando Tesseract obtiene un resultado suficiente;
+- generar un segundo candidato sólo ante señales objetivas de extracción no confiable;
+- ejecutar ambos candidatos con el mismo parser bancario y los mismos validadores;
+- permitir comparar Tesseract y PaddleOCR en las interfaces Flet y Streamlit;
+- permitir que el usuario autorizado seleccione qué candidato desea revisar y exportar;
+- conservar una recomendación automática conservadora como apoyo, sin sustituir la revisión humana;
+- operar de forma local, sin enviar documentos a servicios OCR externos.
 
-## 2. Flujo de decisión
+El alcance lingüístico de esta versión es **documentación bancaria en español utilizada en México**.
+
+## 2. Flujo funcional
 
 ```text
-Documento OCR
-     │
-     ▼
+PDF escaneado
+    │
+    ▼
 Tesseract
-     │
-     ▼
-Parser del banco
-     │
-     ▼
-Validación financiera
-     │
-     ├── Sin fallas ─────────────► conservar Tesseract
-     │
-     └── Con falla
+    │
+    ▼
+Parser bancario existente
+    │
+    ▼
+Validadores existentes
+    │
+    ├── resultado suficiente ─────────────► conservar Tesseract
+    │
+    └── requiere revisión
             │
             ▼
-      ¿Fallback habilitado
-       y modelos locales
-       autorizados disponibles?
+      PaddleOCR local
             │
-       ┌────┴────┐
-       │         │
-      NO         SÍ
-       │         │
-       ▼         ▼
- Tesseract    PaddleOCR
-                 │
-                 ▼
-           mismo parser
-                 │
-                 ▼
-        misma validación
-                 │
-                 ▼
-        comparar resultados
-                 │
-       ┌─────────┴─────────┐
-       │                   │
- mejora validación     no mejora / falla
- sin perder cobertura       │
-       │                    │
-       ▼                    ▼
-   PaddleOCR             Tesseract
+            ▼
+      mismo parser bancario
+            │
+            ▼
+      mismos validadores
+            │
+            ▼
+     conservar ambos candidatos
+            │
+            ├── recomendación automática
+            │
+            └── selección del usuario
+                    │
+                    ▼
+          vista y exportación Excel
 ```
 
-PaddleOCR sólo sustituye a Tesseract cuando:
+Los documentos **digitales no participan en esta comparación** y conservan el flujo histórico.
 
-1. Tesseract produjo al menos una validación financiera y alguna resultó incorrecta;
-2. PaddleOCR produce al menos el mismo número de validaciones disponibles;
-3. PaddleOCR reduce estrictamente la cantidad de validaciones fallidas.
+## 3. Condiciones que activan el segundo OCR
 
-Si PaddleOCR no está instalado, los modelos no están configurados, la inferencia falla o el resultado no mejora la validación, se conserva el resultado de Tesseract.
+PaddleOCR sólo se intenta cuando el fallback está habilitado para el banco y Tesseract presenta al menos una señal objetiva de revisión. La versión actual considera:
 
-## 3. Alcance de la validación
+- ausencia de movimientos extraídos;
+- una o más validaciones financieras fallidas (`correcto=False` / tache en interfaz);
+- ausencia de una validación principal de depósitos/abonos o retiros/cargos;
+- ausencia total de validaciones disponibles.
 
-El fallback utiliza `validar_movimientos()` y, por tanto, considera las validaciones disponibles para el documento, entre ellas:
+El guion de una validación se interpreta dentro del contexto del resultado. No se utiliza una puntuación de confianza OCR aislada para decidir qué información financiera conservar.
 
-- suma de depósitos/abonos contra el resumen;
-- suma de retiros/cargos contra el resumen;
-- saldo del último movimiento contra saldo final;
-- ecuación saldo anterior + abonos - cargos = saldo final.
+## 4. Comparación y selección
 
-No se utiliza una puntuación OCR aislada para decidir qué resultado financiero conservar. La decisión depende de consistencia de negocio verificable y de la cobertura de las validaciones.
+Cuando PaddleOCR logra producir un segundo candidato, ambos resultados permanecen disponibles **en memoria durante la sesión de procesamiento**.
 
-## 4. Seguridad y privacidad
+Las interfaces muestran para cada motor, como mínimo:
+
+- cantidad de movimientos;
+- cantidad de validaciones disponibles;
+- cantidad de validaciones fallidas;
+- motor recomendado;
+- motor actualmente seleccionado.
+
+El usuario autorizado puede alternar entre **Tesseract** y **PaddleOCR**. Al cambiar la selección se actualizan:
+
+- datos de la cuenta;
+- resumen financiero;
+- movimientos;
+- validaciones;
+- resultado que se utilizará para la exportación a Excel.
+
+No se duplican automáticamente los PDF ni se escriben copias del texto OCR alterno al disco para implementar esta comparación.
+
+## 5. Recomendación automática
+
+La recomendación automática sirve como punto de partida, no como sustituto de la revisión funcional.
+
+La política es conservadora:
+
+- si Tesseract no obtiene movimientos y PaddleOCR sí, se recomienda PaddleOCR;
+- si PaddleOCR pierde movimientos que Tesseract sí obtuvo, se mantiene Tesseract;
+- PaddleOCR no se recomienda si pierde validadores que Tesseract sí pudo calcular;
+- con cobertura comparable, se favorece el candidato con menos validaciones fallidas;
+- ante empate o evidencia insuficiente se mantiene Tesseract.
+
+La selección manual del usuario puede diferir de la recomendación automática.
+
+## 6. Seguridad y privacidad
 
 La integración está diseñada para ejecución **local dentro de infraestructura autorizada**.
 
 Controles implementados:
 
-- no se utiliza una API alojada de PaddleOCR;
-- los documentos no se envían a un servicio OCR externo;
-- los modelos no se descargan automáticamente durante el procesamiento;
-- los directorios de modelos deben configurarse explícitamente;
-- se deshabilita la comprobación automática de proveedores de modelos mediante `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1`;
+- no utiliza una API OCR alojada;
+- no envía PDF, texto extraído o información financiera a servicios externos;
+- no descarga modelos durante el procesamiento;
+- exige rutas locales explícitas para los modelos;
+- deshabilita la comprobación automática de proveedores de modelos mediante `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1`;
 - el fallback está deshabilitado por defecto;
-- el registro técnico del fallback utiliza estados y conteos de validación, no importes ni contenido financiero.
+- la telemetría técnica utiliza estados y conteos, no importes ni contenido bancario;
+- los candidatos alternos se conservan en memoria para revisión y no se persisten automáticamente como archivos independientes.
 
-La documentación oficial de PaddleOCR permite indicar rutas locales para los modelos de detección y reconocimiento; cuando no se proporcionan, la herramienta puede descargar modelos oficiales. Por ese motivo Estado Cuenta Engine exige las rutas locales antes de inicializar PaddleOCR.
+## 7. Componentes controlados
 
-Referencias técnicas:
-
-- https://paddlepaddle.github.io/PaddleOCR/main/en/version3.x/pipeline_usage/OCR.html
-- https://paddlepaddle.github.io/PaddleX/3.7/FAQ.html
-
-## 5. Componentes controlados
-
-La línea controlada utiliza:
+La línea técnica utiliza:
 
 - PaddleOCR `>=3.7,<3.8`;
 - PaddlePaddle `>=3.3.1,<3.4`;
 - modelo de detección `PP-OCRv5_mobile_det`;
 - modelo de reconocimiento `latin_PP-OCRv5_mobile_rec`;
-- `PADDLEOCR_LANG=es` como único idioma admitido;
+- `PADDLEOCR_LANG=es` como único idioma admitido por la aplicación;
 - inferencia CPU como configuración inicial.
 
-PaddleOCR no publica un modelo `es-MX` separado. El modelo oficial `latin_PP-OCRv5_mobile_rec` incluye español y reconocimiento numérico, por lo que se utiliza como componente técnico de reconocimiento mientras la aplicación restringe el idioma a `es`.
+PaddleOCR no proporciona un modelo independiente `es-MX`; el modelo latino oficial incluye español y reconocimiento numérico. La aplicación restringe el contrato funcional al español utilizado en documentación bancaria mexicana.
 
-Referencia oficial:
+## 8. Instalación
 
-- https://paddlepaddle.github.io/PaddleOCR/latest/en/version3.x/algorithm/PP-OCRv5/PP-OCRv5_multi_languages.html
-
-Estas versiones forman parte de la línea técnica de esta versión del producto. Cualquier actualización debe pasar por pruebas de regresión, revisión de vulnerabilidades y actualización del inventario de terceros.
-
-## 6. Instalación de dependencia opcional
-
-PaddleOCR no forma parte del runtime mínimo del motor. Se instala únicamente en el entorno institucional donde se autorice el fallback:
+PaddleOCR es una dependencia opcional. Para el runtime Python institucional:
 
 ```powershell
 python -m pip install -e ".[streamlit,paddleocr]"
 ```
 
-La automatización de calidad instala y audita este extra en Windows para comprobar compatibilidad del runtime y revisar las dependencias Python incorporadas.
+Para desarrollo local con Flet y PaddleOCR:
 
-## 7. Gestión institucional de modelos
+```powershell
+python -m pip install -e ".[desktop,paddleocr]"
+```
 
-Los modelos no deben incorporarse al código fuente ni obtenerse dinámicamente durante una solicitud de procesamiento.
+La automatización de calidad valida el runtime PaddleOCR/PaddlePaddle en Windows con Python 3.12 y Python 3.13.
 
-Antes de habilitar PaddleOCR, TIC debe disponer de un paquete de modelos aprobado que registre como mínimo:
+## 9. Gestión institucional de modelos
+
+Los modelos deben administrarse como componentes de terceros controlados. Antes de habilitarlos en producción debe registrarse, como mínimo:
 
 - nombre exacto del modelo;
 - versión o referencia de origen;
 - fuente oficial de adquisición;
-- fecha de adquisición;
 - licencia aplicable;
-- hash SHA-256 de cada paquete o directorio distribuido conforme al procedimiento institucional;
-- revisión de vulnerabilidades/avisos de seguridad aplicables;
+- fecha de adquisición;
+- hash SHA-256;
 - responsable de incorporación;
-- ubicación autorizada en servidor.
+- ubicación autorizada;
+- permisos/ACL;
+- revisión de vulnerabilidades o avisos aplicables.
 
-Ejemplo de ubicación operativa:
+Ubicación operativa de referencia:
 
 ```text
 C:\ProgramData\EstadoCuentaEngine\PaddleOCR\
@@ -153,11 +174,9 @@ C:\ProgramData\EstadoCuentaEngine\PaddleOCR\
     latin_PP-OCRv5_mobile_rec\
 ```
 
-La ubicación definitiva y sus ACL corresponden a TIC.
+La ubicación definitiva y las ACL corresponden a TIC.
 
-## 8. Configuración
-
-Variables requeridas para habilitar el fallback:
+## 10. Configuración
 
 ```powershell
 $env:PADDLEOCR_FALLBACK_ENABLED = "1"
@@ -174,98 +193,107 @@ $env:PADDLEOCR_LANG = "es"
 $env:PADDLEOCR_DPI = "300"
 ```
 
-`PADDLEOCR_LANG` debe permanecer en `es`. El reader rechaza expresamente cualquier otro valor para evitar cambios lingüísticos no aprobados en producción.
+`PADDLEOCR_LANG` debe permanecer en `es`. Cualquier otro valor es rechazado por el reader.
 
-`PADDLEOCR_FALLBACK_BANKS` admite una lista separada por comas o `*`. Para una primera liberación se recomienda habilitarlo únicamente en los bancos incluidos en la UAT correspondiente y ampliar cobertura de manera controlada.
+Para la primera UAT se recomienda habilitar el fallback únicamente para HSBC. La ampliación a otros bancos debe realizarse con corpus de prueba representativo.
 
-## 9. Estado por defecto y rollback
+## 11. Rollback
 
-El fallback queda **deshabilitado por defecto**. Esto permite instalar el código y sus pruebas sin alterar el comportamiento histórico hasta que TIC y el área funcional completen la validación correspondiente.
-
-Rollback operativo:
+PaddleOCR queda deshabilitado por defecto. Para regresar al comportamiento exclusivo de Tesseract:
 
 ```powershell
 $env:PADDLEOCR_FALLBACK_ENABLED = "0"
 ```
 
-Después de reiniciar el servicio, el flujo vuelve a utilizar exclusivamente Tesseract para OCR, sin requerir rollback de código ni modificación de parsers.
+Después de reiniciar la aplicación o servicio, el flujo OCR vuelve a utilizar únicamente Tesseract sin modificar parsers.
 
-## 10. Observabilidad
+## 12. Diagnóstico técnico seguro
 
-El `DocumentData.metadata` puede registrar únicamente información técnica del intento:
+El proyecto incluye:
 
-- si el fallback fue intentado;
-- si PaddleOCR fue seleccionado;
-- número de validaciones disponibles por motor;
-- número de validaciones fallidas por motor;
+```powershell
+python scripts\diagnostico_paddleocr.py "C:\ruta\estado.pdf"
+```
+
+El diagnóstico muestra únicamente información técnica como:
+
+- banco detectado;
+- motores disponibles;
+- movimientos por candidato;
+- número de validaciones;
+- número de validaciones fallidas;
+- recomendación automática;
 - tipo de error técnico si PaddleOCR no pudo ejecutarse.
 
-No deben registrarse:
+También puede evaluarse un candidato concreto:
 
-- importes esperados u obtenidos;
-- saldos;
-- nombres;
-- cuentas/CLABE;
-- conceptos de movimientos;
-- texto OCR completo;
-- contenido del PDF.
+```powershell
+python scripts\diagnostico_paddleocr.py "C:\ruta\estado.pdf" --motor tesseract
+python scripts\diagnostico_paddleocr.py "C:\ruta\estado.pdf" --motor paddleocr
+```
 
-## 11. Recursos de servidor
+El diagnóstico no imprime nombres, cuentas, CLABE, conceptos, texto OCR ni importes financieros.
 
-PaddlePaddle agrega un runtime de inferencia significativamente mayor que el OCR Tesseract actual. Antes de producción se debe medir con corpus autorizado:
+## 13. Recursos y operación
 
-- memoria residente del proceso;
-- tiempo adicional cuando se activa el fallback;
+PaddlePaddle incorpora un runtime de inferencia mayor que Tesseract. Antes de producción deben medirse con corpus autorizado:
+
+- memoria residente;
 - CPU por página;
+- tiempo adicional cuando se activa el segundo OCR;
 - espacio de los modelos;
-- concurrencia máxima segura;
-- comportamiento bajo lotes con múltiples documentos OCR fallidos.
+- concurrencia segura;
+- comportamiento ante lotes con varios documentos OCR que requieren revisión.
 
-El fallback sólo ejecuta PaddleOCR ante una falla de validación, por lo que no duplica el costo OCR para documentos que Tesseract procesa correctamente.
+El segundo OCR no se ejecuta para documentos digitales ni para resultados OCR que no presentan señales de revisión.
 
-## 12. Ejecutable de escritorio
+## 14. Ejecutable de escritorio
 
-El build PyInstaller actual permanece sin PaddleOCR para conservar el artefacto de escritorio existente, su tamaño y su cadena de suministro.
+El ejecutable PyInstaller actual se mantiene sin integrar PaddlePaddle dentro del binario. La comparación PaddleOCR está destinada inicialmente al runtime Python utilizado para UAT y despliegue web/servicio.
 
-La integración PaddleOCR de esta versión está destinada al runtime Python institucional de la aplicación web/servicio. Si TIC requiere PaddleOCR dentro del ejecutable de escritorio, deberá evaluarse como un cambio de empaquetado separado que incluya PaddlePaddle, modelos, licencias, hashes, tamaño del artefacto y pruebas específicas de distribución.
+Si TIC requiere incorporar PaddleOCR dentro del ejecutable de escritorio, debe tratarse como una liberación de empaquetado específica que incluya tamaño, modelos, licencias, hashes, runtime y pruebas del artefacto resultante.
 
-## 13. UAT recomendada
+## 15. UAT recomendada
 
-Antes de habilitar el fallback en producción:
+Antes de habilitar PaddleOCR en producción:
 
-1. instalar el extra PaddleOCR en un ambiente controlado;
-2. registrar e instalar los modelos aprobados;
-3. confirmar `PADDLEOCR_LANG=es`;
-4. habilitar inicialmente un banco/layout objetivo;
-5. procesar corpus institucional autorizado que incluya casos correctos y casos donde Tesseract falle validación;
-6. incluir nombres, conceptos, abreviaturas bancarias, acentos, `Ñ`, importes, fechas y referencias representativas de documentación mexicana;
-7. comprobar que PaddleOCR sólo se ejecuta ante la condición definida;
-8. comparar movimientos, resumen y datos relevantes;
-9. verificar que los casos correctos de Tesseract no cambien;
-10. medir CPU, memoria y tiempos;
-11. validar rollback por configuración;
-12. documentar la aceptación funcional y técnica.
+1. instalar el extra PaddleOCR en ambiente controlado;
+2. registrar e instalar modelos aprobados;
+3. validar que no existan descargas durante procesamiento;
+4. habilitar inicialmente HSBC;
+5. procesar casos donde Tesseract obtiene resultados correctos y confirmar que PaddleOCR no se ejecuta innecesariamente;
+6. procesar casos con taches de validación;
+7. procesar casos donde Tesseract no obtiene movimientos o validaciones suficientes;
+8. comparar Tesseract y PaddleOCR en Flet y Streamlit;
+9. alternar manualmente el motor y verificar que toda la vista cambie de candidato;
+10. exportar Excel con Tesseract seleccionado y con PaddleOCR seleccionado y comprobar que la exportación respete la selección;
+11. validar nombres, conceptos, acentos, `Ñ`, números, fechas, referencias e importes de documentación mexicana;
+12. medir CPU, memoria y tiempos;
+13. comprobar rollback por configuración;
+14. documentar aceptación funcional y técnica.
 
-## 14. Criterios de aceptación TIC
+## 16. Criterios de aceptación TIC
 
-- [ ] PaddleOCR/PaddlePaddle incluidos en inventario de software;
+- [ ] PaddleOCR/PaddlePaddle inventariados como componentes de terceros;
 - [ ] versiones aprobadas y auditadas;
-- [ ] modelos identificados con procedencia/licencia/hash;
-- [ ] modelos instalados en ubicación protegida por ACL;
-- [ ] idioma de aplicación restringido a español;
-- [ ] no existen descargas de modelos durante el procesamiento;
-- [ ] no se requiere transferencia del documento a servicios externos;
-- [ ] fallback deshabilitado hasta concluir UAT;
-- [ ] condición de activación verificada;
-- [ ] selección Paddle vs Tesseract validada con casos representativos;
-- [ ] uso de CPU/memoria aceptado;
-- [ ] rollback por configuración probado;
-- [ ] logs/telemetría sin información financiera o personal innecesaria.
+- [ ] modelos identificados con procedencia, licencia y hash;
+- [ ] modelos instalados en ubicación protegida;
+- [ ] ejecución local sin transferencia de documentos a servicios externos;
+- [ ] sin descarga de modelos durante procesamiento;
+- [ ] idioma restringido a español;
+- [ ] fallback deshabilitado hasta completar UAT;
+- [ ] condiciones de activación verificadas;
+- [ ] comparación Tesseract/PaddleOCR verificada en Flet y Streamlit;
+- [ ] selección manual y exportación del candidato elegido verificadas;
+- [ ] recomendación automática validada como apoyo y no como decisión irreversible;
+- [ ] uso de recursos aceptado;
+- [ ] rollback probado;
+- [ ] logs y diagnósticos sin información financiera o personal innecesaria.
 
-## 15. Responsabilidades
+## 17. Responsabilidades
 
-**Equipo de aplicación:** implementación del reader, política de fallback, pruebas, dependencias declaradas y documentación técnica.
+**Equipo de aplicación:** reader, política de activación/recomendación, comparación en interfaz, pruebas, dependencias y documentación técnica.
 
-**TIC:** aprobación/instalación de runtime y modelos, ubicación/ACL, inventario, vulnerabilidades, configuración de servicio, recursos y operación.
+**TIC:** aprobación e instalación del runtime/modelos, ubicación, ACL, inventario, vulnerabilidades, configuración de servicio, recursos y operación.
 
-**DGEC / área funcional:** validación de resultados con corpus autorizado y aceptación de la condición de fallback.
+**DGEC / área funcional:** UAT con corpus autorizado, comparación de resultados y aceptación funcional de los criterios de uso.
