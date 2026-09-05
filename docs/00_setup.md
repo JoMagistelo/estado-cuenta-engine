@@ -8,7 +8,7 @@ Entorno de referencia actual:
 
 - Windows 10/11 para desarrollo;
 - Windows Server como plataforma objetivo de producción, pendiente de definición final por TIC;
-- Python 3.12 o 3.13;
+- Python 3.10, 3.11, 3.12 o 3.13;
 - Git;
 - PowerShell;
 - entorno virtual de Python aislado.
@@ -78,16 +78,30 @@ La existencia de estas dos interfaces no implica que ambas formen parte de la ar
 
 ## 5. Comprobaciones de calidad
 
-La configuración de Ruff vive en `pyproject.toml`. En esta primera línea base se aplica al código propio fuera de `app/`, `parsers/`, `readers/` y `tests/`, que tienen ciclos de estabilización separados.
+La configuración de Ruff vive en `pyproject.toml` y cubre el repositorio completo salvo `vendor/`, concentrándose en errores críticos de sintaxis y nombres. La CI también compila `app/`, `src/` y `tests/`, ejecuta la suite sintética y construye el ejecutable Flet en Windows.
 
 ```powershell
 ruff check .
-pytest
+pytest -m "not integration"
 python -m build
 pip-audit
 ```
 
-Una liberación institucional deberá ejecutar estas comprobaciones dentro de un proceso automatizado y conservar su evidencia.
+Las pruebas que requieren PDFs reales son opt-in. Use archivos autorizados fuera del repositorio:
+
+```powershell
+$env:ESTADO_CUENTA_TEST_PDF = "C:\ruta\autorizada\estado.pdf"
+pytest -m integration
+```
+
+Para un lote:
+
+```powershell
+$env:ESTADO_CUENTA_TEST_PDFS = "C:\ruta\uno.pdf;C:\ruta\dos.pdf"
+pytest -m integration
+```
+
+Una liberación institucional deberá ejecutar las comprobaciones aplicables dentro de un proceso automatizado y conservar su evidencia.
 
 ## 6. Datos de prueba
 
