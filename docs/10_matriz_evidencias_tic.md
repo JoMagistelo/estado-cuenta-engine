@@ -4,119 +4,105 @@
 
 **Fecha de corte:** 5 de septiembre de 2026
 
-Esta matriz separa tres cosas que no deben confundirse:
+## 1. Propósito
 
-1. controles que el repositorio puede demostrar por sí mismo;
-2. controles que requieren infraestructura o configuración institucional;
-3. aprobaciones y documentos cuya titularidad corresponde a TIC, seguridad, protección de datos, jurídica, archivos u otras áreas competentes.
+Esta matriz identifica qué controles aporta directamente el producto y cuáles requieren configuración, validación o aprobación institucional. Su objetivo es facilitar la revisión de TIC y evitar que responsabilidades de infraestructura o protección de datos se confundan con responsabilidades del código.
 
-Un control marcado como implementado en el repositorio no equivale a certificación ni autorización de producción.
+## 2. Criterios de estado
 
-## 1. Criterio de estado
+- **Implementado:** existe evidencia técnica verificable en el código o automatización.
+- **Parcial:** existe evidencia técnica, pero requiere completar controles institucionales.
+- **Institucional:** corresponde principalmente a TIC u otra área competente.
 
-- **Implementado:** existe evidencia técnica verificable en el repositorio/CI.
-- **Parcial:** existe una parte, pero falta evidencia institucional o cobertura completa.
-- **Institucional:** no corresponde resolverlo exclusivamente desde el código.
-- **Pendiente:** falta definir o ejecutar antes de producción.
+## 3. Matriz
 
-## 2. Matriz
-
-| Dominio | Estado | Evidencia actual | Pendiente / responsable |
+| Dominio | Estado | Evidencia del producto | Complemento institucional |
 |---|---|---|---|
-| Control de cambios | Parcial | historial Git, CI y checklist de cambios | configurar en la plataforma institucional la protección de la línea base, revisiones y checks obligatorios |
-| Equivalencia funcional | Implementado/Parcial | suite sintética, compileall, Ruff, build | UAT con corpus autorizado y resultados esperados |
-| Gestión de dependencias Python | Implementado | `pyproject.toml`, rangos controlados y auditoría CI | conservar inventario exacto por release y proceso de actualización aprobado |
-| Vulnerabilidades de dependencias | Implementado | `pip-audit` en CI | proceso institucional de excepción/remediación |
-| Build reproducible controlado | Parcial | build Windows/PyInstaller en CI, hash SHA-256 del EXE | firma de código y canal oficial de distribución si TIC lo requiere |
-| Contenedor OCI opcional | Implementado/Parcial | `Dockerfile`, `.dockerignore`, build y health check en CI | escaneo de imagen, registro institucional, hardening y plataforma aprobada por TIC |
-| Terceros/binarios `vendor/` | Parcial | inclusión explícita y evidencia de hash | procedencia, versión, licencia, CVE, aprobación y ciclo de actualización de Tesseract |
-| Datos personales en repositorio | Implementado a nivel repo | `.gitignore`, pruebas opt-in, `SECURITY.md` y reglas de cambio | supervisión y procedimiento institucional |
-| Clasificación de información | Institucional | documentación de sensibilidad del sistema | clasificación formal SABG y reglas de manejo |
-| Documento de Seguridad | Institucional/Pendiente | insumos técnicos documentados | responsable de protección de datos/SABG |
-| Análisis de riesgos y brecha | Parcial | riesgos técnicos identificados en docs | análisis institucional aprobado y plan de tratamiento |
-| Evaluación de impacto en protección de datos | Institucional/Pendiente | se documenta necesidad de determinar procedencia | área competente de protección de datos |
-| Identidad y autenticación | Institucional/Pendiente | arquitectura prevista de integración con SIEC | definir SSO/API, MFA, identidad de servicio, expiración y revocación |
-| Autorización/RBAC | Institucional/Pendiente | separación conceptual de motor e identidad | matriz de roles y mínimo privilegio |
-| Secretos y certificados | Parcial | prohibición de versionado y `.gitignore` | almacén institucional de secretos/certificados y rotación |
-| TLS y comunicaciones | Institucional/Pendiente | requisito documentado | terminación TLS, certificados y hardening de servidor/red |
-| Logs y monitoreo | Parcial | criterios de no registrar PII documentados | plataforma institucional, retención, alertas y acceso |
-| Gestión de incidentes | Parcial | `SECURITY.md` y guía de incidentes | canal, responsables, CSIRT/TIC, tiempos y formatos institucionales |
-| Vulneraciones de datos personales | Institucional/Pendiente | criterio de escalamiento documentado | bitácora y procedimiento legal/institucional |
-| Respaldo/recuperación | Institucional/Pendiente | requisito identificado | RPO/RTO, respaldo, restauración y pruebas |
-| Continuidad operativa | Institucional/Pendiente | requisito identificado | integración al BCP/DR institucional |
-| Gestión de parches | Parcial | auditoría automatizada e inventario de paquetes | Windows Server, Tesseract, imagen base y demás componentes de infraestructura |
-| Integridad de artefactos | Implementado/Parcial | hash SHA-256 generado en CI | custodia, firma/certificado y registro de release institucional |
-| Inventario de software | Implementado/Parcial | inventario de paquetes generado en CI | integrar con CMDB/SBOM/inventario institucional si aplica |
-| Segregación desarrollo/producción | Institucional | CI evita depender de archivos locales | entornos y permisos definidos por TIC |
-| Retención y archivo | Institucional/Pendiente | distinción entre temporales y documentos de archivo | catálogo de disposición, expediente y reglas SABG |
-| Capacitación | Institucional/Pendiente | documentación técnica disponible | programa institucional de capacitación y evidencia |
+| Control de cambios | Parcial | historial Git, CI y criterios documentados de revisión | protección de línea base, revisores y permisos en plataforma institucional |
+| Equivalencia funcional | Parcial | suite sintética, compilación, análisis estático y build | UAT con corpus autorizado y aceptación funcional |
+| Dependencias Python | Implementado | `pyproject.toml` como fuente canónica | política institucional de actualización y repositorio de paquetes si aplica |
+| Vulnerabilidades de dependencias | Implementado | `pip-audit` en CI | tratamiento/aceptación institucional de hallazgos |
+| Inventario de software | Implementado/Parcial | inventario de paquetes generado por CI | integración al inventario/CMDB/SBOM institucional si aplica |
+| Build Windows | Implementado | PyInstaller validado automáticamente | canal de distribución y firma de código si TIC la requiere |
+| Integridad del artefacto | Implementado | SHA-256 del ejecutable | custodia y registro de liberación institucional |
+| Tesseract / terceros | Parcial | runtime identificado y hash SHA-256 | versión, procedencia, licencia, CVE y ciclo de actualización aprobado |
+| Datos personales en código | Implementado | reglas de exclusión, pruebas opt-in y política de seguridad | supervisión y procedimiento institucional de manejo de información |
+| Clasificación de información | Institucional | sensibilidad documentada | clasificación formal SABG |
+| Documento de Seguridad | Institucional | insumos técnicos disponibles | integración/actualización por área competente |
+| Análisis de riesgos y brecha | Parcial | riesgos técnicos identificados | análisis institucional y plan de tratamiento |
+| Evaluación de impacto en datos personales | Institucional | necesidad de determinar procedencia documentada | resolución por área competente |
+| Identidad y autenticación | Institucional | separación entre motor e identidad | mecanismo SIEC/SSO/API aprobado |
+| Autorización y roles | Institucional | motor desacoplado de directorio propio | matriz de roles y mínimo privilegio |
+| TLS y certificados | Institucional | arquitectura compatible con reverse proxy | configuración IIS/certificado institucional |
+| Red y firewall | Institucional | no se requiere salida de documentos a servicios externos | segmentación, reglas y puertos definidos por TIC |
+| Cuenta de servicio | Institucional | requisitos de mínimo privilegio documentados | alta, permisos y operación por TIC |
+| Logs y monitoreo | Parcial | criterios de minimización de PII | SIEM, retención, acceso y alertamiento institucional |
+| Gestión de incidentes | Parcial | política y guía técnica de respuesta | canal, responsables y procedimiento institucional |
+| Vulneraciones de datos personales | Institucional | criterio de escalamiento documentado | bitácora, notificación y procedimiento aplicable |
+| Respaldo/recuperación | Institucional | requisitos técnicos documentados | RPO/RTO, backup, restore y pruebas |
+| Continuidad operativa | Institucional | rollback de aplicación contemplado | integración al esquema institucional de continuidad |
+| Gestión de parches | Parcial | dependencias Python auditadas | Windows Server, IIS, Python y Tesseract bajo proceso TIC |
+| Retención y archivo | Institucional | separación entre temporales y documentos de archivo | reglas SABG de conservación/disposición |
 
-## 3. Evidencia automática del repositorio
+## 4. Evidencia automática de la versión
 
-La automatización de calidad debe demostrar en cada cambio candidato:
+La automatización de calidad debe producir, como mínimo:
 
 - compilación de `app/`, `src/` y `tests/`;
-- errores críticos de código mediante Ruff;
-- pruebas unitarias y sintéticas;
+- análisis estático de errores críticos;
+- suite sintética/autocontenida;
 - build del paquete Python;
-- smoke de dependencias de interfaces;
-- build real del ejecutable Windows;
-- auditoría de vulnerabilidades conocidas en dependencias Python;
-- inventario de paquetes resueltos;
-- hash SHA-256 del ejecutable generado;
-- build y health check del contenedor OCI opcional.
+- validación de dependencias de interfaces;
+- build del ejecutable Windows;
+- inventario de paquetes instalados;
+- auditoría de vulnerabilidades Python;
+- hash SHA-256 de Tesseract;
+- hash SHA-256 del ejecutable.
 
-Estas evidencias permiten a TIC revisar un cambio sin depender del equipo personal del desarrollador.
+## 5. Evidencia mínima por liberación
 
-## 4. Configuración administrativa del repositorio institucional
+La versión entregada a TIC debería estar acompañada por:
 
-Los controles que viven fuera del código deben configurarse en la plataforma de desarrollo aprobada por TIC. Como mínimo, para una línea base productiva se recomienda:
-
-- prohibición de cambios directos a la rama o línea base productiva para desarrolladores ordinarios;
-- revisión/aprobación obligatoria antes de integrar cambios;
-- checks automáticos de calidad obligatorios;
-- actualización con la línea base antes de integrar cuando la política interna lo requiera;
-- aprobación por persona distinta del autor cuando exista el equipo suficiente;
-- restricción de reescritura no autorizada de la historia productiva;
-- permisos mínimos para administrar CI/CD, secretos, entornos y reglas del repositorio.
-
-La herramienta concreta utilizada para implementar estos controles debe ser la que autorice TIC; la documentación del motor no depende de un proveedor específico.
-
-## 5. Evidencia que debe conservarse por liberación
-
-Para una versión candidata a producción se recomienda integrar un expediente de liberación con:
-
-- commit/tag o identificador institucional equivalente;
-- registro de revisión/aprobación del cambio;
-- resultado de CI;
-- versión de Python;
-- inventario exacto de dependencias;
+- identificador de versión;
+- referencia exacta del código fuente;
+- resultado de pruebas automatizadas;
+- inventario de dependencias;
 - resultado de auditoría de vulnerabilidades;
-- hash SHA-256 del ejecutable y, cuando aplique, digest de imagen;
-- inventario y hash de terceros relevantes;
-- resultado de UAT con corpus autorizado y sin exponer PII en el repositorio;
-- autorización funcional;
-- autorización TIC/seguridad correspondiente;
-- rollback documentado.
+- hash del ejecutable entregado;
+- información del runtime Tesseract;
+- evidencia de UAT cuando corresponda;
+- notas de cambio;
+- procedimiento de despliegue/rollback;
+- aceptación funcional y técnica conforme al proceso institucional.
 
-## 6. No-go para producción
+## 6. Criterios de no liberación
 
-No liberar si ocurre cualquiera de los siguientes:
+No debe promoverse una versión cuando exista alguno de los siguientes supuestos sin tratamiento formal:
 
-- CI obligatorio en rojo;
-- vulnerabilidad conocida sin tratamiento/aceptación formal;
-- cambio funcional de parser sin regresión/UAT suficiente;
-- binario o dependencia de origen no trazable;
-- uso de datos reales fuera de entorno autorizado;
-- ausencia de controles institucionales de identidad/autorización para un servicio expuesto;
-- ausencia de TLS cuando exista tránsito por red;
-- falta de respaldo/rollback aplicable;
-- falta de aprobación requerida por TIC o protección de datos.
+- pruebas automáticas fallidas;
+- vulnerabilidad bloqueante conocida;
+- cambio de parser sin regresión suficiente;
+- dependencia o binario de origen no trazable;
+- artefacto sin identificación/hash;
+- exposición de datos reales en repositorios o evidencias no autorizadas;
+- falta de controles de identidad/TLS para un servicio expuesto;
+- ausencia de rollback aplicable;
+- rechazo funcional o técnico de la versión.
 
-## 7. Referencias normativas principales
+## 7. Configuración de la plataforma institucional
 
-- Política General de Ciberseguridad para la APF, DOF 17/12/2025: https://www.dof.gob.mx/nota_detalle.php?codigo=5776454&fecha=17/12/2025
-- LGPDPPSO vigente, Cámara de Diputados: https://www.diputados.gob.mx/LeyesBiblio/pdf/LGPDPPSO.pdf
-- Marco detallado del proyecto: [`05_normativa_tic_apf.md`](05_normativa_tic_apf.md)
+La plataforma de desarrollo y liberación aprobada por TIC debe aplicar, según corresponda:
 
-La matriz deberá ajustarse cuando ATDT o TIC/SABG entreguen lineamientos, criterios o formatos institucionales más específicos.
+- acceso por roles;
+- revisión obligatoria de cambios;
+- protección de la línea base productiva;
+- checks de CI obligatorios;
+- protección contra reescritura no autorizada;
+- administración restringida de secretos y entornos;
+- trazabilidad de versiones y liberaciones.
+
+La documentación del motor no depende de un proveedor específico para implementar estos controles.
+
+## 8. Referencias
+
+El marco normativo y sus fuentes oficiales se mantienen en [`05_normativa_tic_apf.md`](05_normativa_tic_apf.md). La guía de despliegue institucional se encuentra en [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md).
