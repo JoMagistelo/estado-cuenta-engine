@@ -95,6 +95,8 @@ pyproject.toml          Metadatos, dependencias y configuración de calidad
 
 No se versiona un `requirements.txt` obtenido mediante `pip freeze`. Las versiones exactas de una liberación deben resolverse de forma controlada y conservarse como evidencia del release, junto con el inventario de terceros, revisión de vulnerabilidades y, cuando corresponda, SBOM.
 
+La CI audita vulnerabilidades conocidas de las dependencias instaladas y genera evidencia del inventario resuelto. Dependabot propone actualizaciones de Python y GitHub Actions para revisión humana; ninguna actualización se aplica automáticamente a producción.
+
 ## 6. Protección de datos personales
 
 Los estados de cuenta contienen datos personales y financieros y pueden revelar información adicional sobre terceras personas o, por el concepto de una operación, información de carácter sensible. Por ello deben tratarse con **minimización, finalidad, necesidad de conocer, control de acceso y trazabilidad**.
@@ -108,13 +110,13 @@ Reglas obligatorias para desarrollo y pruebas:
 - No versionar contraseñas, tokens, llaves privadas, certificados ni archivos `.env`.
 - Los artefactos temporales y salidas deben almacenarse sólo durante el tiempo autorizado y eliminarse conforme a las políticas de conservación y disposición aplicables.
 
-La guía detallada está en [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md).
+La guía detallada está en [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md) y el procedimiento de reporte técnico en [`SECURITY.md`](SECURITY.md).
 
 ## 7. Marco normativo y de ciberseguridad
 
 El proyecto se documenta tomando como referencia, entre otros instrumentos vigentes, la normativa TIC de la APF, la Política General de Ciberseguridad para la APF, la Ley General de Protección de Datos Personales en Posesión de Sujetos Obligados y el marco organizacional vigente de la SABG y de la DGEC.
 
-La matriz normativa, su aplicabilidad y los entregables requeridos están en [`docs/05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md).
+La matriz normativa, su aplicabilidad y los entregables requeridos están en [`docs/05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md). La separación entre controles demostrables por el repositorio y controles institucionales se mantiene en [`docs/10_matriz_evidencias_tic.md`](docs/10_matriz_evidencias_tic.md).
 
 > Esta documentación facilita la revisión técnica y de cumplimiento, pero **no sustituye** los dictámenes, autorizaciones, evaluación de impacto, documento de seguridad, análisis de riesgos, Plan Institucional de Ciberseguridad ni demás instrumentos que determinen las áreas competentes.
 
@@ -190,6 +192,10 @@ No usar información real para validar una instalación de desarrollo fuera de u
 - [`07_checklist_revision_tic.md`](docs/07_checklist_revision_tic.md): checklist de auditoría TIC, brechas y criterios de no-go.
 - [`08_estandares_ingenieria.md`](docs/08_estandares_ingenieria.md): reglas de ingeniería, comentarios, dependencias y evidencia de liberación.
 - [`09_auditoria_integral_produccion.md`](docs/09_auditoria_integral_produccion.md): auditoría completa del código, riesgos y gates de equivalencia funcional.
+- [`10_matriz_evidencias_tic.md`](docs/10_matriz_evidencias_tic.md): controles demostrables por el repositorio y pendientes institucionales.
+- [`11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md): triage, remediación, incidentes y terceros.
+- [`12_checklist_liberacion_produccion.md`](docs/12_checklist_liberacion_produccion.md): expediente mínimo y criterios GO/NO-GO para una liberación.
+- [`SECURITY.md`](SECURITY.md): reglas para reportar vulnerabilidades sin exponer datos sensibles.
 
 ## 11. Estado de cumplimiento
 
