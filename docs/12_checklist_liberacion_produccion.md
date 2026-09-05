@@ -20,6 +20,7 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] suite Pytest sintética en verde;
 - [ ] build del paquete Python en verde;
 - [ ] smoke de dependencias Flet/Streamlit en verde;
+- [ ] import del runtime PaddleOCR/PaddlePaddle en Windows validado cuando forme parte de la versión;
 - [ ] build PyInstaller Windows en verde;
 - [ ] UAT ejecutada con corpus autorizado cuando corresponda;
 - [ ] resultados esperados de extracción comparados para cambios funcionales;
@@ -34,12 +35,41 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] runtime Tesseract identificado;
 - [ ] versión/procedencia/licencia de Tesseract verificadas;
 - [ ] vulnerabilidades conocidas de Tesseract evaluadas;
+- [ ] si PaddleOCR está habilitado, versiones de PaddleOCR/PaddlePaddle registradas;
+- [ ] si PaddleOCR está habilitado, modelos locales identificados por nombre, procedencia, licencia y hash SHA-256;
+- [ ] modelos PaddleOCR almacenados fuera del código fuente y bajo ACL institucional;
 - [ ] hash SHA-256 del ejecutable registrado;
 - [ ] hash de Tesseract registrado;
 - [ ] mecanismo institucional de distribución definido;
 - [ ] firma de código aplicada si TIC la requiere.
 
-## 4. Protección de datos personales
+## 4. Revisión OCR Tesseract / PaddleOCR
+
+Aplicar esta sección únicamente cuando el segundo OCR vaya a habilitarse en el ambiente objetivo.
+
+- [ ] `PADDLEOCR_FALLBACK_ENABLED` habilitado únicamente después de UAT;
+- [ ] bancos/layouts autorizados definidos en `PADDLEOCR_FALLBACK_BANKS`;
+- [ ] `PADDLEOCR_TEXT_DETECTION_MODEL_DIR` apunta al modelo aprobado;
+- [ ] `PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR` apunta al modelo aprobado;
+- [ ] inferencia local confirmada;
+- [ ] no existe descarga de modelos durante una solicitud de procesamiento;
+- [ ] no se utiliza API OCR alojada;
+- [ ] egress del servidor no es necesario para procesar documentos;
+- [ ] PaddleOCR no se ejecuta para documentos digitales;
+- [ ] PaddleOCR no se ejecuta cuando Tesseract obtiene un resultado suficiente con las validaciones principales correctas;
+- [ ] PaddleOCR se activa ante casos representativos con taches, validaciones principales ausentes o falta de movimientos;
+- [ ] Tesseract y PaddleOCR se conservan como candidatos separados cuando ambos procesan el documento;
+- [ ] la recomendación automática no pierde validadores disponibles en Tesseract;
+- [ ] Flet permite alternar Tesseract/PaddleOCR;
+- [ ] Streamlit permite alternar Tesseract/PaddleOCR;
+- [ ] al cambiar motor cambian datos de cuenta, resumen, movimientos y validaciones del candidato visible;
+- [ ] la exportación Excel utiliza el candidato seleccionado;
+- [ ] casos donde Tesseract procesa correctamente permanecen sin cambios;
+- [ ] CPU/memoria/tiempo medidos con corpus autorizado;
+- [ ] rollback mediante `PADDLEOCR_FALLBACK_ENABLED=0` probado;
+- [ ] logs/diagnósticos revisados sin importes ni PII.
+
+## 5. Protección de datos personales
 
 - [ ] clasificación institucional de la información definida;
 - [ ] finalidades y usuarios autorizados identificados;
@@ -51,7 +81,7 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] retención y eliminación definidas conforme a archivo y protección de datos;
 - [ ] pruebas y evidencias no contienen información real fuera de entornos autorizados.
 
-## 5. Windows Server e IIS
+## 6. Windows Server e IIS
 
 - [ ] servidor Windows definido por TIC;
 - [ ] IIS configurado como punto de publicación HTTPS;
@@ -62,12 +92,12 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] puerto interno de Streamlit no expuesto a usuarios;
 - [ ] límites de tamaño y timeouts revisados;
 - [ ] cuenta de servicio de mínimo privilegio configurada;
-- [ ] ACL de carpetas revisadas;
+- [ ] ACL de carpetas revisadas, incluyendo modelos OCR locales cuando apliquen;
 - [ ] firewall/segmentación aplicados;
 - [ ] hardening de servidor aplicado conforme al estándar TIC;
 - [ ] antimalware/EDR activo según política institucional.
 
-## 6. Identidad e integración
+## 7. Identidad e integración
 
 - [ ] mecanismo de acceso desde SIEC definido;
 - [ ] autenticación institucional configurada;
@@ -77,7 +107,7 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] si existe integración programática, contrato API documentado;
 - [ ] secretos y certificados administrados fuera del código.
 
-## 7. Operación
+## 8. Operación
 
 - [ ] monitoreo y alertamiento configurados;
 - [ ] logs minimizados y sin PII innecesaria;
@@ -90,19 +120,22 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] rollback técnico documentado;
 - [ ] capacidad de CPU/memoria/almacenamiento validada para carga OCR esperada.
 
-## 8. Verificación posterior al despliegue
+## 9. Verificación posterior al despliegue
 
 - [ ] HTTPS disponible y certificado válido;
 - [ ] acceso al puerto interno bloqueado desde red de usuarios;
 - [ ] carga de PDF funcional;
 - [ ] procesamiento Digital validado;
-- [ ] procesamiento OCR validado;
-- [ ] exportación validada;
+- [ ] procesamiento OCR Tesseract validado;
+- [ ] segundo OCR PaddleOCR validado si está habilitado;
+- [ ] comparación Tesseract/PaddleOCR visible cuando corresponda;
+- [ ] selección manual de ambos candidatos validada;
+- [ ] exportación del candidato seleccionado validada;
 - [ ] reinicio controlado del servicio validado;
 - [ ] logs revisados;
 - [ ] rollback disponible.
 
-## 9. Aprobaciones
+## 10. Aprobaciones
 
 - [ ] validación funcional DGEC;
 - [ ] aprobación TIC/infraestructura;
@@ -111,7 +144,7 @@ Este documento concentra los puntos técnicos que deben verificarse antes de pro
 - [ ] revisión jurídica/archivo cuando aplique;
 - [ ] excepciones de riesgo formalmente documentadas cuando existan.
 
-## 10. Evidencia mínima de la liberación
+## 11. Evidencia mínima de la liberación
 
 Conservar en el sistema institucional correspondiente:
 
@@ -121,12 +154,13 @@ Conservar en el sistema institucional correspondiente:
 - resultado de auditoría de vulnerabilidades;
 - hash del ejecutable;
 - información del runtime Tesseract;
-- evidencia UAT;
+- cuando aplique, inventario/hashes/licencias de PaddleOCR, PaddlePaddle y modelos autorizados;
+- evidencia UAT de activación, comparación, selección y exportación OCR cuando la capacidad esté habilitada;
 - autorización de cambio;
 - aprobaciones aplicables;
 - procedimiento de rollback.
 
-## 11. Criterio GO / NO-GO
+## 12. Criterio GO / NO-GO
 
 La versión es **NO-GO** mientras exista un punto clasificado como bloqueante por TIC, seguridad, protección de datos o el responsable funcional.
 

@@ -20,12 +20,16 @@ Esta matriz identifica qué controles aporta directamente el producto y cuáles 
 |---|---|---|---|
 | Control de cambios | Parcial | historial Git, CI y criterios documentados de revisión | protección de línea base, revisores y permisos en plataforma institucional |
 | Equivalencia funcional | Parcial | suite sintética, compilación, análisis estático y build | UAT con corpus autorizado y aceptación funcional |
-| Dependencias Python | Implementado | `pyproject.toml` como fuente canónica | política institucional de actualización y repositorio de paquetes si aplica |
-| Vulnerabilidades de dependencias | Implementado | `pip-audit` en CI | tratamiento/aceptación institucional de hallazgos |
+| Dependencias Python | Implementado | `pyproject.toml` como fuente canónica y extras opcionales explícitos | política institucional de actualización y repositorio de paquetes si aplica |
+| Vulnerabilidades de dependencias | Implementado | `pip-audit` en CI sobre runtime evaluado | tratamiento/aceptación institucional de hallazgos |
 | Inventario de software | Implementado/Parcial | inventario de paquetes generado por CI | integración al inventario/CMDB/SBOM institucional si aplica |
 | Build Windows | Implementado | PyInstaller validado automáticamente | canal de distribución y firma de código si TIC la requiere |
 | Integridad del artefacto | Implementado | SHA-256 del ejecutable | custodia y registro de liberación institucional |
 | Tesseract / terceros | Parcial | runtime identificado y hash SHA-256 | versión, procedencia, licencia, CVE y ciclo de actualización aprobado |
+| PaddleOCR/PaddlePaddle | Parcial | extra opcional versionado, import validado en Windows y dependencias auditadas | aprobación del runtime, inventario, licencias, recursos y ciclo de actualización |
+| Modelos PaddleOCR | Institucional/Parcial | aplicación exige rutas locales y bloquea descarga automática en runtime | adquisición autorizada, procedencia, licencia, SHA-256, ACL y custodia de modelos |
+| Revisión OCR dual | Implementado/Parcial | Tesseract primario; Paddle ante señales objetivas de revisión; ambos candidatos se conservan y Flet/Streamlit permiten seleccionar el resultado visible/exportable | UAT con corpus autorizado antes de habilitar por banco y aceptación del criterio de recomendación/selección |
+| Salida de red del OCR | Implementado/Parcial | Paddle usa modelos locales; se deshabilita comprobación de proveedores; no se usa API OCR alojada | reglas de egress/firewall y verificación operativa por TIC |
 | Datos personales en código | Implementado | reglas de exclusión, pruebas opt-in y política de seguridad | supervisión y procedimiento institucional de manejo de información |
 | Clasificación de información | Institucional | sensibilidad documentada | clasificación formal SABG |
 | Documento de Seguridad | Institucional | insumos técnicos disponibles | integración/actualización por área competente |
@@ -36,13 +40,13 @@ Esta matriz identifica qué controles aporta directamente el producto y cuáles 
 | TLS y certificados | Institucional | arquitectura compatible con reverse proxy | configuración IIS/certificado institucional |
 | Red y firewall | Institucional | no se requiere salida de documentos a servicios externos | segmentación, reglas y puertos definidos por TIC |
 | Cuenta de servicio | Institucional | requisitos de mínimo privilegio documentados | alta, permisos y operación por TIC |
-| Logs y monitoreo | Parcial | criterios de minimización de PII | SIEM, retención, acceso y alertamiento institucional |
+| Logs y monitoreo | Parcial | criterios de minimización de PII; revisión OCR registra estados/conteos, recomendación y selección sin valores financieros | SIEM, retención, acceso y alertamiento institucional |
 | Gestión de incidentes | Parcial | política y guía técnica de respuesta | canal, responsables y procedimiento institucional |
 | Vulneraciones de datos personales | Institucional | criterio de escalamiento documentado | bitácora, notificación y procedimiento aplicable |
 | Respaldo/recuperación | Institucional | requisitos técnicos documentados | RPO/RTO, backup, restore y pruebas |
-| Continuidad operativa | Institucional | rollback de aplicación contemplado | integración al esquema institucional de continuidad |
-| Gestión de parches | Parcial | dependencias Python auditadas | Windows Server, IIS, Python y Tesseract bajo proceso TIC |
-| Retención y archivo | Institucional | separación entre temporales y documentos de archivo | reglas SABG de conservación/disposición |
+| Continuidad operativa | Institucional | rollback de aplicación y desactivación del segundo OCR contemplados | integración al esquema institucional de continuidad |
+| Gestión de parches | Parcial | dependencias Python auditadas | Windows Server, IIS, Python, Tesseract, PaddlePaddle y modelos bajo proceso TIC |
+| Retención y archivo | Institucional | separación entre temporales y documentos de archivo; candidatos OCR alternos no se persisten automáticamente | reglas SABG de conservación/disposición |
 
 ## 4. Evidencia automática de la versión
 
@@ -53,11 +57,14 @@ La automatización de calidad debe producir, como mínimo:
 - suite sintética/autocontenida;
 - build del paquete Python;
 - validación de dependencias de interfaces;
+- instalación/import del runtime PaddleOCR/PaddlePaddle opcional en Windows;
 - build del ejecutable Windows;
 - inventario de paquetes instalados;
-- auditoría de vulnerabilidades Python;
+- auditoría de vulnerabilidades Python del runtime evaluado;
 - hash SHA-256 de Tesseract;
 - hash SHA-256 del ejecutable.
+
+Los modelos PaddleOCR no se descargan durante CI ni durante el procesamiento productivo. Su inventario, hash y aprobación forman parte del expediente institucional de liberación cuando la capacidad se habilite.
 
 ## 5. Evidencia mínima por liberación
 
@@ -70,7 +77,9 @@ La versión entregada a TIC debería estar acompañada por:
 - resultado de auditoría de vulnerabilidades;
 - hash del ejecutable entregado;
 - información del runtime Tesseract;
-- evidencia de UAT cuando corresponda;
+- cuando PaddleOCR esté habilitado: versiones de PaddleOCR/PaddlePaddle, nombres de modelos, procedencia, licencia y hashes de los modelos autorizados;
+- evidencia de UAT de activación, comparación, selección y exportación OCR por banco/layout habilitado;
+- evidencia de UAT general cuando corresponda;
 - notas de cambio;
 - procedimiento de despliegue/rollback;
 - aceptación funcional y técnica conforme al proceso institucional.
@@ -83,6 +92,9 @@ No debe promoverse una versión cuando exista alguno de los siguientes supuestos
 - vulnerabilidad bloqueante conocida;
 - cambio de parser sin regresión suficiente;
 - dependencia o binario de origen no trazable;
+- modelos PaddleOCR sin procedencia/licencia/hash cuando la capacidad esté habilitada;
+- segundo OCR activado sin UAT representativa;
+- comparación/selección OCR no validada cuando forme parte de la liberación;
 - artefacto sin identificación/hash;
 - exposición de datos reales en repositorios o evidencias no autorizadas;
 - falta de controles de identidad/TLS para un servicio expuesto;
@@ -105,4 +117,4 @@ La documentación del motor no depende de un proveedor específico para implemen
 
 ## 8. Referencias
 
-El marco normativo y sus fuentes oficiales se mantienen en [`05_normativa_tic_apf.md`](05_normativa_tic_apf.md). La guía de despliegue institucional se encuentra en [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md).
+El marco normativo y sus fuentes oficiales se mantienen en [`05_normativa_tic_apf.md`](05_normativa_tic_apf.md). La guía de despliegue institucional se encuentra en [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md). La política de revisión OCR se documenta en [`14_paddleocr_fallback.md`](14_paddleocr_fallback.md).
