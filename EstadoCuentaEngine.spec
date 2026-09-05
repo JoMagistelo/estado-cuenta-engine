@@ -3,20 +3,15 @@
 from pathlib import Path
 
 
-PROJECT_ROOT = Path.cwd()
-
-TESSERACT_DIR = (
-    PROJECT_ROOT
-    / "vendor"
-    / "tesseract"
-)
+# PyInstaller expone SPECPATH durante la ejecución del spec. Anclar las rutas
+# al propio archivo evita que el resultado dependa del directorio de trabajo.
+PROJECT_ROOT = Path(SPECPATH).resolve()
+TESSERACT_DIR = PROJECT_ROOT / "vendor" / "tesseract"
 
 
 a = Analysis(
-    ["app/main_flet.py"],
-    pathex=[
-        str(PROJECT_ROOT / "src"),
-    ],
+    [str(PROJECT_ROOT / "app" / "main_flet.py")],
+    pathex=[str(PROJECT_ROOT / "src")],
     binaries=[],
     datas=[
         (
@@ -33,9 +28,7 @@ a = Analysis(
     optimize=0,
 )
 
-pyz = PYZ(
-    a.pure
-)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -47,7 +40,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
