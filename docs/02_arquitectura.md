@@ -1,17 +1,27 @@
-# Arquitectura del proyecto
+# Arquitectura del sistema
 
-## Estado Cuenta Engine
+## Estado Cuenta Engine — SABG / DGEC
 
 **Versión documental:** 2.0  
-**Fecha de corte:** 4 de septiembre de 2026
+**Fecha de corte:** 5 de septiembre de 2026
 
 ## 1. Objetivo arquitectónico
 
-Estado Cuenta Engine implementa un pipeline modular para convertir estados de cuenta en PDF, digitales o escaneados, a un modelo de dominio común. La arquitectura separa lectura, clasificación documental, detección de institución, parsing, validación y exportación.
+Estado Cuenta Engine implementa un pipeline modular para convertir estados de cuenta bancarios en PDF, digitales o escaneados, a un modelo de dominio común.
 
-La documentación anterior describía una arquitectura inicial sin OCR y con `src/app/`; esa descripción ya no corresponde al repositorio actual.
+La arquitectura separa:
 
-## 2. Estructura real del repositorio
+- lectura documental;
+- clasificación Digital/OCR;
+- detección de institución;
+- parsing especializado;
+- validación;
+- mapeo/exportación;
+- presentación.
+
+Esta separación permite evolucionar parsers y reglas bancarias sin acoplarlas innecesariamente a interfaces, infraestructura o exportadores.
+
+## 2. Estructura principal
 
 ```text
 estado-cuenta-engine/
@@ -19,7 +29,6 @@ estado-cuenta-engine/
 │   ├── main_flet.py
 │   └── main_streamlit.py
 ├── assets/
-│   └── logo_gobierno_mexico.png
 ├── docs/
 ├── src/
 │   ├── catalog/
@@ -37,97 +46,97 @@ estado-cuenta-engine/
 ├── vendor/
 │   └── tesseract/
 ├── EstadoCuentaEngine.spec
-├── pyproject.toml
-└── requirements.txt
+└── pyproject.toml
 ```
 
-## 3. Componentes
+## 3. Capas y responsabilidades
 
 ### `app/`
 
-Interfaces de usuario actuales. Contiene implementaciones en Streamlit y Flet.
+Interfaces de usuario.
 
-Regla de arquitectura: la interfaz no debe concentrar reglas bancarias ni convertirse en la única forma de invocar el motor. De cara a una posible integración futura con Angular conviene mantener el núcleo desacoplado de la presentación.
+- `main_flet.py`: interfaz de escritorio;
+- `main_streamlit.py`: interfaz web.
+
+La interfaz consume el pipeline; no debe concentrar lógica bancaria.
 
 ### `src/readers/`
 
-Responsable de lectura de documentos.
+Responsable de convertir el PDF a representaciones utilizables por el motor.
 
-Componentes actuales relevantes:
+Componentes principales:
 
 - `pdf_text_reader.py`: extracción de texto;
-- `pdf_word_reader.py`: extracción de palabras con coordenadas;
+- `pdf_word_reader.py`: extracción de palabras y coordenadas;
 - `tesseract_pdf_reader.py`: OCR local;
-- `reader_manager.py`: fachada de lectura y selección de etapas;
-- `models/document_data.py`: representación del documento leído.
-
-`ReaderManager` permite separar la lectura inicial de texto de la lectura espacial y del OCR. Esto evita ejecutar Tesseract si el PDF ya contiene información utilizable.
+- `reader_manager.py`: fachada de lectura;
+- modelos de documento leído.
 
 ### `src/detectors/`
 
-Responsable de clasificación y detección:
+Responsable de clasificación e identificación:
 
-- `document_type_detector.py`: determina si el documento puede procesarse como PDF digital o requiere OCR;
-- `bank_detector.py`: identifica la institución financiera;
-- `filename_bank_detector.py`: apoyo a detección basada en nombre de archivo;
-- `clabe_detector.py`: apoyo a detección basada en CLABE.
+- tipo documental Digital/OCR;
+- institución financiera;
+- señales auxiliares por nombre de archivo o CLABE cuando corresponda.
 
 ### `src/engine/`
 
-Orquesta el procesamiento.
+Orquesta el flujo de procesamiento.
 
-`pipeline.py` contiene:
+`pipeline.py` administra:
 
-- `PreparedStatement`;
-- preparación y clasificación Digital/OCR;
+- preparación de documentos;
+- clasificación;
+- lectura Digital/OCR;
 - procesamiento secuencial;
-- procesamiento concurrente e incremental;
-- separación de workers de clasificación, digitales y OCR;
-- validación posterior al parsing.
+- procesamiento concurrente/incremental;
+- validaciones posteriores.
 
-`statement_processor.py` contiene el registro de parsers base y la resolución de parsers OCR/normalizadores opcionales.
+`statement_processor.py` resuelve el parser correspondiente y los componentes OCR/normalización compatibles con el banco.
 
 ### `src/parsers/`
 
-Contiene parsers especializados. La estructura observada incluye:
+Contiene la lógica especializada por institución/layout.
 
-- `banamex/`;
-- `banorte/`;
-- `banorte_ocr/`;
-- `bbva/`;
-- `cetes/`;
-- `hsbc/`;
-- `mercado_pago/`;
-- `mifel/`;
-- `scotiabank/`;
-- `normalizadores/`.
+La estructura actual incluye parsers para:
 
-Los parsers especializados mantienen extractores separados para datos de cuenta, resumen financiero, movimientos y otros productos cuando aplica.
+- Banamex;
+- Banorte;
+- Banorte OCR;
+- BBVA;
+- CETES;
+- HSBC;
+- Mercado Pago;
+- Mifel;
+- Scotiabank.
+
+Los parsers pueden contener extractores separados para datos de cuenta, resumen financiero, movimientos y otros productos.
 
 ### `src/models/`
 
-Modelos del dominio y de procesamiento:
+Define los modelos de dominio y resultados de procesamiento, incluyendo:
 
-- `estado_cuenta.py`;
-- `datos_cuenta.py`;
-- `resumen_financiero.py`;
-- `movimiento.py`;
-- `otros_productos.py`;
-- `processing_result.py`.
+- `EstadoCuenta`;
+- datos de cuenta;
+- resumen financiero;
+- movimientos;
+- otros productos;
+- resultados de procesamiento.
 
 ### `src/validators/`
 
-Contiene validaciones de consistencia, incluyendo `movimiento_validator.py`.
+Contiene validaciones de consistencia entre datos extraídos y resumen financiero.
 
 ### `src/mappers/` y `src/exporters/`
 
-Transforman el modelo a estructuras tabulares y formatos de salida, actualmente con soporte de exportación a Excel.
+Transforman el modelo de dominio a estructuras tabulares y formatos de salida. La salida principal actual es Excel.
 
 ### `vendor/tesseract/`
 
-Contiene binarios, librerías y modelos de Tesseract versionados con el proyecto. Este punto requiere revisión específica de TIC antes de producción por razones de cadena de suministro, mantenimiento, vulnerabilidades y licenciamiento.
+Contiene el runtime OCR utilizado por la distribución Windows. Se gestiona como componente de terceros sujeto a control de versión, procedencia, licencia, integridad y vulnerabilidades.
 
-## 4. Flujo actual Digital/OCR
+## 4. Flujo Digital/OCR
 
 ```text
                      ┌────────────────────┐
@@ -156,7 +165,6 @@ Contiene binarios, librerías y modelos de Tesseract versionados con el proyecto
                         ▼              ▼
                        OCR          Digital
                         │              │
-                        │              │
                         └──────┬───────┘
                                ▼
                       identify_bank_key
@@ -168,11 +176,10 @@ Contiene binarios, librerías y modelos de Tesseract versionados con el proyecto
                │                                │
             Digital                            OCR
                │                                │
-        parser base                parser <banco>_ocr si existe
+        parser base                parser OCR especializado
                                              │
-                                      si no existe:
-                                  normalizador opcional +
-                                       parser base
+                                      o normalizador +
+                                         parser base
                └───────────────┬────────────────┘
                                ▼
                          EstadoCuenta
@@ -186,56 +193,88 @@ Contiene binarios, librerías y modelos de Tesseract versionados con el proyecto
 
 ## 5. Procesamiento por lotes
 
-Existen dos caminos:
+El engine dispone de:
 
-- `process_bank_statements(...)`: procesamiento secuencial;
-- `process_bank_statements_incremental(...)`: procesamiento concurrente e incremental.
+- procesamiento secuencial;
+- procesamiento concurrente e incremental.
 
-El segundo separa por defecto la carga de clasificación, documentos digitales y OCR, manteniendo un worker OCR limitado para evitar competencia excesiva entre procesos pesados.
+El flujo incremental separa la carga de clasificación, documentos digitales y OCR para evitar competencia excesiva entre operaciones intensivas.
 
-## 6. Modelo de confianza y límites
+## 6. Contrato funcional
 
-El resultado de extracción debe considerarse **dato derivado sujeto a validación**, no verdad absoluta. La arquitectura debe mantener diferenciables al menos:
+Los siguientes elementos se consideran comportamiento crítico:
 
-- documento de entrada;
-- método de lectura (Digital/OCR);
 - institución detectada;
+- método Digital/OCR;
 - parser aplicado;
-- campos extraídos;
-- validaciones ejecutadas;
-- errores y advertencias.
+- datos de cuenta;
+- resumen financiero;
+- movimientos;
+- referencias y claves de rastreo;
+- matching SPEI;
+- validaciones;
+- estructura exportada.
 
-Cuando se incorpore persistencia productiva, esta trazabilidad deberá diseñarse sin duplicar innecesariamente datos personales en logs.
+Los cambios en estas áreas requieren regresión específica.
 
-## 7. Fronteras de seguridad propuestas
+## 7. Integración web institucional
 
-Para producción se recomienda separar conceptualmente:
+La arquitectura recomendada para despliegue web es:
 
 ```text
-[Cliente / Angular eventual]
-          │
-          ▼
-[HTTPS / control de acceso]
-          │
-          ▼
-[Capa de servicio o API aprobada]
-          │
-          ▼
-[Estado Cuenta Engine]
-          │
-    ┌─────┴─────┐
-    ▼           ▼
-[temporales] [salidas autorizadas]
+Usuario institucional
+        │
+        ▼
+HTTPS
+        │
+        ▼
+IIS / reverse proxy
+        │
+        ▼
+Streamlit en interfaz local
+        │
+        ▼
+Estado Cuenta Engine
 ```
 
-No se define todavía una API concreta. Streamlit puede continuar como interfaz de operación o prototipo, pero una integración Angular debería evaluarse mediante una capa de servicio explícita en lugar de acoplar la aplicación cliente a internals de Streamlit.
+La infraestructura de publicación, identidad, red y TLS queda fuera del motor.
 
-## 8. Principios para siguientes cambios
+## 8. Integración con SIEC
 
-1. Mantener compatibilidad con layouts ya soportados mediante pruebas de regresión.
-2. Evitar lógica bancaria en `app/`, `readers/`, `models/` o `exporters/`.
-3. Mantener el OCR como capacidad local salvo autorización expresa para usar servicios externos.
-4. Evitar persistencia implícita de PDFs y datos derivados.
-5. Registrar eventos técnicos sin exponer información financiera completa.
-6. Someter nuevas dependencias, integraciones y servicios externos a revisión de seguridad y privacidad.
-7. Documentar cada cambio relevante de arquitectura antes de liberarlo a producción.
+Cuando SIEC requiera consumo programático, debe incorporarse una capa API explícita sobre el engine.
+
+```text
+SIEC
+ │
+ ▼
+API institucional
+ │
+ ▼
+Estado Cuenta Engine
+```
+
+La API puede agregar autenticación, autorización, límites, trazabilidad y versionado sin modificar parsers ni modelos de extracción.
+
+## 9. Fronteras de seguridad
+
+Se distinguen al menos:
+
+- documento de entrada;
+- memoria/temporales de procesamiento;
+- motor de extracción;
+- salida autorizada;
+- logs técnicos;
+- capa de publicación;
+- identidad institucional.
+
+La arquitectura debe evitar que logs o temporales se conviertan en repositorios secundarios de información financiera.
+
+## 10. Principios de mantenimiento
+
+1. Preservar layouts soportados mediante regresión.
+2. Mantener lógica bancaria dentro de componentes especializados.
+3. Mantener OCR local salvo decisión institucional expresa.
+4. Evitar persistencia implícita de documentos.
+5. Mantener configuración operativa fuera del código.
+6. Evaluar nuevas dependencias y terceros antes de liberación.
+7. Documentar cambios de contrato y arquitectura.

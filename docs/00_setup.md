@@ -1,142 +1,165 @@
-# Instalación y entorno de desarrollo
+# Instalación y entorno técnico
 
-> Documento de desarrollo. **No autoriza el uso de información real ni constituye guía de despliegue productivo.**
+## Estado Cuenta Engine — SABG / DGEC
 
 ## 1. Requisitos
 
-Entorno de referencia actual:
+Entorno soportado para desarrollo y validación:
 
-- Windows 10/11 para desarrollo;
-- Windows Server como plataforma objetivo de producción, pendiente de definición final por TIC;
+- Windows 10/11;
+- Windows Server para despliegue institucional;
 - Python 3.12 o 3.13;
 - Git;
 - PowerShell;
 - entorno virtual de Python aislado.
 
-El mínimo de Python 3.12 no es arbitrario: la interfaz Flet actual utiliza sintaxis válida desde Python 3.12. La CI valida explícitamente Python 3.12 y 3.13 para no declarar compatibilidad que el código actual no ofrece.
+La versión mínima de Python responde a la sintaxis utilizada por la interfaz Flet y se valida automáticamente en Python 3.12 y 3.13.
 
-El repositorio incluye actualmente un runtime de Tesseract bajo `vendor/tesseract/`. Antes de producción TIC deberá revisar su procedencia, versión, licenciamiento, integridad, vulnerabilidades y mecanismo de actualización.
+## 2. Dependencias
 
-## 2. Fuente canónica de dependencias
+`pyproject.toml` es la fuente canónica de metadatos y dependencias Python.
 
-`pyproject.toml` es la fuente única de metadatos y dependencias Python del proyecto. No se mantiene un `requirements.txt` generado mediante `pip freeze`, porque ese archivo mezcla dependencias directas y transitivas y puede capturar accidentalmente herramientas instaladas en una estación de desarrollo.
+Clasificación:
 
-La clasificación utilizada es:
-
-- `[project.dependencies]`: dependencias necesarias para el motor;
-- `[project.optional-dependencies].streamlit`: interfaz Streamlit;
+- `[project.dependencies]`: runtime del motor;
+- `[project.optional-dependencies].streamlit`: interfaz web;
 - `[project.optional-dependencies].desktop`: interfaz Flet;
-- `[dependency-groups].dev`: herramientas de calidad, pruebas, auditoría y build;
-- `[dependency-groups].packaging`: herramientas para generar el ejecutable.
+- `[dependency-groups].dev`: calidad, pruebas y auditoría;
+- `[dependency-groups].packaging`: empaquetado Windows.
 
-Las versiones exactas de una liberación deben resolverse y conservarse como evidencia del proceso de release aprobado; no deben obtenerse copiando el estado de un entorno personal.
+Las versiones exactas utilizadas por una liberación deben conservarse como evidencia del artefacto construido.
 
 ## 3. Preparación del entorno
 
-### Motor + Streamlit
+Crear entorno virtual:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
+```
+
+Motor + Streamlit:
+
+```powershell
 python -m pip install -e ".[streamlit]"
 ```
 
-### Motor + Flet
+Motor + Flet:
 
 ```powershell
 python -m pip install -e ".[desktop]"
 ```
 
-### Herramientas de desarrollo
-
-Con una versión de `pip` compatible con dependency groups:
+Herramientas de calidad:
 
 ```powershell
 python -m pip install --group dev
 ```
 
-### Empaquetado
+Herramientas de empaquetado:
 
 ```powershell
 python -m pip install --group packaging
 ```
 
-## 4. Ejecución actual
+## 4. Ejecución
 
-### Streamlit
+Streamlit:
 
 ```powershell
 streamlit run app/main_streamlit.py
 ```
 
-### Flet
+Flet:
 
 ```powershell
 python app/main_flet.py
 ```
 
-La existencia de estas dos interfaces no implica que ambas formen parte de la arquitectura productiva definitiva.
+La configuración productiva de Streamlit se describe en [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md).
 
-## 5. Comprobaciones de calidad
+## 5. Calidad
 
-La configuración de Ruff vive en `pyproject.toml` y cubre el repositorio completo salvo `vendor/`, concentrándose en errores críticos de sintaxis y nombres. La CI también compila `app/`, `src/` y `tests/`, ejecuta la suite sintética y construye el ejecutable Flet en Windows.
+Comprobaciones locales equivalentes a los gates principales:
 
 ```powershell
+python -m compileall -q app src tests
 ruff check .
 pytest -m "not integration"
 python -m build
+```
+
+Auditoría de dependencias:
+
+```powershell
 pip-audit
 ```
 
-Las pruebas que requieren PDFs reales son opt-in. Use archivos autorizados fuera del repositorio:
+## 6. Pruebas de integración
+
+Las pruebas con PDFs reales son opt-in y deben ejecutarse únicamente con documentos autorizados fuera del repositorio.
+
+Un archivo:
 
 ```powershell
 $env:ESTADO_CUENTA_TEST_PDF = "C:\ruta\autorizada\estado.pdf"
 pytest -m integration
 ```
 
-Para un lote:
+Un lote:
 
 ```powershell
 $env:ESTADO_CUENTA_TEST_PDFS = "C:\ruta\uno.pdf;C:\ruta\dos.pdf"
 pytest -m integration
 ```
 
-Una liberación institucional deberá ejecutar las comprobaciones aplicables dentro de un proceso automatizado y conservar su evidencia.
+## 7. Datos de prueba
 
-## 6. Datos de prueba
+- utilizar fixtures sintéticos para pruebas automatizadas;
+- utilizar corpus real únicamente en entorno institucional autorizado;
+- no incorporar PDFs reales, OCR, JSON, Excel, capturas o logs identificables al repositorio;
+- no utilizar nombres, RFC, CURP, CLABE, cuentas, tarjetas, domicilios o referencias reales en fixtures;
+- no trasladar documentos o resultados a servicios externos sin autorización institucional.
 
-Para desarrollo y pruebas:
+## 8. Secretos y certificados
 
-- no utilizar estados de cuenta reales salvo en un entorno institucional expresamente autorizado;
-- no almacenar PDFs reales, OCR, JSON derivados, Excel de salida ni capturas identificables dentro del repositorio;
-- preferir fixtures sintéticos o información previamente anonimizada/disociada;
-- evitar nombres, RFC, CURP, CLABE, cuentas, tarjetas, domicilios, conceptos de movimientos y demás datos identificables en archivos de prueba, issues, commits o pull requests;
-- no enviar documentos o datos extraídos a servicios externos sin autorización institucional.
+No deben versionarse:
 
-## 7. Variables, secretos y certificados
+- contraseñas;
+- tokens;
+- llaves privadas;
+- certificados con llave privada;
+- archivos `.env` con credenciales;
+- cadenas de conexión reales.
 
-Nunca deben versionarse contraseñas, tokens, llaves privadas, secretos de aplicación, certificados con llave privada, archivos `.env` con credenciales ni cadenas de conexión reales.
+En producción, secretos y certificados se administran mediante el mecanismo definido por TIC.
 
-En producción, secretos y certificados deberán administrarse mediante el mecanismo institucional que determine TIC.
+## 9. Tesseract
 
-## 8. Dependencias y liberaciones
+El runtime Tesseract incluido bajo `vendor/tesseract/` forma parte de la distribución Windows y debe identificarse por versión, procedencia, licencia, hash y vulnerabilidades dentro del expediente de liberación.
 
-Antes de cada liberación candidata a producción se debe generar evidencia de:
+## 10. Construcción del ejecutable
 
-- dependencias directas declaradas y conjunto exacto resuelto para la liberación;
-- revisión de vulnerabilidades conocidas;
-- inventario/licencias de componentes de terceros;
-- SBOM cuando el proceso institucional lo requiera;
-- procedencia, versión e integridad del runtime Tesseract vendorizado;
-- hash del artefacto distribuible;
-- pruebas automatizadas ejecutadas contra el commit candidato.
+Instalar dependencias de escritorio y empaquetado:
 
-## 9. Restricción de red
+```powershell
+python -m pip install -e ".[desktop]"
+python -m pip install --group packaging
+```
 
-El procesamiento digital y OCR está diseñado para ejecutarse localmente. Cualquier incorporación futura de APIs externas, almacenamiento en nube, telemetría o servicios de inteligencia artificial deberá pasar previamente por revisión de arquitectura, seguridad, privacidad y, cuando corresponda, contratación institucional.
+Construir:
 
-## 10. Producción
+```powershell
+pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
+```
 
-La instalación productiva se documenta por separado en [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md). No debe exponerse directamente el servidor de desarrollo ni publicarse Streamlit en Internet sin la arquitectura y controles aprobados por TIC.
+Artefacto esperado:
+
+```text
+dist/Extractor_de_Movimientos_Financieros.exe
+```
+
+## 11. Producción
+
+La instalación productiva se realiza conforme a [`06_despliegue_produccion_windows.md`](06_despliegue_produccion_windows.md). El proceso de liberación debe conservar evidencia de pruebas, dependencias, vulnerabilidades e integridad del artefacto.

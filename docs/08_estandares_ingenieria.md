@@ -1,20 +1,18 @@
 # Estándares de ingeniería de software
 
-## Estado Cuenta Engine — línea base de producción
+## Estado Cuenta Engine — SABG / DGEC
 
 **Fecha de corte:** 5 de septiembre de 2026
 
-Este documento define convenciones técnicas del repositorio. Complementa el marco normativo y de seguridad institucional; no lo sustituye.
-
 ## 1. Principios
 
-Los cambios al motor deben priorizar:
+Los cambios al sistema deben priorizar:
 
 1. corrección funcional y regresión controlada;
 2. legibilidad y mantenibilidad;
 3. mínimo privilegio y minimización de datos;
 4. dependencias explícitas y trazables;
-5. cambios pequeños, revisables y reversibles;
+5. cambios acotados, revisables y reversibles;
 6. evidencia automatizable para liberaciones.
 
 ## 2. Dependencias
@@ -23,103 +21,121 @@ Los cambios al motor deben priorizar:
 
 Reglas:
 
-- declarar sólo dependencias directas del producto;
-- separar capacidades opcionales de la interfaz del runtime del motor;
-- separar herramientas de desarrollo y empaquetado mediante dependency groups;
-- no versionar salidas de `pip freeze` como contrato del proyecto;
-- no introducir una dependencia nueva sin justificar finalidad, licencia, mantenimiento y superficie de riesgo;
-- revisar vulnerabilidades y licencias antes de una liberación;
-- conservar el conjunto exacto de versiones resueltas como evidencia del release mediante el mecanismo aprobado por TIC;
-- documentar y verificar por separado los binarios vendorizados.
+- declarar únicamente dependencias directas necesarias;
+- separar runtime, interfaces opcionales y herramientas de desarrollo/empaquetado;
+- no utilizar un `pip freeze` de una estación personal como contrato del producto;
+- justificar finalidad, licencia, mantenimiento y superficie de riesgo de nuevas dependencias;
+- revisar vulnerabilidades antes de una liberación;
+- conservar el conjunto exacto de versiones resueltas como evidencia de la versión;
+- gestionar por separado los binarios incluidos en `vendor/`.
 
 ## 3. Comentarios y docstrings
 
-Los comentarios de producción deben explicar información que el código no expresa por sí solo:
+Los comentarios deben explicar información que el código no expresa por sí solo:
 
 - contratos e invariantes;
 - razones de seguridad o privacidad;
 - decisiones algorítmicas no obvias;
-- compatibilidad necesaria con consumidores externos;
-- limitaciones deliberadas y sus consecuencias.
+- compatibilidad requerida;
+- limitaciones deliberadas relevantes para mantenimiento.
 
-No deben utilizarse como historial de cambios. Evitar expresiones como “original”, “antes”, “se corrigió”, “temporal”, “parche” o “hack” cuando sólo narran cómo evolucionó el archivo. Ese historial corresponde a Git, issues, PR y ADR/documentación técnica.
-
-Los `TODO` de producción deben tener alcance concreto y, cuando representen deuda relevante, referencia a un issue o entregable. No deben ocultar controles de seguridad obligatorios.
+No deben utilizarse para narrar el historial del archivo. La documentación de cambios se conserva en el sistema institucional de gestión de versiones/liberaciones.
 
 ## 4. Tipado y contratos
 
 - usar anotaciones de tipos en APIs internas compartidas;
-- preferir sintaxis moderna compatible con la versión mínima de Python soportada;
-- evitar mezclar representaciones de ausencia (`None`, cadena vacía, cero) sin un contrato explícito;
-- no cambiar el significado de modelos transversales únicamente para resolver un layout bancario;
-- cualquier cambio de esquema exportado debe considerarse cambio de contrato y revisarse por compatibilidad.
+- mantener compatibilidad con la versión mínima de Python soportada;
+- conservar contratos de ausencia/valor definidos por los modelos existentes;
+- no cambiar modelos transversales para resolver de forma aislada un layout bancario;
+- considerar cualquier cambio de esquema exportado como cambio de contrato;
+- mantener compatibilidad hacia atrás cuando el proceso consumidor lo requiera.
 
-## 5. Manejo de errores y observabilidad
+## 5. Manejo de errores
 
-- fallar con excepciones específicas cuando sea posible;
-- no ocultar excepciones de infraestructura sin conservar una señal diagnóstica útil;
-- no registrar PDFs, texto OCR completo, nombres, RFC, cuentas, CLABE, saldos, conceptos ni claves completas;
-- los errores expuestos a UI/API futura deberán separar mensaje para usuario de detalle técnico;
-- la observabilidad productiva debe usar identificadores técnicos y códigos de error, no contenido financiero.
+- utilizar excepciones específicas cuando sea posible;
+- no ocultar fallas de infraestructura que impidan diagnosticar un incidente;
+- separar mensajes operativos de detalles técnicos internos;
+- evitar que excepciones expongan rutas sensibles, secretos o información financiera;
+- mantener el procesamiento por lote tolerante a fallas individuales cuando el contrato funcional lo permita.
 
-## 6. Datos financieros
+## 6. Observabilidad y privacidad
 
-Los modelos actuales utilizan `float` en distintos campos monetarios. Cambiar todo el dominio a aritmética decimal requiere una migración transversal y pruebas de regresión de parsers/exportadores; por tanto, no debe hacerse de manera aislada.
+Los logs técnicos no deben contener, salvo necesidad institucional expresamente autorizada:
 
-Mientras exista este contrato:
+- contenido completo de PDFs;
+- texto OCR completo;
+- nombres completos;
+- RFC/CURP;
+- cuentas o CLABE completas;
+- saldos o conceptos detallados;
+- claves de rastreo completas;
+- secretos o tokens.
 
-- las comparaciones deben usar tolerancias explícitas y documentadas;
-- no se debe interpretar un valor numérico válido de `0.0` como ausencia por simple evaluación booleana;
-- cualquier nueva lógica financiera debe distinguir de forma explícita entre dato ausente y cero cuando el modelo lo permita.
+Preferir identificadores técnicos, versión, parser, método Digital/OCR, duración y códigos de resultado/error.
 
-## 7. Terceros y `vendor/`
+## 7. Lógica financiera y extracción
 
-El contenido de `vendor/` no se considera código fuente propio para efectos de estilo o comentarios. Debe gestionarse como componente de cadena de suministro:
+Los parsers, reglas de layout, matching SPEI, validadores y exportadores son comportamiento funcional crítico.
+
+Cualquier modificación debe:
+
+- identificar claramente el alcance;
+- conservar casos previamente correctos;
+- añadir regresión específica;
+- evitar cambios cosméticos masivos mezclados con lógica funcional;
+- documentar cambios de contrato cuando existan;
+- validarse con corpus autorizado cuando el riesgo lo justifique.
+
+## 8. Componentes de terceros
+
+El contenido de `vendor/` se gestiona como cadena de suministro y no como código fuente propio.
+
+Para cada componente distribuido deben identificarse:
 
 - nombre y versión;
-- fuente/procedencia;
+- procedencia;
 - licencia;
-- hashes de integridad;
+- hash de integridad;
 - vulnerabilidades conocidas;
-- componentes incluidos realmente necesarios;
-- procedimiento de actualización o retiro.
+- procedimiento de actualización o sustitución.
 
-## 8. Calidad automatizada
+## 9. Calidad automatizada
 
-La línea base inicial utiliza Ruff para errores de sintaxis/importación y Pytest para regresión. El alcance de linting se ampliará de manera gradual para evitar un cambio masivo mezclado con estabilización de parsers/readers.
-
-Antes de mergear código de producción se espera, como mínimo:
+La versión debe superar como mínimo:
 
 ```text
+python -m compileall -q app src tests
 ruff check .
-pytest
+pytest -m "not integration"
 python -m build
 ```
 
-La revisión de dependencias debe incorporarse al proceso de CI/release con una herramienta aprobada.
+Adicionalmente, para la distribución Windows se valida el build PyInstaller y se genera evidencia de integridad del ejecutable.
 
-## 9. Pull requests
+La automatización de seguridad mantiene inventario de dependencias y auditoría de vulnerabilidades Python.
 
-Un PR debe indicar:
+## 10. Revisión de cambios
+
+Cada cambio debe indicar:
 
 - propósito;
-- archivos/componentes afectados;
+- componentes afectados;
 - riesgo funcional;
 - evidencia de pruebas;
 - cambios de dependencias;
-- implicaciones de seguridad o datos personales;
-- compatibilidad y plan de reversa cuando corresponda.
+- implicaciones de seguridad/datos personales;
+- compatibilidad y reversión cuando corresponda.
 
-Los cambios que alteren parsers/readers críticos deben mantenerse separados de refactors puramente estructurales siempre que sea posible.
+Los cambios de parsers/readers críticos deben mantenerse separados de refactors puramente estructurales siempre que sea posible.
 
-## 10. Criterios de finalización
+## 11. Criterio de finalización
 
-Un cambio no se considera listo sólo porque “funciona localmente”. Debe quedar:
+Un cambio se considera técnicamente completo cuando:
 
-- versionado;
-- documentado al nivel necesario;
-- revisable;
-- probado;
-- sin secretos ni datos reales;
-- con dependencias declaradas correctamente;
-- compatible con la arquitectura aprobada o marcado explícitamente como decisión pendiente de TIC.
+- está versionado y revisado;
+- las pruebas aplicables están en verde;
+- no contiene secretos ni datos reales;
+- las dependencias están declaradas correctamente;
+- el artefacto aplicable puede construirse;
+- la documentación técnica está actualizada;
+- existe una estrategia de reversión cuando el riesgo lo requiere.

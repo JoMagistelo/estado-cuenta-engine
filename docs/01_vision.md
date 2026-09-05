@@ -1,34 +1,37 @@
-# Visión del proyecto
+# Visión y alcance
 
-## Estado Cuenta Engine
+## Estado Cuenta Engine — SABG / DGEC
 
 ## 1. Contexto institucional
 
-Estado Cuenta Engine es un motor en desarrollo para apoyar el procesamiento estructurado de estados de cuenta bancarios dentro de procesos institucionales autorizados de la **Secretaría Anticorrupción y Buen Gobierno (SABG)**, con aplicación prevista en la **Dirección General de Evaluación de Confianza (DGEC)**.
+Estado Cuenta Engine es un motor de procesamiento documental orientado a apoyar procesos institucionales autorizados de la Secretaría Anticorrupción y Buen Gobierno (SABG), con aplicación funcional en la Dirección General de Evaluación de Confianza (DGEC).
 
-El Reglamento Interior de la SABG atribuye a la DGEC la instrumentación de procesos de evaluación de confianza y su participación con otras unidades administrativas en el diseño de los sistemas tecnológicos requeridos en su materia.
+Su propósito es reducir captura manual, estandarizar información financiera y facilitar validaciones y flujos posteriores dentro de la infraestructura institucional.
 
 ## 2. Objetivo
 
-Convertir documentos financieros en PDF, digitales o escaneados, a una representación estructurada y validable que permita reducir captura manual, mejorar consistencia y facilitar su integración con herramientas institucionales posteriores.
+Convertir estados de cuenta bancarios en PDF, digitales o escaneados, a una representación estructurada, validable y exportable.
 
-## 3. Alcance funcional actual
+## 3. Alcance funcional
 
-El repositorio ya contempla:
+La versión contempla:
 
 - PDF con texto nativo;
 - PDF escaneado mediante OCR local con Tesseract;
-- detección del método de procesamiento Digital/OCR;
+- clasificación Digital/OCR;
 - detección de institución/emisor;
-- parsers especializados por institución;
-- extracción de datos de cuenta, resumen financiero, movimientos y otros productos cuando el formato lo permite;
-- normalización y mapeo a modelos comunes;
-- validación de movimientos;
+- parsers especializados;
+- extracción de datos de cuenta;
+- extracción de resumen financiero;
+- extracción de movimientos;
+- enriquecimientos específicos cuando el layout lo permite;
+- normalización a modelos comunes;
+- validaciones de consistencia;
 - procesamiento por lotes;
 - exportación a Excel;
-- interfaces Streamlit y Flet.
+- interfaces Flet y Streamlit.
 
-## 4. Instituciones/emisores actualmente contemplados
+## 4. Instituciones/emisores contemplados
 
 La estructura actual incluye parsers para:
 
@@ -42,61 +45,54 @@ La estructura actual incluye parsers para:
 - Mercado Pago;
 - CETES.
 
-La lista describe el código existente y **no constituye una declaración de cobertura total de layouts ni certificación de exactitud para todos los documentos de cada institución**.
+La cobertura depende del layout y de la calidad del documento. La aceptación funcional de una versión se determina mediante los casos de prueba y corpus autorizados correspondientes.
 
-## 5. Límites del sistema
+## 5. Límites funcionales
 
 El motor:
 
-- no sustituye la revisión humana o institucional;
-- no determina por sí mismo la confiabilidad de una persona servidora pública;
+- produce datos derivados de documentos fuente;
 - no emite resoluciones administrativas;
-- no debe utilizarse como única fuente para decisiones que produzcan efectos jurídicos o afecten significativamente derechos o intereses;
-- puede presentar errores de OCR, variaciones de layout, datos parciales o inconsistencias que deben ser detectadas mediante validaciones y revisión.
+- no sustituye la validación institucional cuando ésta sea requerida;
+- puede recibir documentos con variaciones de layout, OCR deficiente o información parcial;
+- debe conservar señales de validación y error suficientes para detectar resultados que requieren revisión.
 
-## 6. Protección de datos desde el diseño
+## 6. Principios de diseño
 
-El sistema debe evolucionar bajo un enfoque de privacidad y seguridad desde el diseño y por defecto. En particular:
+- arquitectura modular;
+- separación entre interfaz y lógica bancaria;
+- OCR local;
+- regresión controlada de parsers;
+- dependencias explícitas;
+- tratamiento mínimo de datos;
+- configuración de infraestructura fuera del motor;
+- trazabilidad técnica sin duplicar información financiera en logs;
+- capacidad de integración con otros sistemas mediante contratos explícitos.
 
-- recolectar y conservar sólo la información necesaria para la finalidad autorizada;
-- limitar accesos según funciones;
-- evitar persistencia innecesaria de documentos y temporales;
-- mantener trazabilidad de operaciones sin registrar contenido financiero sensible en bitácoras;
-- contemplar ciclo de vida, supresión y conservación documental;
-- separar ambientes de desarrollo, pruebas y producción;
-- evitar el uso de datos reales en repositorios y herramientas de colaboración.
+## 7. Integración institucional
 
-## 7. Evolución prevista
+La interfaz Streamlit puede operar como aplicación web interna detrás de IIS.
 
-### Corto plazo
+Si SIEC requiere integración programática, se recomienda una capa API dedicada sobre el motor. Esta separación permite incorporar autenticación, autorización, límites, trazabilidad y versionado sin trasladar esas responsabilidades a los parsers.
 
-- fortalecer parsers y pruebas de regresión;
-- formalizar el modelo de errores y trazabilidad;
-- completar documentación de arquitectura y seguridad;
-- revisar dependencias, binarios y licenciamiento;
-- definir clasificación de información y flujos de datos con TIC y protección de datos.
+## 8. Seguridad y privacidad
 
-### Camino a producción
+La operación debe mantener:
 
-- evaluación formal de riesgos;
-- Documento de Seguridad de datos personales;
-- determinación de procedencia de Evaluación de Impacto en Protección de Datos Personales;
-- alineación con el Plan Institucional de Ciberseguridad de la SABG;
-- definición de autenticación y autorización;
-- despliegue controlado en Windows Server;
-- HTTPS con certificado institucional conforme al procedimiento que establezca TIC/Buen Gobierno;
-- gestión de secretos;
-- monitoreo, bitácoras, respaldos, continuidad y respuesta a incidentes;
-- pruebas de seguridad y aceptación antes de liberar.
+- mínimo privilegio;
+- autenticación y autorización institucional;
+- HTTPS/TLS en la publicación web;
+- secretos fuera del código;
+- protección de temporales y salidas;
+- minimización de logs;
+- gestión de vulnerabilidades;
+- respaldo y recuperación;
+- cumplimiento de las reglas institucionales de conservación y protección de datos personales.
 
-## 8. Integración futura
+## 9. Criterio de evolución
 
-Existe una aplicación desarrollada en Angular que **podría** consumir el motor en una etapa posterior. La integración todavía no está definida.
+La incorporación o fortalecimiento de un parser no debe obligar a modificar de forma innecesaria interfaces, exportadores, readers o modelos transversales.
 
-Streamlit existe actualmente como interfaz de aplicación y no debe asumirse automáticamente como una API. Si la integración con Angular requiere una interfaz programática estable, se deberá evaluar una capa de servicios/API dedicada, versionada y protegida, separando la lógica del motor de la presentación.
+Los cambios funcionales deben preservar layouts previamente correctos y acompañarse de pruebas de regresión específicas.
 
-## 9. Principio rector
-
-La evolución debe preservar una arquitectura modular: agregar o fortalecer un parser no debe obligar a introducir dependencias innecesarias en la interfaz, exportadores o modelos de dominio.
-
-**Fecha de corte documental:** 4 de septiembre de 2026.
+**Fecha de corte documental:** 5 de septiembre de 2026.

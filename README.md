@@ -1,34 +1,30 @@
 # Estado Cuenta Engine
 
-Motor modular de extracción, normalización, validación y exportación de información contenida en estados de cuenta bancarios en PDF.
+Motor institucional para lectura, extracción, normalización, validación y exportación de información contenida en estados de cuenta bancarios en PDF.
 
-> **Contexto institucional previsto:** Secretaría Anticorrupción y Buen Gobierno (SABG), Dirección General de Evaluación de Confianza (DGEC). El sistema se encuentra **en desarrollo** y su documentación se mantiene como expediente técnico vivo. Su paso a producción queda sujeto a revisión y autorización de las áreas competentes de TIC, ciberseguridad, protección de datos personales, jurídica y archivo de la SABG.
+**Contexto funcional:** Secretaría Anticorrupción y Buen Gobierno (SABG), Dirección General de Evaluación de Confianza (DGEC).
 
-## 1. Propósito
+La versión actual se encuentra preparada para **entrega técnica y evaluación de despliegue institucional**. La instalación productiva se realiza bajo los controles de infraestructura, identidad, seguridad y operación definidos por TIC.
 
-Estado Cuenta Engine automatiza parte del tratamiento documental requerido para estructurar información financiera proveniente de estados de cuenta. Su función es técnica: convertir documentos PDF en datos estructurados para apoyar procesos institucionales autorizados.
+## 1. Alcance
 
-El motor **no emite por sí mismo determinaciones de confianza, resoluciones administrativas ni decisiones sobre personas servidoras públicas**. Las salidas deben ser revisadas dentro del proceso institucional que corresponda.
+Estado Cuenta Engine procesa estados de cuenta bancarios y convierte su contenido en información estructurada para apoyar procesos institucionales autorizados.
 
-## 2. Estado actual
+El sistema:
 
-La versión actual del repositorio soporta:
+- procesa PDF digital y documentos que requieren OCR;
+- utiliza Tesseract de forma local para OCR;
+- identifica institución/emisor;
+- aplica parsers especializados por banco/layout;
+- normaliza datos de cuenta, resumen y movimientos;
+- valida consistencia financiera cuando existen datos suficientes;
+- exporta resultados a Excel;
+- dispone de interfaces Flet y Streamlit;
+- puede integrarse posteriormente con SIEC mediante una capa API dedicada sin modificar el motor bancario.
 
-- lectura de PDF digital con texto y palabras espaciales;
-- clasificación automática entre procesamiento **Digital** y **OCR**;
-- OCR local mediante **Tesseract** cuando el documento no contiene texto utilizable;
-- detección de institución/emisor;
-- parsers especializados para BBVA, Banamex, Banorte, HSBC, Scotiabank, Mifel, Mercado Pago y CETES;
-- parser OCR especializado para Banorte y mecanismo extensible para parsers/normalizadores OCR;
-- procesamiento secuencial y procesamiento concurrente/incremental por lotes;
-- modelo de dominio unificado (`EstadoCuenta`);
-- validación de movimientos contra el resumen financiero;
-- exportación a Excel;
-- interfaces actuales en Streamlit y Flet.
+El motor no emite resoluciones administrativas ni decisiones sobre personas; produce información estructurada para el proceso institucional correspondiente.
 
-La documentación histórica que describía un alcance exclusivo de BBVA y PDF digital ya no representa el estado del código.
-
-## 3. Flujo técnico actual
+## 2. Arquitectura funcional
 
 ```text
 PDF
@@ -38,7 +34,7 @@ ReaderManager
  │
  ├─► lectura de texto
  │     │
- │     └─► detección Digital / OCR
+ │     └─► clasificación Digital / OCR
  │
  ├─► Digital: palabras espaciales
  │
@@ -60,12 +56,12 @@ Validaciones
 Mapeo / exportación
 ```
 
-Para OCR, `statement_processor` puede seleccionar un parser especializado `<banco>_ocr`; si no existe, puede aplicar un normalizador de coordenadas y reutilizar el parser base.
+La lógica bancaria se mantiene separada de lectura, detección, validación, exportación e interfaces para facilitar pruebas y mantenimiento.
 
-## 4. Estructura principal
+## 3. Estructura del proyecto
 
 ```text
-app/                    Interfaces de usuario actuales (Streamlit / Flet)
+app/                    Interfaces Flet y Streamlit
 assets/                 Recursos visuales
 src/
   catalog/              Firmas y catálogos técnicos
@@ -75,124 +71,163 @@ src/
   extractors/           Extractores transversales
   mappers/              Conversión a tablas/salidas
   models/               Modelos de dominio y resultados
-  parsers/              Parsers especializados por institución/emisor
-  readers/              Lectura digital, palabras espaciales y OCR
-  utils/                 Utilidades reutilizables
+  parsers/              Parsers especializados
+  readers/              Lectura digital y OCR
+  utils/                 Utilidades
   validators/            Validaciones de consistencia
-tests/                  Pruebas automatizadas y utilidades de prueba
-vendor/tesseract/       Runtime/modelos Tesseract actualmente versionados
-docs/                   Documentación técnica, normativa y de despliegue
-pyproject.toml          Metadatos, dependencias y configuración de calidad
+tests/                  Pruebas automatizadas
+docs/                   Documentación técnica y de operación
+vendor/tesseract/       Runtime Tesseract para distribución Windows
+pyproject.toml          Metadatos y dependencias
+EstadoCuentaEngine.spec Configuración de build PyInstaller
 ```
 
-## 5. Política de dependencias
+## 4. Requisitos
 
-`pyproject.toml` es la **fuente canónica** del proyecto. Las dependencias se mantienen por responsabilidad:
-
-- runtime del motor en `[project.dependencies]`;
-- interfaces opcionales en `[project.optional-dependencies]`;
-- herramientas de desarrollo y empaquetado en `[dependency-groups]`.
-
-No se versiona un `requirements.txt` obtenido mediante `pip freeze`. Las versiones exactas de una liberación deben resolverse de forma controlada y conservarse como evidencia del release, junto con el inventario de terceros, revisión de vulnerabilidades y, cuando corresponda, SBOM.
-
-## 6. Protección de datos personales
-
-Los estados de cuenta contienen datos personales y financieros y pueden revelar información adicional sobre terceras personas o, por el concepto de una operación, información de carácter sensible. Por ello deben tratarse con **minimización, finalidad, necesidad de conocer, control de acceso y trazabilidad**.
-
-Reglas obligatorias para desarrollo y pruebas:
-
-- **No subir a Git estados de cuenta reales**, capturas identificables, OCR/JSON derivados, archivos Excel resultantes ni bases de datos con información real.
-- **No incluir datos personales en logs, excepciones, screenshots, issues o pull requests.**
-- Usar únicamente fixtures sintéticos o previamente anonimizados conforme al procedimiento institucional autorizado.
-- No enviar documentos, texto extraído o resultados a servicios externos, IA, nubes o APIs de terceros sin autorización institucional y análisis previo de transferencia/encargo, seguridad y privacidad.
-- No versionar contraseñas, tokens, llaves privadas, certificados ni archivos `.env`.
-- Los artefactos temporales y salidas deben almacenarse sólo durante el tiempo autorizado y eliminarse conforme a las políticas de conservación y disposición aplicables.
-
-La guía detallada está en [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md).
-
-## 7. Marco normativo y de ciberseguridad
-
-El proyecto se documenta tomando como referencia, entre otros instrumentos vigentes, la normativa TIC de la APF, la Política General de Ciberseguridad para la APF, la Ley General de Protección de Datos Personales en Posesión de Sujetos Obligados y el marco organizacional vigente de la SABG y de la DGEC.
-
-La matriz normativa, su aplicabilidad y los entregables requeridos están en [`docs/05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md).
-
-> Esta documentación facilita la revisión técnica y de cumplimiento, pero **no sustituye** los dictámenes, autorizaciones, evaluación de impacto, documento de seguridad, análisis de riesgos, Plan Institucional de Ciberseguridad ni demás instrumentos que determinen las áreas competentes.
-
-## 8. Despliegue previsto
-
-La línea de despliegue actualmente prevista es **Windows Server** en infraestructura institucional. Antes de producción deberán definirse y aprobarse, como mínimo:
-
-- topología de red y segmentación;
-- cuenta de servicio y principio de mínimo privilegio;
-- autenticación, autorización por roles y, cuando corresponda, MFA;
-- cifrado en tránsito mediante HTTPS y certificado institucional autorizado;
-- cifrado y controles de acceso para información en reposo;
-- gestión de secretos y certificados fuera del código fuente;
-- bitácoras de auditoría sin exposición de datos personales;
-- respaldo, restauración, continuidad y recuperación;
-- análisis de vulnerabilidades, dependencias y pruebas de seguridad;
-- monitoreo y procedimiento de respuesta a incidentes;
-- política de conservación y eliminación de entradas, temporales y salidas.
-
-La interfaz de Streamlit existe hoy como aplicación. **No se ha definido todavía que Streamlit sea una API.** Si la aplicación Angular prevista requiere consumo programático, se deberá evaluar una capa API dedicada que encapsule el motor y permita controles de autenticación, autorización, trazabilidad y versionado. La decisión de integración queda abierta hasta revisión de arquitectura con TIC.
-
-Ver [`docs/06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md).
-
-## 9. Instalación de desarrollo
-
-Requisitos generales:
-
-- Windows 10/11 o Windows Server para el escenario objetivo;
+- Windows 10/11 para desarrollo o Windows Server para despliegue institucional;
 - Python 3.12 o 3.13;
-- Git;
+- Git para control de versiones durante desarrollo;
 - entorno virtual aislado.
 
-El mínimo de Python 3.12 refleja el código actual de la interfaz Flet y se valida en CI; no se declara soporte para versiones que el `master` vigente no puede compilar.
+## 5. Instalación
 
-Para Streamlit:
+Crear entorno:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[streamlit]"
-streamlit run app/main_streamlit.py
 ```
 
-Para Flet:
+Instalar motor + Streamlit:
+
+```powershell
+python -m pip install -e ".[streamlit]"
+```
+
+Instalar interfaz Flet:
 
 ```powershell
 python -m pip install -e ".[desktop]"
-python app/main_flet.py
 ```
 
-Para herramientas de calidad y pruebas:
+Instalar herramientas de calidad:
 
 ```powershell
 python -m pip install --group dev
-ruff check .
-pytest -m "not integration"
 ```
 
-Las pruebas con PDFs reales son opt-in y deben usar archivos autorizados fuera del repositorio mediante `ESTADO_CUENTA_TEST_PDF` o `ESTADO_CUENTA_TEST_PDFS`.
+`pyproject.toml` es la fuente canónica de dependencias. No se utiliza un `requirements.txt` generado desde un entorno personal como contrato del producto.
 
-No usar información real para validar una instalación de desarrollo fuera de un entorno institucional autorizado. Consulte [`docs/00_setup.md`](docs/00_setup.md).
+## 6. Ejecución
 
-## 10. Documentación
+### Streamlit
 
-- [`00_setup.md`](docs/00_setup.md): instalación, dependencias y operación de desarrollo.
-- [`01_vision.md`](docs/01_vision.md): objetivo, alcance y límites.
-- [`02_arquitectura.md`](docs/02_arquitectura.md): arquitectura actual del motor.
-- [`03_propuesta_tecnica.md`](docs/03_propuesta_tecnica.md): estado técnico y ruta hacia producción.
-- [`04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md): privacidad y controles de seguridad.
-- [`05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md): marco normativo aplicable a APF/SABG.
-- [`06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md): línea base prevista para Windows Server/HTTPS.
-- [`07_checklist_revision_tic.md`](docs/07_checklist_revision_tic.md): checklist de auditoría TIC, brechas y criterios de no-go.
-- [`08_estandares_ingenieria.md`](docs/08_estandares_ingenieria.md): reglas de ingeniería, comentarios, dependencias y evidencia de liberación.
-- [`09_auditoria_integral_produccion.md`](docs/09_auditoria_integral_produccion.md): auditoría completa del código, riesgos y gates de equivalencia funcional.
+```powershell
+streamlit run app/main_streamlit.py
+```
 
-## 11. Estado de cumplimiento
+### Flet
 
-El repositorio **no debe considerarse certificado, acreditado ni autorizado para producción** por el hecho de documentar estos controles. La documentación distingue controles existentes, controles no verificados y requisitos pendientes, para que TIC pueda realizar una revisión basada en evidencia.
+```powershell
+python app/main_flet.py
+```
 
-**Fecha de corte documental:** 5 de septiembre de 2026.
+## 7. Calidad y regresión
+
+La automatización de calidad valida:
+
+- Python 3.12 y 3.13;
+- compilación de `app/`, `src/` y `tests/`;
+- Ruff para errores críticos;
+- suite Pytest sintética/autocontenida;
+- build del paquete Python;
+- dependencias de Flet/Streamlit;
+- build real del ejecutable Windows con PyInstaller;
+- auditoría de vulnerabilidades Python;
+- inventario de dependencias;
+- hash SHA-256 del runtime Tesseract;
+- hash SHA-256 del ejecutable construido.
+
+Las pruebas con documentos reales son opt-in y deben ejecutarse únicamente en entornos autorizados. Los parsers se consideran lógica crítica y cualquier cambio funcional requiere regresión específica.
+
+## 8. Protección de datos personales
+
+Los estados de cuenta contienen información financiera y datos personales. Reglas técnicas del proyecto:
+
+- no versionar estados de cuenta reales ni derivados con información identificable;
+- no registrar contenido financiero completo en logs;
+- no almacenar contraseñas, tokens, llaves privadas o certificados en código;
+- no enviar documentos o resultados a servicios externos sin autorización institucional;
+- mantener temporales y salidas bajo control de acceso y retención definidos;
+- utilizar datos sintéticos o corpus autorizado para pruebas.
+
+Consultar [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md) y [`SECURITY.md`](SECURITY.md).
+
+## 9. Despliegue institucional
+
+Para la interfaz web, la arquitectura recomendada es:
+
+```text
+Usuario institucional
+        │
+        ▼
+HTTPS / certificado institucional
+        │
+        ▼
+IIS
+(reverse proxy / TLS)
+        │
+        ▼
+Streamlit en interfaz local
+        │
+        ▼
+Estado Cuenta Engine
+```
+
+TIC administra Windows Server, IIS, DNS, TLS, red, cuenta de servicio, hardening, monitoreo, respaldo y operación. La aplicación mantiene su lógica funcional independiente de esos controles.
+
+Streamlit no debe utilizarse como API entre sistemas. Si SIEC requiere integración programática, la solución recomendada es una API institucional dedicada sobre el mismo motor.
+
+Guía completa: [`docs/06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md).
+
+## 10. Cadena de suministro
+
+Las dependencias Python se declaran por función en `pyproject.toml`.
+
+Cada versión candidata debe identificar:
+
+- dependencias resueltas;
+- vulnerabilidades conocidas;
+- componentes de terceros;
+- versión/procedencia/licencia de Tesseract;
+- hash del artefacto entregado.
+
+El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](docs/09_verificacion_tecnica_version.md) y [`docs/11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md).
+
+## 11. Documentación
+
+- [`00_setup.md`](docs/00_setup.md): instalación y entorno técnico.
+- [`01_vision.md`](docs/01_vision.md): alcance y propósito.
+- [`02_arquitectura.md`](docs/02_arquitectura.md): arquitectura del motor.
+- [`03_especificacion_tecnica.md`](docs/03_especificacion_tecnica.md): especificación para integración institucional.
+- [`04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md): privacidad y manejo de información.
+- [`05_normativa_tic_apf.md`](docs/05_normativa_tic_apf.md): marco normativo de referencia.
+- [`06_despliegue_produccion_windows.md`](docs/06_despliegue_produccion_windows.md): despliegue Windows Server/IIS.
+- [`07_checklist_revision_tic.md`](docs/07_checklist_revision_tic.md): puntos de revisión TIC.
+- [`08_estandares_ingenieria.md`](docs/08_estandares_ingenieria.md): estándares de ingeniería.
+- [`09_verificacion_tecnica_version.md`](docs/09_verificacion_tecnica_version.md): verificación de calidad de la versión.
+- [`10_matriz_evidencias_tic.md`](docs/10_matriz_evidencias_tic.md): matriz de controles y evidencias.
+- [`11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md): vulnerabilidades e incidentes.
+- [`12_checklist_liberacion_produccion.md`](docs/12_checklist_liberacion_produccion.md): checklist de liberación.
+- [`13_control_cambios.md`](docs/13_control_cambios.md): criterios de control de cambios.
+
+## 12. Responsabilidades de entrega
+
+**Aplicación:** código fuente, dependencias, pruebas, documentación, build y evidencia de integridad.
+
+**TIC:** infraestructura, IIS, DNS, TLS, identidad, red, hardening, monitoreo, respaldos, parches y operación.
+
+**DGEC:** validación funcional y aceptación de resultados.
+
+**Áreas competentes:** protección de datos personales, gestión de riesgos, archivo y demás controles institucionales aplicables.
