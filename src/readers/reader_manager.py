@@ -106,10 +106,12 @@ class ReaderManager:
     ) -> DocumentData:
         """Procesa el PDF con Tesseract, OCR primario del engine."""
         file_path = Path(file_path)
-        return TesseractPDFReader.read(
+        document = TesseractPDFReader.read(
             file_path,
             start_page=start_page,
         )
+        document.metadata["source_path"] = str(file_path.resolve())
+        return document
 
     @staticmethod
     def read_paddle_ocr(
