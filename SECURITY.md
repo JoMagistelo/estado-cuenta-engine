@@ -6,7 +6,7 @@ Estado Cuenta Engine procesa documentos financieros que pueden contener datos pe
 
 ## Reporte de vulnerabilidades
 
-No publicar vulnerabilidades explotables, credenciales, tokens, rutas internas, configuraciones institucionales, estados de cuenta reales ni datos personales en issues, pull requests, discusiones o commits públicos.
+No publicar vulnerabilidades explotables, credenciales, tokens, rutas internas, configuraciones institucionales, estados de cuenta reales ni datos personales en tickets, revisiones de cambio, discusiones, commits o repositorios no autorizados.
 
 Cuando se identifique una vulnerabilidad o posible exposición:
 
@@ -14,7 +14,7 @@ Cuando se identifique una vulnerabilidad o posible exposición:
 2. conservar evidencia mínima y autorizada del hallazgo;
 3. notificar por el canal institucional definido por TIC/SABG;
 4. clasificar severidad, alcance, activos y datos potencialmente afectados;
-5. corregir mediante una rama y pull request trazables;
+5. corregir mediante un cambio trazable y revisado;
 6. validar la corrección y documentar la evidencia de cierre;
 7. evaluar si corresponde activar el procedimiento institucional de incidente o vulneración de datos personales.
 
@@ -35,7 +35,7 @@ Las pruebas con documentos reales deben ejecutarse únicamente en entornos autor
 
 ## Dependencias y terceros
 
-Toda nueva dependencia debe justificar su necesidad, origen, licencia, mantenimiento y efecto en la superficie de ataque. Las actualizaciones automáticas propuestas por Dependabot requieren revisión humana y deben pasar los mismos gates de CI que cualquier otro cambio.
+Toda nueva dependencia debe justificar su necesidad, origen, licencia, mantenimiento y efecto en la superficie de ataque. Cualquier actualización automática o manual de dependencias requiere revisión humana y debe pasar los mismos gates de calidad y seguridad que cualquier otro cambio.
 
 Los binarios de terceros incluidos en `vendor/` requieren inventario, versión, procedencia, licencia, integridad criptográfica y proceso de actualización antes de una liberación productiva.
 
@@ -54,4 +54,4 @@ Las correcciones de seguridad no deben mezclarse innecesariamente con cambios de
 
 ## Producción
 
-Un merge aprobado no equivale por sí mismo a autorización de producción. La puesta en servicio requiere los controles y aprobaciones institucionales aplicables, incluyendo arquitectura, identidad, infraestructura, TLS, monitoreo, respaldo, continuidad, gestión de incidentes, protección de datos personales y liberación controlada.
+La aprobación técnica de un cambio no equivale por sí misma a autorización de producción. La puesta en servicio requiere los controles y aprobaciones institucionales aplicables, incluyendo arquitectura, identidad, infraestructura, TLS, monitoreo, respaldo, continuidad, gestión de incidentes, protección de datos personales y liberación controlada.
