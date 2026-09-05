@@ -1,3 +1,5 @@
+import os
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -105,3 +107,40 @@ def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
 
     with pytest.raises(PaddleOCRConfigurationError, match="únicamente en español"):
         PaddleOCRPDFReader._load_config()
+
+
+def test_cpu_engine_disables_mkldnn_for_stable_paddle_inference(monkeypatch):
+    captured_kwargs = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PaddleOCR=FakePaddleOCR),
+    )
+    monkeypatch.delenv("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", raising=False)
+
+    PaddleOCRPDFReader._engine = None
+    PaddleOCRPDFReader._engine_signature = None
+
+    try:
+        PaddleOCRPDFReader._get_engine(
+            language="es",
+            device="cpu",
+            detection_model_name="PP-OCRv5_mobile_det",
+            recognition_model_name="latin_PP-OCRv5_mobile_rec",
+            detection_model_dir="C:/modelos/det",
+            recognition_model_dir="C:/modelos/rec",
+        )
+
+        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "0"
+        assert captured_kwargs["enable_mkldnn"] is False
+        assert captured_kwargs["device"] == "cpu"
+        assert "lang" not in captured_kwargs
+        assert "ocr_version" not in captured_kwargs
+    finally:
+        PaddleOCRPDFReader._engine = None
+        PaddleOCRPDFReader._engine_signature = None
