@@ -1,57 +1,38 @@
+"""Modelo de dominio para movimientos bancarios normalizados."""
+
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
 class Movimiento:
-    """
-    Representa una operación individual del estado de cuenta.
-    Mantiene el concepto original y los datos estructurados
-    obtenidos de su análisis.
-    """
+    """Representa una operación individual extraída de un estado de cuenta.
 
-    # Fechas
+    El modelo conserva tanto campos normalizados como el concepto original para
+    permitir trazabilidad técnica durante validación y exportación.
+    """
 
     fecha_operacion: str
-    fecha_liquidacion: Optional[str]
-
-
-    # Descripción bancaria
-
+    fecha_liquidacion: str | None
     concepto: str
-    tipo_operacion: Optional[str]
-
-
-    # Importes
-
+    tipo_operacion: str | None
     cargo: float
     abono: float
 
-
-    # Referencias bancarias
-
     referencia: str | None = None
     autorizacion: str | None = None
-
-
-    # Datos extraídos del concepto
-
     beneficiario: str | None = None
     cuenta_beneficiario: str | None = None
     clabe_beneficiario: str | None = None
-    clave_rastreo: Optional[str] = None
-
-
+    clave_rastreo: str | None = None
     rfc: str | None = None
-
     sucursal: str | None = None
     caja: str | None = None
     hora_operacion: str | None = None
 
-    # Saldos BBVA
-    saldo_operacion: float =0.0
-    saldo_liquidacion: float =0.0
-
-    # Conservamos el texto original siempre
+    # Algunos formatos exponen uno o ambos saldos asociados al movimiento.
+    saldo_operacion: float = 0.0
+    saldo_liquidacion: float = 0.0
 
     concepto_original: str | None = None
