@@ -10,6 +10,8 @@ PaddleOCR se incorpora como un segundo motor OCR local para aumentar la capacida
 
 La integración no reemplaza a Tesseract ni modifica los parsers bancarios. El criterio de activación y de selección se apoya en las mismas validaciones financieras utilizadas por el pipeline del sistema.
 
+El alcance lingüístico de esta integración es **español para documentación bancaria utilizada en México**. No se habilitan otros idiomas en esta versión.
+
 ## 2. Flujo de decisión
 
 ```text
@@ -98,7 +100,7 @@ Referencias técnicas:
 - https://paddlepaddle.github.io/PaddleOCR/main/en/version3.x/pipeline_usage/OCR.html
 - https://paddlepaddle.github.io/PaddleX/3.7/FAQ.html
 
-## 5. Componentes propuestos
+## 5. Componentes controlados
 
 La línea controlada utiliza:
 
@@ -106,9 +108,10 @@ La línea controlada utiliza:
 - PaddlePaddle `>=3.3.1,<3.4`;
 - modelo de detección `PP-OCRv5_mobile_det`;
 - modelo de reconocimiento `latin_PP-OCRv5_mobile_rec`;
+- `PADDLEOCR_LANG=es` como único idioma admitido;
 - inferencia CPU como configuración inicial.
 
-El modelo `latin_PP-OCRv5_mobile_rec` está diseñado para idiomas de alfabeto latino e incluye español dentro de los idiomas soportados.
+PaddleOCR no publica un modelo `es-MX` separado. El modelo oficial `latin_PP-OCRv5_mobile_rec` incluye español y reconocimiento numérico, por lo que se utiliza como componente técnico de reconocimiento mientras la aplicación restringe el idioma a `es`.
 
 Referencia oficial:
 
@@ -171,6 +174,8 @@ $env:PADDLEOCR_LANG = "es"
 $env:PADDLEOCR_DPI = "300"
 ```
 
+`PADDLEOCR_LANG` debe permanecer en `es`. El reader rechaza expresamente cualquier otro valor para evitar cambios lingüísticos no aprobados en producción.
+
 `PADDLEOCR_FALLBACK_BANKS` admite una lista separada por comas o `*`. Para una primera liberación se recomienda habilitarlo únicamente en los bancos incluidos en la UAT correspondiente y ampliar cobertura de manera controlada.
 
 ## 9. Estado por defecto y rollback
@@ -230,14 +235,16 @@ Antes de habilitar el fallback en producción:
 
 1. instalar el extra PaddleOCR en un ambiente controlado;
 2. registrar e instalar los modelos aprobados;
-3. habilitar inicialmente un banco/layout objetivo;
-4. procesar corpus institucional autorizado que incluya casos correctos y casos donde Tesseract falle validación;
-5. comprobar que PaddleOCR sólo se ejecuta ante la condición definida;
-6. comparar movimientos, resumen y datos relevantes;
-7. verificar que los casos correctos de Tesseract no cambien;
-8. medir CPU, memoria y tiempos;
-9. validar rollback por configuración;
-10. documentar la aceptación funcional y técnica.
+3. confirmar `PADDLEOCR_LANG=es`;
+4. habilitar inicialmente un banco/layout objetivo;
+5. procesar corpus institucional autorizado que incluya casos correctos y casos donde Tesseract falle validación;
+6. incluir nombres, conceptos, abreviaturas bancarias, acentos, `Ñ`, importes, fechas y referencias representativas de documentación mexicana;
+7. comprobar que PaddleOCR sólo se ejecuta ante la condición definida;
+8. comparar movimientos, resumen y datos relevantes;
+9. verificar que los casos correctos de Tesseract no cambien;
+10. medir CPU, memoria y tiempos;
+11. validar rollback por configuración;
+12. documentar la aceptación funcional y técnica.
 
 ## 14. Criterios de aceptación TIC
 
@@ -245,6 +252,7 @@ Antes de habilitar el fallback en producción:
 - [ ] versiones aprobadas y auditadas;
 - [ ] modelos identificados con procedencia/licencia/hash;
 - [ ] modelos instalados en ubicación protegida por ACL;
+- [ ] idioma de aplicación restringido a español;
 - [ ] no existen descargas de modelos durante el procesamiento;
 - [ ] no se requiere transferencia del documento a servicios externos;
 - [ ] fallback deshabilitado hasta concluir UAT;
