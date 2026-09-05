@@ -78,7 +78,7 @@ jobs:
       - name: Audit known Python vulnerabilities
         shell: pwsh
         run: |
-          python -m pip_audit --local --strict --progress-spinner off --format json --output "build/security/pip-audit.json"
+          python -m pip_audit --local --skip-editable --strict --progress-spinner off --format json --output "build/security/pip-audit.json"
 
       - name: Record vendored Tesseract integrity
         shell: pwsh
