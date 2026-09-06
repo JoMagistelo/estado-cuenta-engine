@@ -6,6 +6,10 @@ from typing import Any
 
 from readers.models import DocumentData
 
+from .cancelable_ocr_reader import (
+    read_paddle_cancelable,
+    read_tesseract_cancelable,
+)
 from .paddleocr_pdf_reader import PaddleOCRPDFReader
 from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
@@ -122,11 +126,20 @@ class ReaderManager:
     ) -> DocumentData:
         if _cancel_requested(cancel_event):
             raise CancelledError()
+
         file_path = Path(file_path)
-        document = PaddleOCRPDFReader.read(
-            file_path,
-            start_page=start_page,
-        )
+        if cancel_event is None:
+            document = PaddleOCRPDFReader.read(
+                file_path,
+                start_page=start_page,
+            )
+        else:
+            document = read_paddle_cancelable(
+                file_path,
+                start_page=start_page,
+                cancel_event=cancel_event,
+            )
+
         document.metadata = dict(document.metadata or {})
         document.metadata.setdefault("source_path", str(file_path.resolve()))
         document.metadata.setdefault("reader", "paddleocr")
@@ -157,10 +170,18 @@ class ReaderManager:
             normalized = "tesseract"
 
         if normalized == "tesseract":
-            document = TesseractPDFReader.read(
-                file_path,
-                start_page=start_page,
-            )
+            if cancel_event is None:
+                document = TesseractPDFReader.read(
+                    file_path,
+                    start_page=start_page,
+                )
+            else:
+                document = read_tesseract_cancelable(
+                    file_path,
+                    start_page=start_page,
+                    cancel_event=cancel_event,
+                )
+
             document.metadata = dict(document.metadata or {})
             document.metadata["source_path"] = str(file_path.resolve())
             document.metadata.setdefault("reader", "tesseract")
