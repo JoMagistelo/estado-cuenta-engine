@@ -12,52 +12,83 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-# ============================================================
-# PATH SRC
-# ============================================================
-
-sys.path.append(
-    os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "src",
-        )
-    )
-)
-
-
-from engine.pipeline import (
-    process_bank_statements_incremental,
-)
+from engine.ocr_fallback_policy import normalize_ocr_engine, secondary_ocr_engine
+from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 
-
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
-
+APP_VERSION = "2.2"
 PROCESSING_UI_POLL_INTERVAL = 0.5
-OCR_ENGINE_LABELS = {
-    "tesseract": "Tesseract",
-    "paddleocr": "PaddleOCR",
-}
+GOB_GREEN = "#1F4D3A"
+GOB_GREEN_LIGHT = "#E8F0EC"
+GOB_GOLD = "#B08D57"
+GOB_CREAM = "#F7F4EE"
+PRIMARY_VALIDATIONS = (
+    "Total depósitos / abonos",
+    "Total retiros / cargos",
+)
+MOVEMENT_COLUMNS = [
+    ("fecha_corte", "Fecha Corte"),
+    ("numero_cuenta", "Número de Cuenta"),
+    ("numero_movimiento", "No. Movimiento"),
+    ("fecha_operacion", "Fecha Operación"),
+    ("fecha_liquidacion", "Fecha Liquidación"),
+    ("concepto", "Concepto"),
+    ("concepto_original", "Concepto Original"),
+    ("cargo", "Cargo"),
+    ("abono", "Abono"),
+    ("saldo_operacion", "Saldo Operación"),
+    ("saldo_liquidacion", "Saldo Liquidación"),
+    ("tipo_operacion", "Tipo"),
+    ("beneficiario", "Beneficiario"),
+    ("cuenta_beneficiario", "Cuenta Benef."),
+    ("clabe_beneficiario", "CLABE Benef."),
+    ("rfc", "RFC"),
+    ("referencia", "Referencia"),
+    ("clave_rastreo", "Clave Rastreo"),
+    ("autorizacion", "Autorización"),
+    ("hora_operacion", "Hora"),
+    ("sucursal", "Sucursal"),
+    ("caja", "Caja"),
+]
+MONEY_FIELDS = {"cargo", "abono", "saldo_operacion", "saldo_liquidacion"}
 
 
-# ============================================================
-# ESTADO DE SESIÓN
-# ============================================================
+def safe_value(value: Any) -> str:
+    return "N/A" if value is None or value == "" else str(value)
+
+
+def format_money(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"${float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_optional_float(
+    value: Any,
+    *,
+    suffix: str = "",
+    prefix: str = "",
+    na_value: str = "N/A",
+) -> str:
+    if value is None:
+        return na_value
+    try:
+        return f"{prefix}{float(value):,.2f}{suffix}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def engine_label(engine: str | None) -> str:
+    normalized = normalize_ocr_engine(engine, default="")
+    return {"tesseract": "Tesseract", "paddleocr": "PaddleOCR"}.get(normalized, "OCR")
+
 
 def initialize_session_state() -> None:
-    """
-    Inicializa todo el estado necesario para administrar un lote
-    de procesamiento en segundo plano.
-
-    El Queue y el worker pertenecen exclusivamente a la sesión
-    actual del usuario.
-    """
-
     defaults = {
         "processing_queue": Queue(),
         "processing_items": [],
@@ -69,1933 +100,653 @@ def initialize_session_state() -> None:
         "worker_traceback": None,
         "batch_signature": None,
         "batch_temp_paths": [],
-        "selected_file": None,
+        "selected_index": None,
+        "ocr_primary_engine": normalize_ocr_engine(os.getenv("OCR_PRIMARY_ENGINE", "tesseract")),
     }
-
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
-initialize_session_state()
-
-
-# ============================================================
-# IDENTIDAD VISUAL
-# ============================================================
-
-GOB_GREEN = "#1F4D3A"
-GOB_GREEN_DARK = "#163A2C"
-GOB_GREEN_LIGHT = "#E8F0EC"
-
-GOB_GOLD = "#B08D57"
-GOB_GOLD_LIGHT = "#F4EEE5"
-
-GOB_CREAM = "#F7F4EE"
-
-BUTTON_TEXT = "#FFFFFF"
-
-
-# ============================================================
-# UTILIDADES
-# ============================================================
-
-def format_optional_float(
-    value,
-    format_str: str = "{:,.2f}",
-    suffix: str = "",
-    prefix: str = "",
-    na_value: str = "N/A",
-) -> str:
-    """
-    Formatea un valor que puede ser:
-
-        - float/int
-        - None
-        - string numérico
-        - string como N/A
-    """
-
-    if value is None:
-        return na_value
-
-    if isinstance(value, str):
-        try:
-            numeric_value = float(
-                value.replace(",", "")
-            )
-        except (
-            ValueError,
-            TypeError,
-        ):
-            return value
-    else:
-        numeric_value = value
-
-    formatted_value = format_str.format(
-        numeric_value
-    )
-
-    return (
-        f"{prefix}"
-        f"{formatted_value}"
-        f"{suffix}"
+def create_batch_signature(uploaded_files_data: tuple[tuple[str, bytes], ...]) -> tuple:
+    return tuple(
+        (name, len(data), hashlib.sha256(data).hexdigest())
+        for name, data in uploaded_files_data
     )
 
 
-def format_money(
-    value: Any,
-) -> str:
-
-    if value is None:
-        return "N/A"
-
-    try:
-        return f"${float(value):,.2f}"
-    except (
-        ValueError,
-        TypeError,
-    ):
-        return str(value)
-
-
-def safe_value(
-    value: Any,
-) -> str:
-
-    if value is None or value == "":
-        return "N/A"
-
-    return str(value)
-
-
-def ocr_engine_label(engine: str | None) -> str:
-    if not engine:
-        return "OCR"
-    return OCR_ENGINE_LABELS.get(engine, engine)
-
-
-# ============================================================
-# IDENTIFICACIÓN DE LOTE
-# ============================================================
-
-def create_batch_signature(
-    uploaded_files_data: tuple[
-        tuple[str, bytes],
-        ...
-    ],
-) -> tuple[
-    tuple[str, int, str],
-    ...
-]:
-    """
-    Crea una identidad estable para el conjunto de archivos.
-
-    El hash SHA-256 evita que dos archivos con el mismo nombre y
-    tamaño se consideren necesariamente el mismo contenido.
-    """
-
-    signature = []
-
-    for file_name, file_bytes in uploaded_files_data:
-
-        digest = hashlib.sha256(
-            file_bytes
-        ).hexdigest()
-
-        signature.append(
-            (
-                file_name,
-                len(file_bytes),
-                digest,
-            )
-        )
-
-    return tuple(signature)
-
-
-# ============================================================
-# LIMPIEZA DE ARCHIVOS TEMPORALES
-# ============================================================
-
-def cleanup_temp_paths(
-    paths: list[str],
-) -> None:
-
+def cleanup_temp_paths(paths: list[str]) -> None:
     for path in paths:
-
         try:
             os.remove(path)
-
-        except FileNotFoundError:
-            pass
-
-        except OSError:
+        except (FileNotFoundError, OSError):
             pass
 
 
-# ============================================================
-# PREPARAR ARCHIVOS
-# ============================================================
-
-def materialize_uploaded_files(
-    uploaded_files_data: tuple[
-        tuple[str, bytes],
-        ...
-    ],
-) -> list[str]:
-    """
-    Copia los PDFs subidos a archivos temporales.
-
-    El worker trabaja exclusivamente con esas rutas.
-    """
-
+def materialize_uploaded_files(uploaded_files_data: tuple[tuple[str, bytes], ...]) -> list[str]:
     temp_paths: list[str] = []
-
     try:
-
-        for file_name, file_bytes in (
-            uploaded_files_data
-        ):
-
-            suffix = (
-                Path(file_name).suffix
-                or ".pdf"
-            )
-
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=suffix,
-            ) as tmp:
-
-                tmp.write(
-                    file_bytes
-                )
-
-                temp_paths.append(
-                    tmp.name
-                )
-
+        for file_name, file_bytes in uploaded_files_data:
+            suffix = Path(file_name).suffix or ".pdf"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(file_bytes)
+                temp_paths.append(tmp.name)
         return temp_paths
-
     except Exception:
-
-        cleanup_temp_paths(
-            temp_paths
-        )
-
+        cleanup_temp_paths(temp_paths)
         raise
 
 
-# ============================================================
-# WORKER
-# ============================================================
-
-def processing_worker(
-    temp_paths: list[str],
-    names: list[str],
-    processing_queue: Queue,
-) -> None:
-    """
-    Ejecuta el pipeline en segundo plano.
-
-    IMPORTANTE:
-
-    Este hilo NO utiliza Streamlit.
-    No llama st.*.
-    No modifica st.session_state.
-
-    Únicamente publica eventos en Queue.
-    """
-
-    try:
-
-        for event in (
-            process_bank_statements_incremental(
-                temp_paths,
-                names,
-            )
-        ):
-
-            processing_queue.put(
-                (
-                    "event",
-                    event,
-                )
-            )
-
-    except Exception as ex:
-
-        processing_queue.put(
-            (
-                "worker_error",
-                ex,
-                traceback_string(
-                    ex
-                ),
-            )
-        )
-
-    finally:
-
-        processing_queue.put(
-            (
-                "finished",
-            )
-        )
-
-        cleanup_temp_paths(
-            temp_paths
-        )
-
-
-def traceback_string(
-    ex: Exception,
-) -> str:
-    """
-    Construye el traceback del worker sin importar
-    traceback globalmente en todo el módulo.
-    """
-
+def traceback_string() -> str:
     import traceback
 
     return traceback.format_exc()
 
 
-# ============================================================
-# INICIAR PROCESAMIENTO
-# ============================================================
-
-def start_processing(
-    uploaded_files_data: tuple[
-        tuple[str, bytes],
-        ...
-    ],
+def processing_worker(
+    temp_paths: list[str],
+    names: list[str],
+    processing_queue: Queue,
+    primary_engine: str,
 ) -> None:
+    try:
+        for event in process_bank_statements_incremental(
+            temp_paths,
+            names,
+            ocr_primary_engine=primary_engine,
+        ):
+            processing_queue.put(("event", event))
+    except Exception as ex:
+        processing_queue.put(("worker_error", ex, traceback_string()))
+    finally:
+        processing_queue.put(("finished",))
+        cleanup_temp_paths(temp_paths)
 
-    temp_paths = materialize_uploaded_files(
-        uploaded_files_data
-    )
 
-    processing_items = []
-
-    for file_name, _ in uploaded_files_data:
-
-        processing_items.append(
-            {
-                "file_name": file_name,
-                "processing_method": None,
-                "status": "classifying",
-                "result": None,
-                "error": None,
-            }
-        )
-
+def start_processing(uploaded_files_data: tuple[tuple[str, bytes], ...]) -> None:
+    temp_paths = materialize_uploaded_files(uploaded_files_data)
+    processing_items = [
+        {
+            "file_name": file_name,
+            "processing_method": None,
+            "status": "classifying",
+            "result": None,
+            "error": None,
+        }
+        for file_name, _ in uploaded_files_data
+    ]
     processing_queue = Queue()
-
-    batch_signature = create_batch_signature(
-        uploaded_files_data
-    )
-
+    primary_engine = normalize_ocr_engine(st.session_state.ocr_primary_engine)
     worker = threading.Thread(
         target=processing_worker,
         args=(
             temp_paths,
-            [
-                file_name
-                for file_name, _
-                in uploaded_files_data
-            ],
+            [name for name, _ in uploaded_files_data],
             processing_queue,
+            primary_engine,
         ),
         daemon=True,
     )
 
-    st.session_state.processing_queue = (
-        processing_queue
-    )
-
-    st.session_state.processing_items = (
-        processing_items
-    )
-
+    st.session_state.processing_queue = processing_queue
+    st.session_state.processing_items = processing_items
     st.session_state.results = []
-
-    st.session_state.worker_thread = (
-        worker
-    )
-
-    st.session_state.worker_running = (
-        True
-    )
-
-    st.session_state.worker_finished = (
-        False
-    )
-
-    st.session_state.worker_error = (
-        None
-    )
-
-    st.session_state.worker_traceback = (
-        None
-    )
-
-    st.session_state.batch_signature = (
-        batch_signature
-    )
-
-    st.session_state.batch_temp_paths = (
-        temp_paths
-    )
-
-    st.session_state.selected_file = (
-        None
-    )
-
+    st.session_state.worker_thread = worker
+    st.session_state.worker_running = True
+    st.session_state.worker_finished = False
+    st.session_state.worker_error = None
+    st.session_state.worker_traceback = None
+    st.session_state.batch_signature = create_batch_signature(uploaded_files_data)
+    st.session_state.batch_temp_paths = temp_paths
+    st.session_state.selected_index = None
     worker.start()
 
 
-# ============================================================
-# PROCESAR EVENTOS
-# ============================================================
-
-def consume_processing_events() -> bool:
-    """
-    Consume todos los eventos disponibles de la Queue.
-
-    Devuelve True si la interfaz sufrió algún cambio.
-    """
-
+def consume_processing_events() -> tuple[bool, bool, bool]:
     changed = False
-
-    queue = (
-        st.session_state.processing_queue
-    )
-
-    items = (
-        st.session_state.processing_items
-    )
-
-    results = (
-        st.session_state.results
-    )
+    completed_added = False
+    finished = False
+    queue = st.session_state.processing_queue
+    items = st.session_state.processing_items
+    results = st.session_state.results
 
     while True:
-
         try:
-
-            message = (
-                queue.get_nowait()
-            )
-
+            message = queue.get_nowait()
         except Empty:
-
             break
 
         message_type = message[0]
-
         if message_type == "event":
-
             event = message[1]
-
-            index = getattr(
-                event,
-                "index",
-                None,
-            )
-
-            if not isinstance(
-                index,
-                int,
-            ):
-
+            index = getattr(event, "index", None)
+            if not isinstance(index, int) or not (0 <= index < len(items)):
                 continue
-
-            if not (
-                0
-                <= index
-                < len(items)
-            ):
-
-                continue
-
             item = items[index]
-
             if event.kind == "started":
-
-                item["processing_method"] = (
-                    event.processing_method
+                item.update(
+                    processing_method=event.processing_method,
+                    status="processing",
+                    error=None,
                 )
-
-                item["status"] = (
-                    "processing"
-                )
-
-                item["error"] = None
-
                 changed = True
-
             elif event.kind == "completed":
-
-                item["processing_method"] = (
-                    event.processing_method
+                item.update(
+                    processing_method=event.processing_method,
+                    status="completed",
+                    result=event.result,
+                    error=None,
                 )
-
-                item["status"] = (
-                    "completed"
-                )
-
-                item["result"] = (
-                    event.result
-                )
-
-                item["error"] = None
-
-                result = event.result
-
-                if result is not None:
-
-                    results.append(
-                        result
-                    )
-
+                if event.result is not None:
+                    results.append(event.result)
+                    if st.session_state.selected_index is None:
+                        st.session_state.selected_index = index
+                    completed_added = True
                 changed = True
-
             elif event.kind == "error":
-
-                item["processing_method"] = (
-                    event.processing_method
+                item.update(
+                    processing_method=event.processing_method,
+                    status="error",
+                    result=None,
+                    error=str(event.error or "Error desconocido"),
                 )
-
-                item["status"] = (
-                    "error"
-                )
-
-                item["result"] = None
-
-                item["error"] = (
-                    str(event.error)
-                    if event.error
-                    else "Error desconocido."
-                )
-
                 changed = True
 
         elif message_type == "worker_error":
-
-            ex = message[1]
-            error_traceback = message[2]
-
-            st.session_state.worker_error = (
-                str(ex)
-            )
-
-            st.session_state.worker_traceback = (
-                error_traceback
-            )
-
+            ex, tb = message[1], message[2]
+            st.session_state.worker_error = str(ex)
+            st.session_state.worker_traceback = tb
             for item in items:
-
-                if item.get("status") not in {
-                    "completed",
-                    "error",
-                }:
-
-                    item["status"] = (
-                        "error"
-                    )
-
-                    item["error"] = (
-                        str(ex)
-                    )
-
+                if item.get("status") not in {"completed", "error"}:
+                    item.update(status="error", error=str(ex))
             changed = True
 
         elif message_type == "finished":
-
-            st.session_state.worker_running = (
-                False
-            )
-
-            st.session_state.worker_finished = (
-                True
-            )
-
+            st.session_state.worker_running = False
+            st.session_state.worker_finished = True
             changed = True
+            finished = True
 
-    return changed
+    return changed, completed_added, finished
 
 
-# ============================================================
-# ESTADO DEL LOTE
-# ============================================================
-
-def get_processing_counts() -> tuple[
-    int,
-    int,
-    int,
-    int,
-]:
-    """
-    Devuelve:
-
-        total
-        completados
-        errores
-        pendientes
-    """
-
-    items = (
-        st.session_state.processing_items
-    )
-
+def processing_counts() -> tuple[int, int, int, int, int]:
+    items = st.session_state.processing_items
     total = len(items)
-
-    completed = sum(
+    completed = sum(1 for item in items if item.get("status") == "completed")
+    errors = sum(1 for item in items if item.get("status") == "error")
+    pending = total - completed - errors
+    scanned_pending = sum(
         1
         for item in items
-        if item.get("status")
-        == "completed"
+        if item.get("status") == "processing" and item.get("processing_method") == "OCR"
     )
-
-    errors = sum(
-        1
-        for item in items
-        if item.get("status")
-        == "error"
-    )
-
-    pending = (
-        total
-        - completed
-        - errors
-    )
-
-    return (
-        total,
-        completed,
-        errors,
-        pending,
-    )
-
-
-def get_ocr_pending_count() -> int:
-
-    return sum(
-        1
-        for item
-        in st.session_state.processing_items
-
-        if (
-            item.get("status")
-            == "processing"
-
-            and item.get(
-                "processing_method"
-            )
-            == "OCR"
-        )
-    )
+    return total, completed, errors, pending, scanned_pending
 
 
 def render_processing_status() -> None:
-
-    total, completed, errors, pending = (
-        get_processing_counts()
-    )
-
-    ocr_pending = (
-        get_ocr_pending_count()
-    )
-
+    total, completed, errors, pending, scanned_pending = processing_counts()
+    if not total:
+        return
     if pending > 0:
-
-        message = (
-            f"Procesando "
-            f"{completed} de "
-            f"{total} archivos"
-        )
-
-        if ocr_pending:
-
-            message += (
-                f" · {ocr_pending} "
-                f"OCR en segundo plano"
-            )
-
+        message = f"Procesando {completed} de {total} archivos"
+        if scanned_pending:
+            message += f" · {scanned_pending} PDF(s) escaneado(s) en OCR"
         if errors:
-
-            message += (
-                f" · {errors} con error"
-            )
-
-        st.info(
-            message
-        )
-
-        return
-
-    if errors == 0:
-
-        st.success(
-            f"✅ {completed} estados "
-            f"de cuenta procesados "
-            f"correctamente."
-        )
-
-    elif completed > 0:
-
-        st.warning(
-            f"✅ {completed} estados "
-            f"de cuenta procesados "
-            f"correctamente. "
-            f"⚠️ {errors} con error."
-        )
-
+            message += f" · {errors} con error"
+        st.info(message)
+    elif errors == 0:
+        st.success(f"✅ {completed} archivos procesados correctamente")
+    elif completed:
+        st.warning(f"✅ {completed} correctos · ⚠️ {errors} con error")
     else:
-
-        st.error(
-            f"❌ No fue posible "
-            f"procesar los "
-            f"{errors} archivos "
-            f"seleccionados."
-        )
+        st.error(f"❌ No fue posible procesar {errors} archivos")
 
 
-# ============================================================
-# TABLA RESUMEN
-# ============================================================
+@st.fragment(run_every=PROCESSING_UI_POLL_INTERVAL)
+def processing_status_fragment() -> None:
+    _changed, completed_added, finished = consume_processing_events()
+    render_processing_status()
+    # El resto de la página sólo se reconstruye cuando aparece un resultado nuevo
+    # o termina el lote. Así los botones del selector no se mueven cada 0.5 s.
+    if completed_added or finished:
+        st.rerun()
 
-def render_processing_summary() -> None:
-    """Muestra todos los archivos seleccionados."""
 
-    items = (
-        st.session_state.processing_items
-    )
+def validation(result, name: str):
+    for item in getattr(result, "validaciones", []) or []:
+        if item.nombre == name:
+            return item
+    return None
 
+
+def validation_symbol(item) -> str:
+    return "—" if item is None else ("✅" if item.correcto else "❌")
+
+
+def process_label(item: dict[str, Any]) -> str:
+    method = item.get("processing_method")
+    result = item.get("result")
+    if method == "Digital":
+        return "Digital"
+    if method == "OCR":
+        if result is None:
+            return engine_label(st.session_state.ocr_primary_engine)
+        label = engine_label(getattr(result, "ocr_engine", None))
+        if getattr(result, "fallback_used", False):
+            return f"{label} · fallback"
+        if getattr(result, "fallback_attempted", False):
+            return f"{label} · revisado"
+        return label
+    return "Detectando"
+
+
+def bank_key_for_item(item: dict[str, Any]) -> str:
+    result = item.get("result")
+    if result is None:
+        return "PENDIENTE"
+    return str(getattr(result, "bank_key", "desconocido") or "desconocido").upper()
+
+
+def completed_items() -> list[tuple[int, dict[str, Any]]]:
+    return [
+        (index, item)
+        for index, item in enumerate(st.session_state.processing_items)
+        if item.get("status") == "completed" and item.get("result") is not None
+    ]
+
+
+def render_selector_column(title: str, items: list[tuple[int, dict[str, Any]]]) -> None:
+    st.markdown(f"#### {title}")
     if not items:
-
+        st.caption("Sin resultados terminados")
         return
 
-    st.subheader(
-        "📋 Estado del procesamiento"
-    )
+    grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, item in items:
+        grouped.setdefault(bank_key_for_item(item), []).append((index, item))
 
-    rows = []
-
-    for item in items:
-
-        method = (
-            item.get(
-                "processing_method"
-            )
-        )
-
-        status = (
-            item.get(
-                "status"
-            )
-        )
-
-        file_name = (
-            item.get(
-                "file_name",
-                "",
-            )
-        )
-
-        result = item.get("result")
-
-        if method:
-
-            process_display = method
-
-            if (
-                method == "OCR"
-                and result is not None
-                and result.selected_ocr_engine
+    for bank in sorted(grouped):
+        st.markdown(f"**{bank}**")
+        for index, item in grouped[bank]:
+            result = item["result"]
+            a = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
+            c = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
+            selected = st.session_state.selected_index == index
+            label = f"{'●' if selected else '○'} {item['file_name']} · {process_label(item)} · A {a} · C {c}"
+            if st.button(
+                label,
+                key=f"result_{index}_{item['file_name']}",
+                use_container_width=True,
+                type="primary" if selected else "secondary",
             ):
-                process_display = (
-                    "OCR · "
-                    f"{ocr_engine_label(result.selected_ocr_engine)}"
-                )
+                st.session_state.selected_index = index
+                st.rerun()
 
-        else:
 
-            process_display = (
-                "Detectando..."
-            )
+def render_result_selector() -> Any | None:
+    completed = completed_items()
+    if not completed:
+        st.info("Aún no hay resultados terminados. Puedes esperar mientras los OCR continúan en segundo plano.")
+        return None
 
-        if status == "completed":
-
-            status_display = "✅ Terminado"
-
-        elif status == "error":
-
-            status_display = "❌ Error"
-
-        elif status == "processing":
-
-            status_display = "⏳ Procesando"
-
-        else:
-
-            status_display = "⏳ Clasificando"
-
-        rows.append(
-            {
-                "Archivo": file_name,
-                "Proceso": process_display,
-                "Estado": status_display,
-            }
-        )
-
-    df = pd.DataFrame(
-        rows
+    st.subheader("Resultados disponibles")
+    st.caption(
+        "Los resultados terminados permanecen estables y pueden revisarse mientras otros archivos siguen procesándose."
     )
+    digital = [(i, item) for i, item in completed if item.get("processing_method") == "Digital"]
+    scanned = [(i, item) for i, item in completed if item.get("processing_method") == "OCR"]
+    col_digital, col_scanned = st.columns(2)
+    with col_digital:
+        render_selector_column("📄 PDFs digitales", digital)
+    with col_scanned:
+        render_selector_column("🖨️ PDFs escaneados (OCR)", scanned)
 
+    selected_index = st.session_state.selected_index
+    for index, item in completed:
+        if index == selected_index:
+            return item["result"]
+
+    st.session_state.selected_index = completed[0][0]
+    return completed[0][1]["result"]
+
+
+def render_primary_validations(result) -> None:
+    cols = st.columns(2)
+    for col, name, short in zip(cols, PRIMARY_VALIDATIONS, ("Abonos", "Cargos")):
+        item = validation(result, name)
+        with col:
+            with st.container(border=True):
+                if item is None:
+                    st.markdown(f"### — Validación {short}")
+                    st.caption("No se pudo calcular")
+                elif item.correcto:
+                    st.markdown(f"### ✅ Validación {short}")
+                    st.caption("Conciliación correcta")
+                else:
+                    st.markdown(f"### ❌ Validación {short}")
+                    st.caption(
+                        f"Esperado {format_money(item.esperado)} · "
+                        f"Obtenido {format_money(item.obtenido)} · "
+                        f"Diferencia {format_money(item.diferencia)}"
+                    )
+
+
+def render_other_validations(result) -> None:
+    all_validations = list(getattr(result, "validaciones", []) or [])
+    secondary = [item for item in all_validations if item.nombre not in PRIMARY_VALIDATIONS]
+    correct = sum(1 for item in all_validations if item.correcto)
+    st.caption(f"Integridad financiera: {correct}/{len(all_validations)} validaciones correctas")
+    st.markdown(f"**Otras validaciones financieras ({len(secondary)})**")
+    if not secondary:
+        st.caption("No existen validaciones adicionales para este resultado.")
+        return
+    for item in secondary:
+        icon = "✅" if item.correcto else "❌"
+        with st.container(border=True):
+            st.markdown(f"**{icon} {item.nombre}**")
+            st.caption(
+                f"Esperado: {format_money(item.esperado)} · "
+                f"Obtenido: {format_money(item.obtenido)} · "
+                f"Diferencia: {format_money(item.diferencia)}"
+            )
+            if getattr(item, "mensaje", None):
+                st.caption(safe_value(item.mensaje))
+
+
+def render_all_fields(estado) -> None:
+    dc = getattr(estado, "datos_cuenta", None)
+    rf = getattr(estado, "resumen_financiero", None)
+    op = getattr(estado, "otros_productos", None)
+
+    with st.expander("📌 Datos de la cuenta · todos los campos"):
+        rows = {
+            "Producto principal": safe_value(getattr(dc, "producto_principal", None)),
+            "Periodo inicio": safe_value(getattr(dc, "periodo_inicio", None)),
+            "Periodo fin": safe_value(getattr(dc, "periodo_fin", None)),
+            "Fecha de corte": safe_value(getattr(dc, "fecha_corte", None)),
+            "Número de cuenta": safe_value(getattr(dc, "numero_cuenta", None)),
+            "Número de cliente": safe_value(getattr(dc, "numero_cliente", None)),
+            "CLABE": safe_value(getattr(dc, "clabe", None)),
+            "Nombre del cliente": safe_value(getattr(dc, "nombre_cliente", None)),
+            "RFC": safe_value(getattr(dc, "rfc", None)),
+        }
+        st.dataframe(pd.DataFrame([rows]), use_container_width=True, hide_index=True)
+
+    with st.expander("📈 Resumen financiero ampliado · todos los campos"):
+        rows = {
+            "Saldo promedio": format_money(getattr(rf, "saldo_promedio", None)),
+            "Días del periodo": safe_value(getattr(rf, "dias_periodo", None)),
+            "Tasa bruta anual": format_optional_float(getattr(rf, "tasa_bruta_anual", None), suffix="%"),
+            "Saldo promedio gravable": format_money(getattr(rf, "saldo_promedio_gravable", None)),
+            "Intereses a favor": format_money(getattr(rf, "intereses_a_favor", None)),
+            "ISR retenido": format_money(getattr(rf, "isr_retenido", None)),
+            "Cheques pagados": safe_value(getattr(rf, "cheques_pagados", None)),
+            "Manejo de cuenta": format_money(getattr(rf, "manejo_cuenta", None)),
+            "Cargos objetados": format_money(getattr(rf, "cargos_objetados", None)),
+            "Abonos objetados": format_money(getattr(rf, "abonos_objetados", None)),
+            "Saldo promedio mínimo mensual": format_money(getattr(rf, "saldo_promedio_minimo_mensual", None)),
+            "Saldo global": format_money(getattr(rf, "saldo_global", None)),
+        }
+        st.dataframe(pd.DataFrame([rows]), use_container_width=True, hide_index=True)
+
+    with st.expander("💰 Otros productos y comisiones · todos los campos"):
+        rows = {
+            "Contrato": safe_value(getattr(op, "contrato", None)),
+            "Producto": safe_value(getattr(op, "producto", None)),
+            "Tasa interés anual": format_optional_float(getattr(op, "tasa_interes_anual", None), suffix="%"),
+            "GAT nominal anual": format_optional_float(getattr(op, "gat_nominal_anual", None), suffix="%"),
+            "GAT real anual": format_optional_float(getattr(op, "gat_real_anual", None), suffix="%"),
+            "Total comisiones": format_optional_float(getattr(op, "total_comisiones", None), prefix="$"),
+        }
+        st.dataframe(pd.DataFrame([rows]), use_container_width=True, hide_index=True)
+
+
+def movement_dataframe(estado) -> pd.DataFrame:
+    dc = getattr(estado, "datos_cuenta", None)
+    movements = getattr(estado, "movimientos", None) or []
+    rows: list[dict[str, Any]] = []
+    for index, movement in enumerate(movements, 1):
+        row: dict[str, Any] = {}
+        for field_name, _label in MOVEMENT_COLUMNS:
+            if field_name == "fecha_corte":
+                value = getattr(dc, "fecha_corte", None)
+            elif field_name == "numero_cuenta":
+                value = getattr(dc, "numero_cuenta", None)
+            elif field_name == "numero_movimiento":
+                value = index
+            else:
+                value = getattr(movement, field_name, None)
+            row[field_name] = value
+        rows.append(row)
+    return pd.DataFrame(rows, columns=[name for name, _ in MOVEMENT_COLUMNS])
+
+
+def render_movements(estado) -> None:
+    movements = getattr(estado, "movimientos", None) or []
+    st.subheader(f"📑 Movimientos ({len(movements)})")
+    if not movements:
+        st.warning("No se encontraron movimientos en este documento.")
+        return
+
+    df = movement_dataframe(estado)
+    for field in MONEY_FIELDS:
+        if field in df.columns:
+            df[field] = pd.to_numeric(df[field], errors="coerce")
+
+    column_config: dict[str, Any] = {}
+    for field_name, label in MOVEMENT_COLUMNS:
+        if field_name in MONEY_FIELDS:
+            column_config[field_name] = st.column_config.NumberColumn(label, format="$%.2f", width="small")
+        elif field_name in {"concepto", "concepto_original", "beneficiario", "clave_rastreo"}:
+            column_config[field_name] = st.column_config.TextColumn(label, width="medium")
+        else:
+            column_config[field_name] = st.column_config.TextColumn(label, width="small")
+
+    st.caption("Encabezado fijo, filas compactas y desplazamiento horizontal/vertical.")
     st.dataframe(
         df,
         use_container_width=True,
         hide_index=True,
-    )
-
-
-# ============================================================
-# SELECTOR DE ARCHIVO
-# ============================================================
-
-def get_completed_results() -> list[Any]:
-
-    return list(
-        st.session_state.results
-    )
-
-
-def render_result_selector():
-
-    results = get_completed_results()
-
-    if not results:
-
-        st.info(
-            "Aún no hay estados de cuenta "
-            "terminados para revisar."
-        )
-
-        return None
-
-    file_options = [
-        result.file_name
-        for result in results
-    ]
-
-    current_selected = (
-        st.session_state.selected_file
-    )
-
-    if (
-        current_selected
-        not in file_options
-    ):
-
-        current_selected = (
-            file_options[0]
-        )
-
-        st.session_state.selected_file = (
-            current_selected
-        )
-
-    selected_file = st.selectbox(
-
-        "Selecciona el estado de cuenta "
-        "que deseas revisar:",
-
-        options=file_options,
-
-        index=file_options.index(
-            current_selected
-        ),
-
-        key="selected_file_key",
-    )
-
-    st.session_state.selected_file = (
-        selected_file
-    )
-
-    for result in results:
-
-        if (
-            result.file_name
-            == selected_file
-        ):
-
-            return result
-
-    return None
-
-
-# ============================================================
-# SELECTOR Y COMPARACIÓN OCR
-# ============================================================
-
-def render_ocr_selector(result) -> None:
-    review = getattr(result, "ocr_review", None)
-    if review is None:
-        return
-
-    engines = list(result.available_ocr_engines())
-
-    if len(engines) < 2:
-        if review.paddle_error_type:
-            st.caption(
-                "PaddleOCR fue considerado como segundo motor, "
-                "pero no estuvo disponible para esta ejecución."
-            )
-        return
-
-    selected_engine = result.selected_ocr_engine or engines[0]
-    recommended_engine = result.recommended_ocr_engine or "tesseract"
-
-    st.subheader("🔎 Comparación OCR")
-
-    selected = st.radio(
-        "Resultado que deseas revisar y conservar para la exportación:",
-        options=engines,
-        index=engines.index(selected_engine),
-        format_func=ocr_engine_label,
-        horizontal=True,
-        key=f"ocr_engine_{id(result)}",
-    )
-
-    if selected != result.selected_ocr_engine:
-        result.select_ocr_engine(selected)
-
-    recommendation_label = ocr_engine_label(recommended_engine)
-    selected_label = ocr_engine_label(result.selected_ocr_engine)
-
-    if result.selected_ocr_engine == recommended_engine:
-        st.caption(
-            f"Selección actual: {selected_label} · "
-            f"recomendación automática: {recommendation_label}."
-        )
-    else:
-        st.caption(
-            f"Selección manual: {selected_label} · "
-            f"recomendación automática: {recommendation_label}."
-        )
-
-    columns = st.columns(len(engines))
-
-    for column, engine in zip(columns, engines):
-        candidate = review.get_candidate(engine)
-        label = ocr_engine_label(engine)
-        failed = candidate.validation_failed
-        total = candidate.validation_total
-
-        with column:
-            st.markdown(f"**{label}**")
-            st.write(f"Movimientos: {candidate.movement_count}")
-            st.write(f"Validaciones: {total}")
-            st.write(f"Taches: {failed}")
-
-    st.info(
-        "Puedes alternar entre ambos motores. Los datos, movimientos, "
-        "validaciones y el Excel reflejarán el motor seleccionado."
-    )
-
-
-# ============================================================
-# RENDER DOCUMENTO IMAGEN
-# ============================================================
-
-def render_image_document(
-    result,
-) -> None:
-
-    st.warning(
-        "🖼️ Se detectó que este documento "
-        "es una imagen o un PDF escaneado."
-    )
-
-    st.info(
-        "El documento requiere OCR para su extracción estructurada."
-    )
-
-
-# ============================================================
-# RENDER RESULTADO
-# ============================================================
-
-def render_digital_result(
-    result,
-) -> None:
-
-    render_ocr_selector(result)
-
-    estado = (
-        result.estado_cuenta
-    )
-
-    if estado is None:
-
-        st.warning(
-            "No existe información de "
-            "estado de cuenta para este "
-            "resultado."
-        )
-
-        return
-
-    st.markdown(
-        f"#### Banco Detectado: "
-        f"`{result.bank_key.upper()}`"
-    )
-
-    dc = (
-        estado.datos_cuenta
-    )
-
-    cols_info = st.columns(4)
-
-    cols_info[0].metric(
-
-        "Periodo",
-
-        (
-            f"{dc.periodo_inicio} al "
-            f"{dc.periodo_fin}"
-        )
-
-        if dc
-
-        else "N/A",
-    )
-
-    cols_info[1].metric(
-
-        "Cliente",
-
-        (
-            dc.nombre_cliente
-            or "N/A"
-        )
-
-        if dc
-
-        else "N/A",
-    )
-
-    cols_info[2].metric(
-
-        "Cuenta",
-
-        (
-            dc.numero_cuenta
-            or "N/A"
-        )
-
-        if dc
-
-        else "N/A",
-    )
-
-    cols_info[3].metric(
-
-        "CLABE",
-
-        (
-            dc.clabe
-            or "N/A"
-        )
-
-        if dc
-
-        else "N/A",
-    )
-
-    st.subheader(
-        "1. 📌 Datos de la Cuenta"
-    )
-
-    if dc:
-
-        with st.container(
-            border=True
-        ):
-
-            col1, col2, col3 = (
-                st.columns(3)
-            )
-
-            col1.markdown(
-                f"**Producto:** "
-                f"{dc.producto_principal or 'N/A'}"
-            )
-
-            col1.markdown(
-                f"**No. Cliente:** "
-                f"{dc.numero_cliente or 'N/A'}"
-            )
-
-            col2.markdown(
-                f"**RFC:** "
-                f"{dc.rfc or 'N/A'}"
-            )
-
-            col2.markdown(
-                f"**Fecha de Corte:** "
-                f"{dc.fecha_corte or 'N/A'}"
-            )
-
-            rf = (
-                estado.resumen_financiero
-            )
-
-            if rf:
-
-                col3.markdown(
-                    f"**Días del Periodo:** "
-                    f"{rf.dias_periodo or 'N/A'}"
-                )
-
-                col3.markdown(
-                    f"**Tasa Bruta Anual:** "
-                    f"{rf.tasa_bruta_anual or 'N/A'}%"
-                )
-
-            else:
-
-                col3.markdown(
-                    "**Días del Periodo:** N/A"
-                )
-
-                col3.markdown(
-                    "**Tasa Bruta Anual:** N/A"
-                )
-
-    else:
-
-        st.warning(
-            "No se encontraron datos "
-            "de la cuenta."
-        )
-
-    st.subheader(
-        "2. 📊 Resumen Financiero"
-    )
-
-    rf = (
-        estado.resumen_financiero
-    )
-
-    if rf:
-
-        with st.container(
-            border=True
-        ):
-
-            col1, col2, col3, col4 = (
-                st.columns(4)
-            )
-
-            col1.metric(
-                "Saldo Anterior",
-                format_money(
-                    rf.saldo_anterior
-                ),
-            )
-
-            col2.metric(
-                "Depósitos / Abonos",
-                format_money(
-                    rf.depositos_abonos
-                ),
-            )
-
-            col3.metric(
-                "Retiros / Cargos",
-                format_money(
-                    rf.retiros_cargos
-                ),
-            )
-
-            delta = 0.0
-
-            try:
-
-                delta = (
-                    rf.saldo_final
-                    - rf.saldo_anterior
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
-                delta = 0.0
-
-            col4.metric(
-                "Saldo Final",
-                format_money(
-                    rf.saldo_final
-                ),
-                delta=f"{delta:,.2f}",
-            )
-
-            st.divider()
-
-            col_b1, col_b2, col_b3 = (
-                st.columns(3)
-            )
-
-            col_b1.metric(
-                "Saldo Promedio",
-                format_money(
-                    rf.saldo_promedio
-                ),
-            )
-
-            col_b2.metric(
-                "Intereses a Favor",
-                format_money(
-                    rf.intereses_a_favor
-                ),
-            )
-
-            col_b3.metric(
-                "ISR Retenido",
-                format_money(
-                    rf.isr_retenido
-                ),
-            )
-
-    else:
-
-        st.warning(
-            "No se encontró el resumen "
-            "financiero."
-        )
-
-    with st.expander(
-        "Ver más detalles del resumen financiero"
-    ):
-
-        if rf:
-
-            col_c1, col_c2, col_c3 = (
-                st.columns(3)
-            )
-
-            col_c1.metric(
-                "Saldo Promedio Gravable",
-                format_money(
-                    rf.saldo_promedio_gravable
-                ),
-            )
-
-            col_c2.metric(
-                "Saldo Promedio "
-                "Mínimo Mensual",
-                format_money(
-                    rf.saldo_promedio_minimo_mensual
-                ),
-            )
-
-            col_c3.metric(
-                "Saldo Global",
-                format_money(
-                    rf.saldo_global
-                ),
-            )
-
-            col_d1, col_d2, col_d3, col_d4 = (
-                st.columns(4)
-            )
-
-            col_d1.metric(
-                "Cheques Pagados",
-                safe_value(
-                    rf.cheques_pagados
-                ),
-            )
-
-            col_d2.metric(
-                "Manejo de Cuenta",
-                format_money(
-                    rf.manejo_cuenta
-                ),
-            )
-
-            col_d3.metric(
-                "Cargos Objetados",
-                format_money(
-                    rf.cargos_objetados
-                ),
-            )
-
-            col_d4.metric(
-                "Abonos Objetados",
-                format_money(
-                    rf.abonos_objetados
-                ),
-            )
-
-    st.subheader(
-        "3. 💰 Otros Productos y Comisiones"
-    )
-
-    op = (
-        estado.otros_productos
-    )
-
-    if op:
-
-        with st.container(
-            border=True
-        ):
-
-            st.markdown(
-
-                f"**Producto de Inversión:** "
-                f"{op.producto or 'N/A'} "
-                f"(Contrato: "
-                f"{op.contrato or 'N/A'})"
-            )
-
-            col1, col2, col3 = (
-                st.columns(3)
-            )
-
-            col1.metric(
-
-                "Tasa Interés Anual",
-
-                format_optional_float(
-                    op.tasa_interes_anual,
-                    format_str="{:.2f}",
-                    suffix="%",
-                ),
-            )
-
-            col2.metric(
-
-                "GAT Nominal",
-
-                format_optional_float(
-                    op.gat_nominal_anual,
-                    format_str="{:.2f}",
-                    suffix="%",
-                ),
-            )
-
-            col3.metric(
-
-                "GAT Real",
-
-                format_optional_float(
-                    op.gat_real_anual,
-                    format_str="{:.2f}",
-                    suffix="%",
-                ),
-            )
-
-            st.metric(
-
-                "Total Comisiones Cobradas",
-
-                format_optional_float(
-                    op.total_comisiones,
-                    prefix="$",
-                ),
-            )
-
-    else:
-
-        st.info(
-            "No se encontraron otros "
-            "productos o comisiones en "
-            "este estado de cuenta."
-        )
-
-    with st.expander(
-        "✓ Validaciones Financieras"
-    ):
-
-        if result.validaciones:
-
-            with st.container(
-                border=True
-            ):
-
-                correctas = sum(
-
-                    1
-
-                    for v
-                    in result.validaciones
-
-                    if v.correcto
-                )
-
-                total = len(
-                    result.validaciones
-                )
-
-                st.metric(
-
-                    "Integridad financiera",
-
-                    f"{correctas}/"
-                    f"{total} "
-                    f"validaciones correctas",
-                )
-
-                for validacion in (
-                    result.validaciones
-                ):
-
-                    if validacion.correcto:
-
-                        st.success(
-                            f"✅ "
-                            f"{validacion.nombre}"
-                        )
-
-                    else:
-
-                        st.error(
-                            f"❌ "
-                            f"{validacion.nombre}"
-                        )
-
-                    with st.expander(
-                        "Detalle"
-                    ):
-
-                        st.write(
-                            "Esperado: "
-                            +
-                            format_money(
-                                validacion.esperado
-                            )
-                        )
-
-                        st.write(
-                            "Obtenido: "
-                            +
-                            format_money(
-                                validacion.obtenido
-                            )
-                        )
-
-                        st.write(
-                            "Diferencia: "
-                            +
-                            format_money(
-                                validacion.diferencia
-                            )
-                        )
-
-                        st.caption(
-                            safe_value(
-                                validacion.mensaje
-                            )
-                        )
-
-        else:
-
-            st.info(
-                "No existen validaciones "
-                "disponibles."
-            )
-
-    movimientos = (
-        estado.movimientos
-        or []
-    )
-
-    st.subheader(
-        f"5. 📑 Movimientos "
-        f"({len(movimientos)})"
-    )
-
-    if not movimientos:
-
-        st.warning(
-            "No se encontraron movimientos "
-            "en este documento."
-        )
-
-        return
-
-    df = pd.DataFrame(
-        [
-            movimiento.__dict__
-            for movimiento
-            in movimientos
-        ]
-    )
-
-    if df.empty:
-
-        st.warning(
-            "No se encontraron movimientos "
-            "en este documento."
-        )
-
-        return
-
-    for col in [
-
-        "cargo",
-        "abono",
-        "saldo_operacion",
-        "saldo_liquidacion",
-
-    ]:
-
-        if col in df.columns:
-
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce",
-            )
-
-    columnas_mostrar = [
-
-        "fecha_corte",
-
-        "fecha_operacion",
-
-        "fecha_liquidacion",
-
-        "concepto",
-
-        "cargo",
-
-        "abono",
-
-        "saldo_operacion",
-
-        "saldo_liquidacion",
-
-        "tipo_operacion",
-
-        "beneficiario",
-
-        "cuenta_beneficiario",
-
-        "clabe_beneficiario",
-
-        "rfc",
-
-        "referencia",
-
-        "clave_rastreo",
-
-        "autorizacion",
-
-        "hora_operacion",
-    ]
-
-    columnas_existentes = [
-
-        col
-
-        for col
-        in columnas_mostrar
-
-        if col in df.columns
-    ]
-
-    df_display = (
-        df[
-            columnas_existentes
-        ]
-        .copy()
-    )
-
-    column_config = {
-
-        "fecha_corte":
-            "Fecha Corte",
-
-        "fecha_operacion":
-            "Fecha Operación",
-
-        "fecha_liquidacion":
-            "Fecha Liquidación",
-
-        "concepto":
-            "Concepto",
-
-        "cargo":
-            st.column_config.NumberColumn(
-                "Cargo",
-                format="$%.2f",
-            ),
-
-        "abono":
-            st.column_config.NumberColumn(
-                "Abono",
-                format="$%.2f",
-            ),
-
-        "saldo_operacion":
-            st.column_config.NumberColumn(
-                "Saldo Operación",
-                format="$%.2f",
-            ),
-
-        "saldo_liquidacion":
-            st.column_config.NumberColumn(
-                "Saldo Liquidación",
-                format="$%.2f",
-            ),
-
-        "tipo_operacion":
-            "Tipo",
-
-        "beneficiario":
-            "Beneficiario",
-
-        "cuenta_beneficiario":
-            "Cuenta Benef.",
-
-        "clabe_beneficiario":
-            "CLABE",
-
-        "rfc":
-            "RFC",
-
-        "referencia":
-            "Referencia",
-
-        "clave_rastreo":
-            "Clave Rastreo",
-
-        "autorizacion":
-            "Autorización",
-
-        "hora_operacion":
-            "Hora",
-    }
-
-    st.dataframe(
-
-        df_display,
-
-        use_container_width=True,
-
-        height=500,
-
-        hide_index=True,
-
+        height=430,
+        row_height=30,
         column_config=column_config,
     )
 
 
-# ============================================================
-# RENDER AUDITORÍA
-# ============================================================
+def render_result(result) -> None:
+    estado = getattr(result, "estado_cuenta", None)
+    if estado is None:
+        st.warning("Resultado sin estado de cuenta.")
+        return
 
-def render_audit_view() -> None:
-    """
-    Renderiza el área dinámica de auditoría.
+    dc = getattr(estado, "datos_cuenta", None)
+    rf = getattr(estado, "resumen_financiero", None)
+    method = getattr(result, "processing_method", "Digital")
+    process_text = "Digital" if method == "Digital" else engine_label(getattr(result, "ocr_engine", None))
 
-    Esta función se ejecuta dentro de un fragmento para que
-    pueda actualizarse automáticamente mientras el worker
-    sigue procesando archivos.
-    """
+    st.markdown(f"### 🔍 {result.file_name}")
+    st.caption(f"{str(result.bank_key).upper()} · {process_text}")
 
-    consume_processing_events()
-
-    render_processing_status()
-
-    st.divider()
-
-    render_processing_summary()
-
-    st.divider()
-
-    st.header(
-        "🔍 Auditoría de Resultados"
+    info = st.columns(4)
+    info[0].metric(
+        "Periodo",
+        f"{safe_value(getattr(dc, 'periodo_inicio', None))} al {safe_value(getattr(dc, 'periodo_fin', None))}",
     )
+    info[1].metric("Cliente", safe_value(getattr(dc, "nombre_cliente", None)))
+    info[2].metric("Cuenta", safe_value(getattr(dc, "numero_cuenta", None)))
+    info[3].metric("CLABE", safe_value(getattr(dc, "clabe", None)))
 
-    result = render_result_selector()
+    if method == "OCR":
+        primary = engine_label(getattr(result, "ocr_primary_engine", None))
+        secondary = (
+            engine_label(getattr(result, "ocr_secondary_engine", None))
+            if getattr(result, "ocr_secondary_engine", None)
+            else ""
+        )
+        if getattr(result, "fallback_attempted", False):
+            text = f"Primario: {primary} · Secundario: {secondary} · " + (
+                "se usó el secundario" if getattr(result, "fallback_used", False) else "se conservó el primario"
+            )
+        else:
+            text = f"Primario: {primary} · sin fallback: ambas validaciones principales pasaron"
+        st.info(f"⚙️ {text}")
 
-    if result is None:
+    render_all_fields(estado)
+    st.subheader("📊 Resumen financiero")
+    summary = st.columns(4)
+    summary[0].metric("Saldo anterior", format_money(getattr(rf, "saldo_anterior", None)))
+    summary[1].metric("Depósitos / Abonos", format_money(getattr(rf, "depositos_abonos", None)))
+    summary[2].metric("Retiros / Cargos", format_money(getattr(rf, "retiros_cargos", None)))
+    summary[3].metric("Saldo final", format_money(getattr(rf, "saldo_final", None)))
+    render_primary_validations(result)
+    render_other_validations(result)
+    render_movements(estado)
 
-        return
 
-    if (
-        result.bank_key
-        == "imagen_no_procesada"
-    ):
-
-        render_image_document(
-            result
+def render_help() -> None:
+    with st.expander("❓ Ayuda y formatos habilitados"):
+        st.markdown("**PDFs digitales y escaneados**")
+        st.write(
+            "Los PDFs digitales contienen texto utilizable. Los PDFs escaneados (OCR) son imágenes o documentos "
+            "sin texto digital útil y requieren un motor OCR."
+        )
+        st.markdown("**Validaciones financieras**")
+        st.write(
+            "A y C representan las conciliaciones de depósitos/abonos y retiros/cargos. El motor OCR secundario "
+            "sólo se ejecuta si alguna de esas dos validaciones falla o no puede calcularse."
+        )
+        st.markdown("**Bancos y estados de cuenta habilitados**")
+        st.markdown(
+            "- **BBVA Digital:** Libretón Básico, Libretón Nómina, Libretón Premium\n"
+            "- **Banorte Digital y Escaneado:** Nómina Banorte, Nómina Banorte sin chequera, Enlace Negocios\n"
+            "- **Banamex Digital:** Mi Cuenta, Cuenta Base, Cuenta Prioriti\n"
+            "- **HSBC Digital y Escaneado:** Ahorro y Debito\n"
+            "- **Scotiabank Digital:** Nomina Clasic\n"
+            "- **Banca Mifel:** Cuenta Alavista\n"
+            "- **CETESDIRECTO Digital:** cetesdirecto\n"
+            "- **MercadoPago Digital**"
         )
 
-    else:
 
-        render_digital_result(
-            result
+def render_settings() -> None:
+    with st.sidebar:
+        st.markdown(f"### ⚙️ Configuración · v{APP_VERSION}")
+        st.info(
+            "Recomendación: mantenga Tesseract como motor principal salvo indicación del área técnica. "
+            "PaddleOCR puede tardar más en CPU."
         )
+        options = ["tesseract", "paddleocr"]
+        current = normalize_ocr_engine(st.session_state.ocr_primary_engine)
+        selected = st.selectbox(
+            "Motor OCR principal",
+            options=options,
+            index=options.index(current),
+            format_func=engine_label,
+            disabled=st.session_state.worker_running,
+        )
+        if not st.session_state.worker_running:
+            st.session_state.ocr_primary_engine = normalize_ocr_engine(selected)
+        primary = normalize_ocr_engine(st.session_state.ocr_primary_engine)
+        st.caption(
+            f"Orden: {engine_label(primary)} → {engine_label(secondary_ocr_engine(primary))} sólo si falla Abonos o Cargos."
+        )
+        st.caption("Los PDFs digitales nunca se envían a OCR.")
 
-
-@st.fragment(
-    run_every=PROCESSING_UI_POLL_INTERVAL
-)
-def processing_fragment():
-
-    if not st.session_state.processing_items:
-
-        return
-
-    render_audit_view()
-
-
-# ============================================================
-# EXPORTACIÓN
-# ============================================================
 
 def render_export_section() -> None:
-
-    results = (
-        st.session_state.results
-    )
-
+    results = st.session_state.results
     if not results:
-
         return
-
     st.divider()
-
-    st.header(
-        "📤 Exportar Todos los Resultados a Excel"
-    )
-
-    with st.container(
-        border=True
-    ):
-
-        st.markdown(
-            "El Excel utilizará, para cada documento OCR, el motor "
-            "que esté seleccionado actualmente en la auditoría."
-        )
-
-        if st.button(
-            "🚀 Generar y Descargar "
-            "Reporte Excel",
-            type="primary",
-            use_container_width=True,
-        ):
-
-            results_snapshot = list(
-                results
+    st.subheader("📤 Exportación")
+    st.caption("El Excel usa el resultado elegido automáticamente por la política principal/fallback de cada PDF.")
+    if st.button("Generar reporte Excel", type="primary", use_container_width=True):
+        excel_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
+                excel_path = tmp_excel.name
+            with st.spinner("Generando archivo Excel..."):
+                export_batch_excel(list(results), excel_path)
+            with open(excel_path, "rb") as file:
+                data = file.read()
+            st.download_button(
+                "✅ Descargar reporte",
+                data=data,
+                file_name="reporte_estados_de_cuenta.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
             )
-
-            excel_path = None
-
-            try:
-
-                with tempfile.NamedTemporaryFile(
-                    delete=False,
-                    suffix=".xlsx",
-                ) as tmp_excel:
-
-                    excel_path = (
-                        tmp_excel.name
-                    )
-
-                with st.spinner(
-                    "Generando archivo Excel..."
-                ):
-
-                    export_batch_excel(
-                        results_snapshot,
-                        excel_path,
-                    )
-
-                with open(
-                    excel_path,
-                    "rb",
-                ) as file:
-
-                    data = file.read()
-
-                st.download_button(
-
-                    label=(
-                        "✅ ¡Listo! Haz clic "
-                        "aquí para descargar"
-                    ),
-
-                    data=data,
-
-                    file_name=(
-                        "reporte_estados_de_"
-                        "cuenta.xlsx"
-                    ),
-
-                    mime=(
-                        "application/"
-                        "vnd.openxmlformats-"
-                        "officedocument."
-                        "spreadsheetml.sheet"
-                    ),
-
-                    use_container_width=True,
-                )
-
-            except Exception as ex:
-
-                st.error(
-                    "❌ Error al exportar "
-                    f"Excel: {ex}"
-                )
-
-            finally:
-
-                if excel_path:
-
-                    try:
-
-                        os.remove(
-                            excel_path
-                        )
-
-                    except (
-                        FileNotFoundError,
-                        OSError,
-                    ):
-
-                        pass
+        except Exception as ex:
+            st.error(f"❌ Error al exportar Excel: {ex}")
+        finally:
+            if excel_path:
+                try:
+                    os.remove(excel_path)
+                except (FileNotFoundError, OSError):
+                    pass
 
 
-# ============================================================
-# APP
-# ============================================================
-
-def main():
-
+def main() -> None:
     st.set_page_config(
-
-        page_title=(
-            "Motor de Estados de Cuenta"
-        ),
-
+        page_title="Extractor de Movimientos Financieros",
         layout="wide",
     )
+    initialize_session_state()
 
-    st.title(
-        "📄 Motor de Estados de Cuenta"
+    st.markdown(
+        f"<div style='display:flex;align-items:center;gap:.7rem;'>"
+        f"<h1 style='margin:0'>📄 Extractor de Movimientos Financieros</h1>"
+        f"<span style='background:#F4EEE5;padding:.2rem .6rem;border-radius:1rem;font-size:.8rem;'>Versión {APP_VERSION}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
     )
+    st.caption("PDFs digitales se leen directamente. PDFs escaneados (OCR) usan el motor configurado.")
 
-    st.write(
-        """
-        Sube uno o varios estados de cuenta
-        en formato PDF.
-
-        El motor detectará el banco,
-        extraerá la información y la
-        presentará de forma estructurada
-        para su auditoría y exportación.
-        """
-    )
-
-    worker_running = (
-        st.session_state.worker_running
-    )
+    render_settings()
+    render_help()
 
     uploaded_files = st.file_uploader(
-
         "Selecciona estados de cuenta PDF",
-
         type="pdf",
-
         accept_multiple_files=True,
-
-        disabled=worker_running,
+        disabled=st.session_state.worker_running,
     )
 
     if uploaded_files:
-
         uploaded_files_data = tuple(
-
-            (
-                uploaded_file.name,
-                uploaded_file.getvalue(),
-            )
-
-            for uploaded_file
-            in uploaded_files
+            (uploaded_file.name, uploaded_file.getvalue())
+            for uploaded_file in uploaded_files
         )
+        current_signature = create_batch_signature(uploaded_files_data)
+        if current_signature != st.session_state.batch_signature and not st.session_state.worker_running:
+            try:
+                start_processing(uploaded_files_data)
+                st.rerun()
+            except Exception as ex:
+                st.error(f"❌ No fue posible iniciar el procesamiento: {ex}")
 
-        current_signature = (
-            create_batch_signature(
-                uploaded_files_data
-            )
-        )
+    changed, completed_added, finished = consume_processing_events()
+    if completed_added or finished:
+        changed = True
 
-        previous_signature = (
-            st.session_state.batch_signature
-        )
+    if st.session_state.worker_error:
+        st.error(f"❌ Error durante el procesamiento: {st.session_state.worker_error}")
+        if st.session_state.worker_traceback:
+            with st.expander("Ver detalle técnico"):
+                st.code(st.session_state.worker_traceback)
 
-        if (
-            current_signature
-            != previous_signature
-        ):
+    if st.session_state.processing_items:
+        if st.session_state.worker_running:
+            processing_status_fragment()
+        else:
+            render_processing_status()
 
-            if not worker_running:
-
-                try:
-
-                    start_processing(
-                        uploaded_files_data
-                    )
-
-                    st.rerun()
-
-                except Exception as ex:
-
-                    st.error(
-                        "❌ No fue posible "
-                        "iniciar el procesamiento: "
-                        f"{ex}"
-                    )
-
-    if (
-        st.session_state.worker_error
-        is not None
-    ):
-
-        st.error(
-
-            "❌ Error durante el "
-            "procesamiento:\n\n"
-            f"{st.session_state.worker_error}"
-        )
-
-        if (
-            st.session_state.worker_traceback
-        ):
-
-            with st.expander(
-                "Ver detalle técnico"
-            ):
-
-                st.code(
-                    st.session_state.worker_traceback
-                )
-
-    processing_fragment()
+        st.divider()
+        result = render_result_selector()
+        if result is not None:
+            st.divider()
+            render_result(result)
 
     render_export_section()
 
