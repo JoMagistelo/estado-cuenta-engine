@@ -52,15 +52,17 @@ jobs:
       - name: Build institutional desktop executable
         run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
 
-      - name: Verify executable and create hashes
+      - name: Verify release executable
         shell: pwsh
         run: |
           $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
           if (-not (Test-Path $exe)) {
             throw "No se generó el ejecutable esperado."
           }
-          $hash = Get-FileHash $exe -Algorithm SHA256
-          "$($hash.Hash.ToLower())  Extractor_de_Movimientos_Financieros.exe" | Out-File -Encoding ascii "dist/Extractor_de_Movimientos_Financieros.sha256.txt"
+          python scripts/verify_windows_release.py `
+            $exe `
+            --output-dir dist `
+            --version "2.3.0"
           "${{ inputs.release_label }}" | Out-File -Encoding utf8 "dist/release-label.txt"
 
       - name: Create deployment note
@@ -70,12 +72,13 @@ jobs:
           Extractor de Movimientos Financieros - compilación TICS
 
           El ejecutable incluye Flet, Tesseract y el runtime Python de PaddleOCR.
-          Por política del proyecto, los modelos PaddleOCR no se descargan en tiempo de ejecución.
+          Los modelos PaddleOCR no se descargan en tiempo de ejecución.
           TICS debe desplegar los modelos autorizados y configurar:
             PADDLEOCR_TEXT_DETECTION_MODEL_DIR
             PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR
 
-          Verificar el SHA-256 antes de distribuir el binario.
+          Verificar el SHA-256 y release-manifest.json antes de distribuir el binario.
+          Si la política institucional lo requiere, aplicar firma de código antes de producción.
           "@ | Out-File -Encoding utf8 "dist/LEEME_TICS.txt"
 
       - name: Upload TICS deployment bundle
@@ -85,6 +88,7 @@ jobs:
           path: |
             dist/Extractor_de_Movimientos_Financieros.exe
             dist/Extractor_de_Movimientos_Financieros.sha256.txt
+            dist/release-manifest.json
             dist/release-label.txt
             dist/LEEME_TICS.txt
           if-no-files-found: error
