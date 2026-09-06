@@ -194,6 +194,40 @@ def _read_secondary_document(
     )
 
 
+def _single_candidate_review_for_unavailable_secondary(
+    primary_candidate: OCRCandidate,
+    primary_engine: str,
+    secondary: str,
+    reasons: tuple[str, ...],
+) -> OCRReview:
+    """Conserva el candidato válido cuando el otro OCR ya falló al iniciar."""
+    metadata = dict(primary_candidate.document.metadata or {})
+    profile = validation_profile(primary_candidate.validaciones)
+    error_type = str(metadata.get('ocr_startup_error_type') or 'RuntimeError')
+    metadata.update(
+        {
+            'ocr_primary_engine': primary_engine,
+            'ocr_secondary_engine': secondary,
+            'ocr_fallback_attempted': True,
+            'ocr_fallback_selected': False,
+            'ocr_fallback_error_type': error_type,
+            'ocr_fallback_error_message': str(
+                metadata.get('ocr_startup_error_message') or ''
+            )[:500],
+            'primary_validation_total': profile.total,
+            'primary_validation_failed': profile.failed,
+        }
+    )
+    primary_candidate.document.metadata = metadata
+    return OCRReview(
+        candidates={primary_engine: primary_candidate},
+        recommended_engine=primary_engine,
+        selected_engine=primary_engine,
+        trigger_reasons=reasons,
+        paddle_error_type=error_type if secondary == 'paddleocr' else None,
+    )
+
+
 def _try_secondary_ocr_review(
     primary_candidate: OCRCandidate,
     bank_key: str,
@@ -207,7 +241,7 @@ def _try_secondary_ocr_review(
       2) se calculan depósitos/abonos y retiros/cargos;
       3) si ambas validaciones pasan, termina aquí;
       4) si el usuario pidió detener, no se inicia fallback;
-      5) sólo en otro caso se ejecuta el motor secundario.
+      5) sólo en otro caso se ejecuta el motor secundario disponible.
     """
     primary_engine = normalize_ocr_engine(primary_candidate.engine)
     if primary_engine not in {'tesseract', 'paddleocr'}:
@@ -255,6 +289,19 @@ def _try_secondary_ocr_review(
         has_movements=primary_candidate.movement_count > 0,
     )
 
+    metadata = primary_candidate.document.metadata or {}
+    unavailable_engine = normalize_ocr_engine(
+        str(metadata.get('ocr_unavailable_engine') or ''),
+        default='',
+    )
+    if unavailable_engine == secondary:
+        return _single_candidate_review_for_unavailable_secondary(
+            primary_candidate,
+            primary_engine,
+            secondary,
+            reasons,
+        )
+
     try:
         secondary_document = _read_secondary_document(
             primary_candidate,
@@ -284,6 +331,7 @@ def _try_secondary_ocr_review(
                 'ocr_fallback_attempted': True,
                 'ocr_fallback_selected': False,
                 'ocr_fallback_error_type': type(exc).__name__,
+                'ocr_fallback_error_message': str(exc)[:500],
                 'primary_validation_total': profile.total,
                 'primary_validation_failed': profile.failed,
             }

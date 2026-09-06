@@ -7,7 +7,7 @@ from typing import Any
 
 from detectors.bank_detector import identify_bank_key
 from detectors.document_type_detector import DocumentType, detect_document_type
-from engine.ocr_fallback_policy import normalize_ocr_engine
+from engine.ocr_fallback_policy import normalize_ocr_engine, secondary_ocr_engine
 from engine.statement_processor import process_single_statement_with_ocr_review
 from models.processing_result import ProcessingResult
 from readers.models import DocumentData
@@ -135,6 +135,64 @@ def _result_validations(estado_cuenta, ocr_review) -> list:
     return []
 
 
+def _read_ocr_engine(
+    pdf_path: str,
+    engine: str,
+    cancel_event: Any | None,
+) -> DocumentData:
+    if cancel_event is None:
+        return ReaderManager.read_ocr_engine(
+            pdf_path,
+            engine=engine,
+            start_page=0,
+        )
+    return ReaderManager.read_ocr_engine(
+        pdf_path,
+        engine=engine,
+        start_page=0,
+        cancel_event=cancel_event,
+    )
+
+
+def _read_ocr_with_startup_recovery(
+    pdf_path: str,
+    requested_engine: str,
+    cancel_event: Any | None,
+) -> tuple[DocumentData, str]:
+    """Lee OCR y conserva el documento si el motor solicitado no puede iniciar.
+
+    Cambiar el motor inicial desde la UI no debe convertir un PDF recuperable en
+    un error total. Si el motor solicitado falla antes de producir candidato, se
+    intenta una sola vez el otro motor. La incidencia queda registrada en
+    metadata para diagnóstico y para impedir que el processor vuelva a intentar
+    inmediatamente el motor que ya falló.
+    """
+    requested = normalize_ocr_engine(requested_engine)
+    try:
+        return _read_ocr_engine(pdf_path, requested, cancel_event), requested
+    except CancelledError:
+        raise
+    except Exception as primary_error:
+        if _cancel_requested(cancel_event):
+            raise CancelledError() from primary_error
+
+        recovery = secondary_ocr_engine(requested)
+        document = _read_ocr_engine(pdf_path, recovery, cancel_event)
+        metadata = dict(document.metadata or {})
+        metadata.update(
+            {
+                'ocr_requested_primary_engine': requested,
+                'ocr_primary_engine': recovery,
+                'ocr_startup_recovered': True,
+                'ocr_unavailable_engine': requested,
+                'ocr_startup_error_type': type(primary_error).__name__,
+                'ocr_startup_error_message': str(primary_error)[:500],
+            }
+        )
+        document.metadata = metadata
+        return document, recovery
+
+
 def _process_prepared_statement(
     prepared: PreparedStatement,
     ocr_primary_engine: str = 'tesseract',
@@ -142,9 +200,10 @@ def _process_prepared_statement(
 ) -> ProcessingResult:
     """Procesa un documento respetando el motor OCR principal elegido.
 
-    Digital nunca entra a OCR. En OCR se ejecuta primero un único motor. El
-    processor sólo invoca el secundario cuando las validaciones principales de
-    abonos/cargos lo requieren y no se solicitó detener el lote.
+    Digital nunca entra a OCR. En OCR se ejecuta primero el motor solicitado. Si
+    éste no logra iniciar, el otro OCR puede recuperar el documento. Después del
+    parsing, el processor sólo invoca un secundario disponible cuando las
+    validaciones principales de abonos/cargos lo requieren.
     """
     if _cancel_requested(cancel_event):
         raise CancelledError()
@@ -152,19 +211,11 @@ def _process_prepared_statement(
     document = prepared.document
     primary_engine = normalize_ocr_engine(ocr_primary_engine)
     if prepared.processing_method == 'OCR':
-        if cancel_event is None:
-            document = ReaderManager.read_ocr_engine(
-                prepared.pdf_path,
-                engine=primary_engine,
-                start_page=0,
-            )
-        else:
-            document = ReaderManager.read_ocr_engine(
-                prepared.pdf_path,
-                engine=primary_engine,
-                start_page=0,
-                cancel_event=cancel_event,
-            )
+        document, primary_engine = _read_ocr_with_startup_recovery(
+            prepared.pdf_path,
+            primary_engine,
+            cancel_event,
+        )
         if _cancel_requested(cancel_event):
             raise CancelledError()
 

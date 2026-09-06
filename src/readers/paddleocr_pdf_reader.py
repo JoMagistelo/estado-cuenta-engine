@@ -24,11 +24,12 @@ class PaddleOCRPDFReader:
     detección y reconocimiento deben estar previamente instalados en rutas
     locales autorizadas.
 
-    El runtime institucional usa PaddlePaddle 3.2.0 y mantiene oneDNN/MKL-DNN
-    habilitado por defecto en CPU para conservar un tiempo de inferencia útil.
-    La aceleración puede deshabilitarse explícitamente para diagnóstico mediante
-    ``PADDLEOCR_ENABLE_MKLDNN=0``. La detección limita además el lado mayor de la
-    página para evitar inferencia innecesaria a resolución completa.
+    En Windows/CPU se prioriza estabilidad: oneDNN/MKL-DNN queda deshabilitado
+    por defecto porque esta misma combinación PaddlePaddle 3.x + PP-OCRv5 ya
+    produjo ``NotImplementedError`` durante inferencia. La aceleración sigue
+    disponible como opt-in mediante ``PADDLEOCR_ENABLE_MKLDNN=1`` para pruebas
+    controladas. La detección limita además el lado mayor de la página para
+    evitar inferencia innecesaria a resolución completa.
     """
 
     MAX_TEXT_PAGES = 5
@@ -38,7 +39,7 @@ class PaddleOCRPDFReader:
     DEFAULT_DETECTION_MODEL_NAME = "PP-OCRv5_mobile_det"
     DEFAULT_RECOGNITION_MODEL_NAME = "latin_PP-OCRv5_mobile_rec"
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN = 1600
-    DEFAULT_ENABLE_MKLDNN = True
+    DEFAULT_ENABLE_MKLDNN = False
     DEFAULT_CPU_THREADS = 10
 
     _engine: Any | None = None
