@@ -4,7 +4,7 @@ from pathlib import Path
 
 from readers.models import DocumentData
 
-from .paddleocr_pdf_reader import PaddleOCRPDFReader
+from .paddleocr_runner import read_paddle_ocr_isolated
 from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
 from .tesseract_pdf_reader import TesseractPDFReader
@@ -118,9 +118,9 @@ class ReaderManager:
         file_path: str | Path,
         start_page: int = 0,
     ) -> DocumentData:
-        """Procesa el PDF con PaddleOCR como fallback local controlado."""
+        """Procesa PaddleOCR en un proceso aislado y con timeout controlado."""
         file_path = Path(file_path)
-        return PaddleOCRPDFReader.read(
-            file_path,
+        return read_paddle_ocr_isolated(
+            str(file_path),
             start_page=start_page,
         )
