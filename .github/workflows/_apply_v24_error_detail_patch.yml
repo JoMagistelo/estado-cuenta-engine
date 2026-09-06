@@ -1,0 +1,36 @@
+name: Apply temporary v2.4 Paddle error detail
+
+on:
+  push:
+    branches:
+      - release/v2.4-paddle-runtime-ui-cleanup
+    paths:
+      - '.github/workflows/_apply_v24_error_detail_patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v2.4-paddle-runtime-ui-cleanup
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply patch
+        run: python scripts/_apply_v24_error_detail_patch.py
+      - name: Compile changed Python files
+        run: python -m py_compile src/readers/paddleocr_pdf_reader.py tests/readers/test_paddleocr_pdf_reader.py
+      - name: Commit patched sources
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/readers/paddleocr_pdf_reader.py tests/readers/test_paddleocr_pdf_reader.py docs/14_paddleocr_fallback.md
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: expose PaddleOCR configuration root cause'
+          git push origin HEAD:release/v2.4-paddle-runtime-ui-cleanup
