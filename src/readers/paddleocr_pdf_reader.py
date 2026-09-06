@@ -68,6 +68,7 @@ class PaddleOCRPDFReader:
         all_words: list[dict[str, Any]] = []
         text_pages: list[str] = []
         doctop_offset = 0.0
+        backend_recovered = False
 
         for physical_index in range(start_page, len(pdf)):
             page = pdf[physical_index]
@@ -90,6 +91,7 @@ class PaddleOCRPDFReader:
             )
             if recovered_backend:
                 config = {**config, "enable_mkldnn": False}
+                backend_recovered = True
 
             all_words.extend(words)
             if logical_page <= cls.MAX_TEXT_PAGES:
@@ -114,7 +116,7 @@ class PaddleOCRPDFReader:
                 "coordinate_space": "pdf_points",
                 "network_model_downloads": False,
                 "mkldnn_enabled": config["enable_mkldnn"],
-                "mkldnn_backend_recovered": not config["enable_mkldnn"] and cls.DEFAULT_ENABLE_MKLDNN,
+                "mkldnn_backend_recovered": backend_recovered,
                 "cpu_threads": config["cpu_threads"],
                 "text_det_limit_side_len": text_det_limit_side_len,
                 "text_det_limit_type": "max",

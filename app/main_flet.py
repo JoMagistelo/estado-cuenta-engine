@@ -20,7 +20,7 @@ from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
 
-APP_VERSION = '2.4'
+APP_VERSION = '2.4.1'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 MOVEMENT_PAGE_SIZE = 60
