@@ -1,0 +1,35 @@
+name: PR21 apply OCR UI patch
+
+on:
+  push:
+    branches:
+      - fix/paddleocr-isolated-batching-timeout-v2
+    paths:
+      - scripts/apply_ocr_primary_ui_patch.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/paddleocr-isolated-batching-timeout-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply deterministic patch
+        run: python scripts/apply_ocr_primary_ui_patch.py
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          if (git status --porcelain) {
+            git config user.name "estado-cuenta-engine-ci"
+            git config user.email "noreply@localhost"
+            git add src/engine/pipeline.py app/main_flet.py
+            git commit -m "feat: permite elegir motor OCR principal en Flet"
+            git push origin HEAD:fix/paddleocr-isolated-batching-timeout-v2
+          }
