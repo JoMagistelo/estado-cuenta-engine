@@ -39,7 +39,9 @@ jobs:
         run: python -m compileall -q app src tests scripts
 
       - name: Verify diagnostic CLI
-        run: python scripts/diagnostico_paddleocr.py --help
+        run: |
+          python scripts/diagnostico_paddleocr.py --help
+          python scripts/preparar_modelos_paddleocr.py --help
 
       - name: Static correctness checks
         run: ruff check .
@@ -49,6 +51,46 @@ jobs:
 
       - name: Build Python package
         run: python -m build
+
+  paddle-model-smoke:
+    name: PaddleOCR models + real inference
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install PaddleOCR runtime
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[paddleocr]"
+
+      - name: Bootstrap official models and run real inference
+        shell: pwsh
+        run: |
+          python scripts/preparar_modelos_paddleocr.py `
+            --destino "build/paddle-models" `
+            --fuente bos `
+            --probar-inferencia
+          if (-not (Test-Path "build/paddle-models/paddleocr-models-manifest.json")) {
+            throw "No se generó el manifiesto de modelos PaddleOCR."
+          }
+
+      - name: Upload PaddleOCR model evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paddleocr-model-evidence
+          path: build/paddle-models/paddleocr-models-manifest.json
+          if-no-files-found: error
+          retention-days: 30
 
   security-audit:
     name: Runtime PaddleOCR / Python ${{ matrix.python-version }}
@@ -172,7 +214,7 @@ jobs:
           if (-not (Test-Path $path)) {
             throw "No se generó el ejecutable esperado."
           }
-          python scripts/verify_windows_release.py $path --output-dir dist --version "2.3.0"
+          python scripts/verify_windows_release.py $path --output-dir dist --version "2.4.0"
 
       - name: Upload build evidence
         uses: actions/upload-artifact@v4
