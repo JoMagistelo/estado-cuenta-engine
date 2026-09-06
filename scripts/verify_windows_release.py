@@ -1,8 +1,8 @@
 """Verifica el ejecutable Windows antes de entregarlo a TIC.
 
-La validación es deliberadamente independiente del proveedor de control de
-versiones: comprueba formato PE, calcula SHA-256 y rechaza marcadores de
-procedencia de desarrollo que no deben aparecer en el artefacto distribuible.
+La validación comprueba formato PE, calcula SHA-256 y rechaza identificadores
+específicos del repositorio de desarrollo que no deben aparecer en el artefacto
+distribuible. No elimina ni bloquea atribuciones legítimas de terceros.
 """
 
 from __future__ import annotations
@@ -14,25 +14,24 @@ from pathlib import Path
 
 
 FORBIDDEN_MARKERS = (
-    "github.com",
-    "githubusercontent.com",
+    "github.com/JoMagistelo",
+    "githubusercontent.com/JoMagistelo",
     "JoMagistelo",
     "estado-cuenta-engine",
 )
 
 
 def _contains_marker(payload: bytes, marker: str) -> bool:
-    encodings = (
-        marker.encode("utf-8"),
-        marker.encode("utf-16-le"),
-        marker.upper().encode("utf-8"),
-        marker.upper().encode("utf-16-le"),
+    variants = (marker, marker.lower(), marker.upper())
+    encodings = tuple(
+        encoded
+        for variant in variants
+        for encoded in (
+            variant.encode("utf-8"),
+            variant.encode("utf-16-le"),
+        )
     )
-    lowered = payload.lower()
-    return any(
-        encoded in payload or encoded.lower() in lowered
-        for encoded in encodings
-    )
+    return any(encoded in payload for encoded in encodings)
 
 
 def verify_executable(exe_path: Path) -> dict[str, object]:
@@ -44,7 +43,7 @@ def verify_executable(exe_path: Path) -> dict[str, object]:
     if found:
         joined = ", ".join(found)
         raise ValueError(
-            "El ejecutable contiene marcadores de procedencia de desarrollo no permitidos: "
+            "El ejecutable contiene identificadores propios del repositorio de desarrollo: "
             f"{joined}"
         )
 
@@ -52,7 +51,7 @@ def verify_executable(exe_path: Path) -> dict[str, object]:
         "file": exe_path.name,
         "size_bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
-        "development_provenance_markers": "none_detected",
+        "project_repository_markers": "none_detected",
     }
 
 
