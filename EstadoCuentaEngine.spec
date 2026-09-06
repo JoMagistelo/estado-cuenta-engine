@@ -7,6 +7,9 @@ from pathlib import Path
 # al propio archivo evita que el resultado dependa del directorio de trabajo.
 PROJECT_ROOT = Path(SPECPATH).resolve()
 TESSERACT_DIR = PROJECT_ROOT / "vendor" / "tesseract"
+MULTIPROCESSING_RUNTIME_HOOK = (
+    PROJECT_ROOT / "packaging" / "pyi_rth_multiprocessing.py"
+)
 
 
 a = Analysis(
@@ -22,7 +25,7 @@ a = Analysis(
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(MULTIPROCESSING_RUNTIME_HOOK)],
     excludes=[],
     noarchive=False,
     optimize=0,
