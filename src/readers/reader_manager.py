@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from readers.models import DocumentData
 
@@ -95,23 +96,27 @@ class ReaderManager:
     def read_ocr(
         file_path: str | Path,
         start_page: int = 0,
+        cancel_event: Any | None = None,
     ) -> DocumentData:
         """Alias histórico de Tesseract."""
         return ReaderManager.read_ocr_engine(
             file_path,
             engine="tesseract",
             start_page=start_page,
+            cancel_event=cancel_event,
         )
 
     @staticmethod
     def read_paddle_ocr(
         file_path: str | Path,
         start_page: int = 0,
+        cancel_event: Any | None = None,
     ) -> DocumentData:
         file_path = Path(file_path)
         document = PaddleOCRPDFReader.read(
             file_path,
             start_page=start_page,
+            cancel_event=cancel_event,
         )
         document.metadata = dict(document.metadata or {})
         document.metadata.setdefault("source_path", str(file_path.resolve()))
@@ -124,6 +129,7 @@ class ReaderManager:
         file_path: str | Path,
         engine: str,
         start_page: int = 0,
+        cancel_event: Any | None = None,
     ) -> DocumentData:
         """Ejecuta exactamente un motor OCR.
 
@@ -142,6 +148,7 @@ class ReaderManager:
             document = TesseractPDFReader.read(
                 file_path,
                 start_page=start_page,
+                cancel_event=cancel_event,
             )
             document.metadata = dict(document.metadata or {})
             document.metadata["source_path"] = str(file_path.resolve())
@@ -153,6 +160,7 @@ class ReaderManager:
             return ReaderManager.read_paddle_ocr(
                 file_path,
                 start_page=start_page,
+                cancel_event=cancel_event,
             )
 
         raise ValueError(
