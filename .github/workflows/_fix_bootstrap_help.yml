@@ -1,0 +1,33 @@
+name: Apply bootstrap help fix
+
+on:
+  push:
+    branches:
+      - fix/v2.4.1-paddle-model-bootstrap
+    paths:
+      - '.github/workflows/_fix_bootstrap_help.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v2.4.1-paddle-model-bootstrap
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python scripts/_fix_bootstrap_help.py
+      - run: python scripts/preparar_modelos_paddleocr.py --help
+      - shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/preparar_modelos_paddleocr.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: escape bootstrap CLI help on Windows'
+          git push origin HEAD:fix/v2.4.1-paddle-model-bootstrap
