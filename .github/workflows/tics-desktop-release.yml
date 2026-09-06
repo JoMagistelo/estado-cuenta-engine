@@ -57,13 +57,22 @@ jobs:
       - name: Build institutional desktop executable
         run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
 
-      - name: Verify release executable
+      - name: Verify bundled PaddleX OCR pipeline
         shell: pwsh
         run: |
           $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
           if (-not (Test-Path $exe)) {
             throw "No se generó el ejecutable esperado."
           }
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test-paddlex-pipeline" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "El EXE no pudo cargar la pipeline OCR de PaddleX (ExitCode=$($process.ExitCode))."
+          }
+
+      - name: Verify release executable
+        shell: pwsh
+        run: |
+          $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
           python scripts/verify_windows_release.py `
             $exe `
             --output-dir dist `
