@@ -8,6 +8,8 @@ de las validaciones de Abonos/Cargos.
 
 from __future__ import annotations
 
+import os
+
 import flet as ft
 
 from main_flet import main
@@ -40,4 +42,10 @@ ft.Icon = _desktop_icon
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    try:
+        ft.run(main)
+    finally:
+        # ThreadPoolExecutor usa hilos no-daemon. Si el usuario cerró la ventana
+        # durante un OCR nativo, no dejamos un proceso invisible esperando ese
+        # último frame/página. La ventana ya aplicó su flujo Detener y cerrar.
+        os._exit(0)
