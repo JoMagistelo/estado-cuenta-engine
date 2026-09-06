@@ -14,6 +14,14 @@ El repositorio contiene `EstadoCuentaEngine.spec`, utilizado por PyInstaller par
 - runtime Tesseract versionado;
 - Flet como interfaz nativa de escritorio.
 
+El punto de entrada de la versión distribuible es `app/main_desktop.py`. Para revisar localmente la misma interfaz de escritorio que utiliza el empaquetado puede ejecutarse:
+
+```powershell
+py app/main_desktop.py
+```
+
+`app/main_flet.py` continúa siendo la implementación principal de la UI; el bootstrap de escritorio sólo contiene adaptaciones de presentación específicas del ejecutable.
+
 El workflow manual **TICS desktop release** instala además el runtime Python de PaddleOCR/PaddlePaddle y genera un paquete de entrega verificable.
 
 ## Modelos PaddleOCR
@@ -40,7 +48,7 @@ Al pulsar **Detener**:
 5. los resultados que habían llegado a estado **Terminado** antes de la solicitud permanecen en memoria y pueden exportarse;
 6. un archivo que no alcanzó estado **Terminado** antes de la solicitud no se agrega a la exportación.
 
-La cancelación observable por la interfaz se revisa con un intervalo máximo aproximado de 100 ms en el coordinador del lote. Una llamada nativa de OCR que ya estuviera ejecutándose puede tardar un poco más en abandonar su hilo interno; su resultado se descarta y la interfaz no espera por él.
+La cancelación observable por la interfaz se revisa con un intervalo máximo aproximado de 100 ms en el coordinador del lote. Una llamada nativa de OCR que ya estuviera ejecutándose puede tardar un poco más en abandonar su hilo interno; su resultado se descarta y la interfaz no espera por él. Los lectores OCR comprueban además la cancelación antes y después de cada página para no continuar recorriendo innecesariamente el PDF.
 
 ## Cierre de la aplicación durante procesamiento
 
