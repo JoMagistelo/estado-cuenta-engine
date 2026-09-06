@@ -20,7 +20,10 @@ class PaddleOCRWorkerError(RuntimeError):
         super().__init__(self.error_type)
 
 
-DEFAULT_TIMEOUT_SECONDS = 120
+# El OCR Paddle completo puede tardar más de dos minutos en CPU sobre estados
+# de cuenta multipágina. Cinco minutos mantiene protección contra bloqueos
+# indefinidos sin convertir ejecuciones válidas de UAT en falsos timeouts.
+DEFAULT_TIMEOUT_SECONDS = 300
 MIN_TIMEOUT_SECONDS = 15
 MAX_TIMEOUT_SECONDS = 900
 
