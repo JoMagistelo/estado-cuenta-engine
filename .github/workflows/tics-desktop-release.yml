@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       release_label:
-        description: "Etiqueta de la compilación (ej. 2.3.1-rc1)"
+        description: "Etiqueta de la compilación (ej. 2.4.0-rc1)"
         required: false
         default: "manual"
+      include_paddle_models:
+        description: "Incluir modelos oficiales PaddleOCR y su instalador offline"
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -62,8 +67,18 @@ jobs:
           python scripts/verify_windows_release.py `
             $exe `
             --output-dir dist `
-            --version "2.3.0"
+            --version "2.4.0"
           "${{ inputs.release_label }}" | Out-File -Encoding utf8 "dist/release-label.txt"
+
+      - name: Prepare verified PaddleOCR model bundle
+        if: ${{ inputs.include_paddle_models }}
+        shell: pwsh
+        run: |
+          python scripts/preparar_modelos_paddleocr.py `
+            --destino "dist/models/paddleocr" `
+            --fuente bos `
+            --probar-inferencia
+          Copy-Item "scripts/instalar_modelos_paddleocr.ps1" "dist/instalar_modelos_paddleocr.ps1" -Force
 
       - name: Create deployment note
         shell: pwsh
@@ -72,10 +87,15 @@ jobs:
           Extractor de Movimientos Financieros - compilación TICS
 
           El ejecutable incluye Flet, Tesseract y el runtime Python de PaddleOCR.
-          Los modelos PaddleOCR no se descargan en tiempo de ejecución.
-          TICS debe desplegar los modelos autorizados y configurar:
-            PADDLEOCR_TEXT_DETECTION_MODEL_DIR
-            PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR
+          PaddleOCR no descarga modelos durante el procesamiento de estados de cuenta.
+
+          Si esta entrega contiene la carpeta models/paddleocr:
+          1. ejecutar instalar_modelos_paddleocr.ps1 con privilegios de despliegue;
+          2. el script copiará los modelos a %PROGRAMDATA%\EstadoCuentaEngine\PaddleOCR;
+          3. no es necesario configurar variables de entorno para el uso normal.
+
+          El archivo models/paddleocr/paddleocr-models-manifest.json registra hashes,
+          tamaños y versiones del runtime del bundle preparado en CI.
 
           Verificar el SHA-256 y release-manifest.json antes de distribuir el binario.
           Si la política institucional lo requiere, aplicar firma de código antes de producción.
@@ -91,5 +111,7 @@ jobs:
             dist/release-manifest.json
             dist/release-label.txt
             dist/LEEME_TICS.txt
-          if-no-files-found: error
+            dist/instalar_modelos_paddleocr.ps1
+            dist/models/paddleocr/**
+          if-no-files-found: warn
           retention-days: 30
