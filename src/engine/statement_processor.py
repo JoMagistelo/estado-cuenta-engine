@@ -5,8 +5,10 @@ from typing import Callable
 
 from engine.ocr_fallback_policy import (
     fallback_trigger_reasons,
-    paddle_fallback_enabled,
-    should_select_paddle_result,
+    normalize_ocr_engine,
+    secondary_ocr_engine,
+    should_attempt_secondary_fallback,
+    should_select_secondary_result,
     validation_profile,
 )
 from models.ocr_review import OCRCandidate, OCRReview
@@ -45,17 +47,15 @@ NormalizerFn = Callable[[list[dict]], list[dict]]
 
 def _is_ocr_document(document: DocumentData) -> bool:
     metadata = document.metadata or {}
-
     if bool(metadata.get("ocr")):
         return True
-
     reader = str(metadata.get("reader", "")).strip().lower()
     return reader in {"tesseract", "paddleocr"}
 
 
 def _reader_name(document: DocumentData) -> str:
     metadata = document.metadata or {}
-    return str(metadata.get("reader", "")).strip().lower()
+    return normalize_ocr_engine(str(metadata.get("reader", "")), default="")
 
 
 def _import_optional_module(module_name: str):
@@ -68,19 +68,14 @@ def _import_optional_module(module_name: str):
         raise
 
 
-def _get_optional_callable(
-    module_name: str,
-    *attribute_names: str,
-):
+def _get_optional_callable(module_name: str, *attribute_names: str):
     module = _import_optional_module(module_name)
     if module is None:
         return None
-
     for attribute_name in attribute_names:
         candidate = getattr(module, attribute_name, None)
         if callable(candidate):
             return candidate
-
     return None
 
 
@@ -104,34 +99,26 @@ def _apply_coordinate_normalizer(
     normalizer_fn,
 ) -> DocumentData:
     normalized_words = normalizer_fn(document.spatial_words)
-
     if normalized_words is None:
         raise TypeError(
             "El normalizador de coordenadas devolvió None; "
             "debe devolver list[dict]."
         )
-
     if not isinstance(normalized_words, list):
         raise TypeError(
             "El normalizador de coordenadas debe devolver list[dict]."
         )
-
     document.spatial_words = normalized_words
     return document
 
 
-def _process_once(
-    document: DocumentData,
-    bank_key: str,
-):
-    """Ejecuta un candidato de lectura sin alternar motores OCR."""
+def _process_once(document: DocumentData, bank_key: str):
+    """Ejecuta parser/normalizador para un solo documento ya leído."""
     document.normalized_text = normalize_text(document.raw_text)
 
     parser_fn = PARSER_REGISTRY.get(bank_key)
     if parser_fn is None:
-        raise NotImplementedError(
-            f"No existe parser para '{bank_key}'."
-        )
+        raise NotImplementedError(f"No existe parser para '{bank_key}'.")
 
     if _is_ocr_document(document):
         ocr_parser_fn = _resolve_ocr_parser(bank_key)
@@ -141,20 +128,16 @@ def _process_once(
 
         normalizer_fn = _resolve_coordinate_normalizer(bank_key)
         if normalizer_fn is not None:
-            document = _apply_coordinate_normalizer(
-                document,
-                normalizer_fn,
-            )
+            document = _apply_coordinate_normalizer(document, normalizer_fn)
 
     estado = parser_fn(document)
     return estado, document
 
 
 def _validation_results(estado) -> list:
-    """Obtiene exactamente los validadores financieros actuales."""
+    """Obtiene las validaciones financieras actuales sin inventar resultados."""
     movimientos = getattr(estado, "movimientos", None) or []
     resumen = getattr(estado, "resumen_financiero", None)
-
     if not movimientos or resumen is None:
         return []
 
@@ -167,20 +150,160 @@ def _validation_results(estado) -> list:
         return []
 
 
-def _has_movements(estado) -> bool:
-    return bool(getattr(estado, "movimientos", None) or [])
-
-
-def _build_candidate(
-    engine: str,
-    estado,
-    document: DocumentData,
-) -> OCRCandidate:
+def _build_candidate(engine: str, estado, document: DocumentData) -> OCRCandidate:
     return OCRCandidate(
-        engine=engine,
+        engine=normalize_ocr_engine(engine),
         estado_cuenta=estado,
         document=document,
         validaciones=_validation_results(estado),
+    )
+
+
+def _read_secondary_document(
+    primary_candidate: OCRCandidate,
+    secondary_engine: str,
+) -> DocumentData:
+    metadata = primary_candidate.document.metadata or {}
+    source_path = metadata.get("source_path")
+    if not source_path:
+        raise RuntimeError("El documento OCR no conserva source_path para fallback.")
+
+    try:
+        start_page = int(metadata.get("start_page", 0) or 0)
+    except (TypeError, ValueError):
+        start_page = 0
+
+    if normalize_ocr_engine(secondary_engine) == "paddleocr":
+        return ReaderManager.read_paddle_ocr(
+            source_path,
+            start_page=start_page,
+        )
+
+    return ReaderManager.read_ocr(
+        source_path,
+        start_page=start_page,
+    )
+
+
+def _try_secondary_ocr_review(
+    primary_candidate: OCRCandidate,
+    bank_key: str,
+    secondary_engine: str | None = None,
+) -> OCRReview | None:
+    """Ejecuta el OCR secundario sólo si falla la conciliación principal.
+
+    El flujo es deliberadamente secuencial:
+      1) el motor primario termina y se parsea;
+      2) se calculan depósitos/abonos y retiros/cargos;
+      3) si ambas validaciones pasan, termina aquí;
+      4) sólo si alguna falta o falla se ejecuta el motor secundario.
+    """
+    primary_engine = normalize_ocr_engine(primary_candidate.engine)
+    if primary_engine not in {"tesseract", "paddleocr"}:
+        return None
+
+    if not should_attempt_secondary_fallback(
+        primary_candidate.validaciones,
+        has_movements=primary_candidate.movement_count > 0,
+    ):
+        metadata = dict(primary_candidate.document.metadata or {})
+        metadata.update(
+            {
+                "ocr_primary_engine": primary_engine,
+                "ocr_fallback_attempted": False,
+                "ocr_fallback_selected": False,
+            }
+        )
+        primary_candidate.document.metadata = metadata
+        return None
+
+    secondary = normalize_ocr_engine(
+        secondary_engine or secondary_ocr_engine(primary_engine)
+    )
+    if secondary == primary_engine:
+        secondary = secondary_ocr_engine(primary_engine)
+
+    reasons = fallback_trigger_reasons(
+        primary_candidate.validaciones,
+        has_movements=primary_candidate.movement_count > 0,
+    )
+
+    try:
+        secondary_document = _read_secondary_document(
+            primary_candidate,
+            secondary,
+        )
+        secondary_estado, secondary_document = _process_once(
+            secondary_document,
+            bank_key,
+        )
+        secondary_candidate = _build_candidate(
+            secondary,
+            secondary_estado,
+            secondary_document,
+        )
+    except Exception as exc:
+        metadata = dict(primary_candidate.document.metadata or {})
+        profile = validation_profile(primary_candidate.validaciones)
+        metadata.update(
+            {
+                "ocr_primary_engine": primary_engine,
+                "ocr_secondary_engine": secondary,
+                "ocr_fallback_attempted": True,
+                "ocr_fallback_selected": False,
+                "ocr_fallback_error_type": type(exc).__name__,
+                "primary_validation_total": profile.total,
+                "primary_validation_failed": profile.failed,
+            }
+        )
+        primary_candidate.document.metadata = metadata
+        return OCRReview(
+            candidates={primary_engine: primary_candidate},
+            recommended_engine=primary_engine,
+            selected_engine=primary_engine,
+            trigger_reasons=reasons,
+            paddle_error_type=(
+                type(exc).__name__ if secondary == "paddleocr" else None
+            ),
+        )
+
+    select_secondary = should_select_secondary_result(
+        primary_candidate.validaciones,
+        secondary_candidate.validaciones,
+        primary_has_movements=primary_candidate.movement_count > 0,
+        secondary_has_movements=secondary_candidate.movement_count > 0,
+    )
+    selected_engine = secondary if select_secondary else primary_engine
+
+    primary_profile = validation_profile(primary_candidate.validaciones)
+    secondary_profile = validation_profile(secondary_candidate.validaciones)
+    comparison_metadata = {
+        "ocr_primary_engine": primary_engine,
+        "ocr_secondary_engine": secondary,
+        "ocr_fallback_attempted": True,
+        "ocr_fallback_selected": select_secondary,
+        "primary_validation_total": primary_profile.total,
+        "primary_validation_failed": primary_profile.failed,
+        "secondary_validation_total": secondary_profile.total,
+        "secondary_validation_failed": secondary_profile.failed,
+    }
+    primary_candidate.document.metadata = {
+        **(primary_candidate.document.metadata or {}),
+        **comparison_metadata,
+    }
+    secondary_candidate.document.metadata = {
+        **(secondary_candidate.document.metadata or {}),
+        **comparison_metadata,
+    }
+
+    return OCRReview(
+        candidates={
+            primary_engine: primary_candidate,
+            secondary: secondary_candidate,
+        },
+        recommended_engine=selected_engine,
+        selected_engine=selected_engine,
+        trigger_reasons=reasons,
     )
 
 
@@ -188,112 +311,17 @@ def _try_paddle_review(
     tesseract_candidate: OCRCandidate,
     bank_key: str,
 ) -> OCRReview | None:
-    """Construye una revisión Tesseract/PaddleOCR cuando corresponde.
-
-    Ambos resultados se conservan en memoria. La recomendación automática sólo
-    define el candidato inicial; la interfaz puede cambiar la selección.
-    """
-    document_tesseract = tesseract_candidate.document
-    if _reader_name(document_tesseract) != "tesseract":
+    """Wrapper histórico usado por pruebas/scripts existentes."""
+    if normalize_ocr_engine(tesseract_candidate.engine) != "tesseract":
         return None
-
-    if not paddle_fallback_enabled(bank_key):
-        return None
-
-    reasons = fallback_trigger_reasons(
-        tesseract_candidate.validaciones,
-        has_movements=tesseract_candidate.movement_count > 0,
-    )
-    if not reasons:
-        return None
-
-    metadata = document_tesseract.metadata or {}
-    source_path = metadata.get("source_path")
-    if not source_path:
-        return OCRReview(
-            candidates={"tesseract": tesseract_candidate},
-            recommended_engine="tesseract",
-            selected_engine="tesseract",
-            trigger_reasons=reasons,
-            paddle_error_type="SourcePathMissing",
-        )
-
-    try:
-        start_page = int(metadata.get("start_page", 0) or 0)
-    except (TypeError, ValueError):
-        start_page = 0
-
-    try:
-        paddle_document = ReaderManager.read_paddle_ocr(
-            source_path,
-            start_page=start_page,
-        )
-        estado_paddle, paddle_document = _process_once(
-            paddle_document,
-            bank_key,
-        )
-        paddle_candidate = _build_candidate(
-            "paddleocr",
-            estado_paddle,
-            paddle_document,
-        )
-    except Exception as exc:
-        tesseract_profile = validation_profile(
-            tesseract_candidate.validaciones
-        )
-        metadata.update(
-            {
-                "paddle_fallback_attempted": True,
-                "paddle_fallback_selected": False,
-                "paddle_fallback_error_type": type(exc).__name__,
-                "tesseract_validation_total": tesseract_profile.total,
-                "tesseract_validation_failed": tesseract_profile.failed,
-            }
-        )
-        document_tesseract.metadata = metadata
-        return OCRReview(
-            candidates={"tesseract": tesseract_candidate},
-            recommended_engine="tesseract",
-            selected_engine="tesseract",
-            trigger_reasons=reasons,
-            paddle_error_type=type(exc).__name__,
-        )
-
-    recommend_paddle = should_select_paddle_result(
-        tesseract_candidate.validaciones,
-        paddle_candidate.validaciones,
-        tesseract_has_movements=tesseract_candidate.movement_count > 0,
-        paddle_has_movements=paddle_candidate.movement_count > 0,
-    )
-    recommended_engine = "paddleocr" if recommend_paddle else "tesseract"
-
-    tesseract_profile = validation_profile(tesseract_candidate.validaciones)
-    paddle_profile = validation_profile(paddle_candidate.validaciones)
-    comparison_metadata = {
-        "paddle_fallback_attempted": True,
-        "paddle_fallback_selected": recommend_paddle,
-        "tesseract_validation_total": tesseract_profile.total,
-        "tesseract_validation_failed": tesseract_profile.failed,
-        "paddle_validation_total": paddle_profile.total,
-        "paddle_validation_failed": paddle_profile.failed,
-    }
-    document_tesseract.metadata.update(comparison_metadata)
-    paddle_document.metadata.update(comparison_metadata)
-
-    return OCRReview(
-        candidates={
-            "tesseract": tesseract_candidate,
-            "paddleocr": paddle_candidate,
-        },
-        recommended_engine=recommended_engine,
-        selected_engine=recommended_engine,
-        trigger_reasons=reasons,
+    return _try_secondary_ocr_review(
+        tesseract_candidate,
+        bank_key,
+        secondary_engine="paddleocr",
     )
 
 
-def _selected_review_candidate(
-    review: OCRReview,
-) -> OCRCandidate:
+def _selected_review_candidate(review: OCRReview) -> OCRCandidate:
     return review.get_candidate(review.selected_engine)
 
 
@@ -302,19 +330,15 @@ def _try_paddle_fallback(
     document_tesseract: DocumentData,
     bank_key: str,
 ):
-    """API interna compatible que devuelve el candidato recomendado."""
+    """API interna histórica que devuelve el candidato seleccionado."""
     tesseract_candidate = _build_candidate(
         "tesseract",
         estado_tesseract,
         document_tesseract,
     )
-    review = _try_paddle_review(
-        tesseract_candidate,
-        bank_key,
-    )
+    review = _try_paddle_review(tesseract_candidate, bank_key)
     if review is None:
         return estado_tesseract, document_tesseract
-
     selected = _selected_review_candidate(review)
     return selected.estado_cuenta, selected.document
 
@@ -323,22 +347,20 @@ def process_single_statement_with_ocr_review(
     document: DocumentData,
     bank_key: str,
 ):
-    """Procesa el documento y conserva candidatos OCR cuando se comparan."""
-    estado, document = _process_once(
-        document,
-        bank_key,
-    )
+    """Procesa un documento y aplica fallback simétrico si es OCR."""
+    estado, document = _process_once(document, bank_key)
+    primary_engine = _reader_name(document)
 
-    if _reader_name(document) != "tesseract":
+    if primary_engine not in {"tesseract", "paddleocr"}:
         return estado, document, None
 
-    tesseract_candidate = _build_candidate(
-        "tesseract",
+    primary_candidate = _build_candidate(
+        primary_engine,
         estado,
         document,
     )
-    review = _try_paddle_review(
-        tesseract_candidate,
+    review = _try_secondary_ocr_review(
+        primary_candidate,
         bank_key,
     )
     if review is None:
@@ -348,10 +370,7 @@ def process_single_statement_with_ocr_review(
     return selected.estado_cuenta, selected.document, review
 
 
-def process_single_statement(
-    document: DocumentData,
-    bank_key: str,
-):
+def process_single_statement(document: DocumentData, bank_key: str):
     """Procesa un documento conservando compatibilidad con la API histórica."""
     estado, document, _ = process_single_statement_with_ocr_review(
         document=document,
