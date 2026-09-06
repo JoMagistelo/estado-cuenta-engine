@@ -18,11 +18,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 's
 from engine.ocr_fallback_policy import normalize_ocr_engine
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
+from exporters.excel.batch_exporter import pending_ocr_selection_files
 
 APP_VERSION = '2.3'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 MOVEMENT_PAGE_SIZE = 60
+SELECTOR_ENGINE_WIDTH = 105
+SELECTOR_STATUS_WIDTH = 54
+SELECTOR_VALIDATION_WIDTH = 58
 
 GOB_GREEN = '#1F4D3A'
 GOB_GREEN_DARK = '#163A2C'
@@ -88,10 +92,10 @@ def format_optional_float(
     if value is None:
         return na_value
     try:
-        numeric = float(value)
+        numeric_value = float(value)
     except (TypeError, ValueError):
         return str(value)
-    return f'{prefix}{numeric:,.2f}{suffix}'
+    return f'{prefix}{numeric_value:,.2f}{suffix}'
 
 
 def engine_label(engine: str | None) -> str:
@@ -150,8 +154,16 @@ def main(page: ft.Page):
     timer_text = ft.Text('00:00', size=11, weight=ft.FontWeight.BOLD)
     loading_ring = ft.ProgressRing(width=18, height=18, visible=False)
     audit_view = ft.Column(spacing=9)
-    digital_groups_view = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO)
-    ocr_groups_view = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO)
+    digital_groups_view = ft.Column(
+        spacing=4,
+        scroll=ft.ScrollMode.AUTO,
+        expand=True,
+    )
+    ocr_groups_view = ft.Column(
+        spacing=4,
+        scroll=ft.ScrollMode.AUTO,
+        expand=True,
+    )
     classifying_view = ft.Column(spacing=3, height=62, scroll=ft.ScrollMode.AUTO)
     classifying_shell = ft.Container(
         content=classifying_view,
@@ -162,12 +174,16 @@ def main(page: ft.Page):
     )
     selector_filter = ft.TextField(
         hint_text='Filtrar PDF, banco o estado',
-        width=300,
+        width=250,
+        height=38,
+        text_size=11,
         prefix_icon=ft.Icons.SEARCH,
     )
     result_dropdown = ft.Dropdown(
         label='Ir a resultado',
-        width=315,
+        width=285,
+        height=38,
+        text_size=10,
         options=[],
         disabled=True,
     )
@@ -235,8 +251,11 @@ def main(page: ft.Page):
             if result is None:
                 return engine_label(settings['ocr_primary_engine'])
             label = engine_label(getattr(result, 'ocr_engine', None))
-            if getattr(result, 'fallback_used', False):
-                return f'{label} · fallback'
+            review = getattr(result, 'ocr_review', None)
+            if review is not None and review.requires_user_selection:
+                if not getattr(result, 'ocr_selection_confirmed', False):
+                    return f'{label} · elegir'
+                return f'{label} · elegido'
             if getattr(result, 'fallback_attempted', False):
                 return f'{label} · revisado'
             return label
@@ -293,8 +312,8 @@ def main(page: ft.Page):
 
     def selector_row_content(index: int, item: dict[str, Any]) -> ft.Row:
         result = item.get('result')
-        a = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
-        c = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
+        abonos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
+        cargos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
         return ft.Row(
             [
                 ft.Container(
@@ -308,11 +327,24 @@ def main(page: ft.Page):
                 ),
                 ft.Container(
                     ft.Text(process_label(item), size=8, weight=ft.FontWeight.W_500),
-                    width=110,
+                    width=SELECTOR_ENGINE_WIDTH,
+                    alignment=ft.Alignment.CENTER_LEFT,
                 ),
-                ft.Container(status_control(item), width=30, alignment=ft.Alignment.CENTER),
-                ft.Container(ft.Text(a, size=10), width=30, alignment=ft.Alignment.CENTER),
-                ft.Container(ft.Text(c, size=10), width=30, alignment=ft.Alignment.CENTER),
+                ft.Container(
+                    status_control(item),
+                    width=SELECTOR_STATUS_WIDTH,
+                    alignment=ft.Alignment.CENTER,
+                ),
+                ft.Container(
+                    ft.Text(abonos, size=10),
+                    width=SELECTOR_VALIDATION_WIDTH,
+                    alignment=ft.Alignment.CENTER,
+                ),
+                ft.Container(
+                    ft.Text(cargos, size=10),
+                    width=SELECTOR_VALIDATION_WIDTH,
+                    alignment=ft.Alignment.CENTER,
+                ),
             ],
             spacing=4,
         )
@@ -332,18 +364,30 @@ def main(page: ft.Page):
         return row
 
     def panel_header(title: str) -> ft.Container:
+        def heading(text: str, width: int) -> ft.Container:
+            return ft.Container(
+                ft.Text(
+                    text,
+                    size=8,
+                    weight=ft.FontWeight.W_600,
+                    color=GOB_GREEN_DARK,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                width=width,
+                alignment=ft.Alignment.CENTER,
+            )
+
         return ft.Container(
             ft.Row(
                 [
                     ft.Text(title, size=11, weight=ft.FontWeight.BOLD),
                     ft.Container(expand=True),
-                    ft.Text('Motor', size=8),
-                    ft.Container(width=45),
-                    ft.Text('●', size=8),
-                    ft.Text('A', size=8),
-                    ft.Text('C', size=8),
+                    heading('Motor', SELECTOR_ENGINE_WIDTH),
+                    heading('Estado', SELECTOR_STATUS_WIDTH),
+                    heading('Abonos', SELECTOR_VALIDATION_WIDTH),
+                    heading('Cargos', SELECTOR_VALIDATION_WIDTH),
                 ],
-                spacing=5,
+                spacing=4,
             ),
             padding=ft.Padding.symmetric(horizontal=7, vertical=5),
             bgcolor=GOB_GOLD_LIGHT,
@@ -352,7 +396,14 @@ def main(page: ft.Page):
 
     def selector_panel(title: str, groups_view: ft.Column) -> ft.Container:
         return ft.Container(
-            content=ft.Column([panel_header(title), groups_view], spacing=4),
+            content=ft.Column(
+                [
+                    panel_header(title),
+                    ft.Container(content=groups_view, expand=True),
+                ],
+                spacing=4,
+                expand=True,
+            ),
             height=260,
             padding=6,
             border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
@@ -636,13 +687,36 @@ def main(page: ft.Page):
         body = ft.Column(spacing=0, height=292, scroll=ft.ScrollMode.AUTO)
         filter_field = ft.TextField(
             hint_text='Filtrar movimientos',
-            width=300,
+            width=245,
+            height=38,
+            text_size=11,
             prefix_icon=ft.Icons.SEARCH,
         )
+        cargo_total_text = ft.Text('$0.00', size=10, weight=ft.FontWeight.BOLD)
+        abono_total_text = ft.Text('$0.00', size=10, weight=ft.FontWeight.BOLD)
         page_label = ft.Text('', size=8, color=ft.Colors.ON_SURFACE_VARIANT)
         previous_button = ft.IconButton(icon=ft.Icons.CHEVRON_LEFT, tooltip='Página anterior')
         next_button = ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT, tooltip='Página siguiente')
         page_state = {'page': 0}
+
+        def total_chip(label: str, value_control: ft.Text, *, accent: str) -> ft.Container:
+            return ft.Container(
+                ft.Row(
+                    [
+                        ft.Text(label, size=8, color=ft.Colors.ON_SURFACE_VARIANT),
+                        value_control,
+                    ],
+                    spacing=5,
+                    tight=True,
+                ),
+                padding=ft.Padding.symmetric(horizontal=9, vertical=5),
+                bgcolor=GOB_CREAM,
+                border=ft.Border.only(left=ft.BorderSide(3, accent)),
+                border_radius=6,
+            )
+
+        cargo_chip = total_chip('Cargos', cargo_total_text, accent=GOB_GOLD)
+        abono_chip = total_chip('Abonos', abono_total_text, accent=GOB_GREEN)
 
         def searchable_text(original_index: int, movement) -> str:
             values: list[str] = []
@@ -671,6 +745,11 @@ def main(page: ft.Page):
 
         def rebuild_page(*, update: bool = True) -> None:
             entries = filtered_entries()
+            cargo_total = sum(numeric(getattr(movement, 'cargo', 0.0)) for _, movement in entries)
+            abono_total = sum(numeric(getattr(movement, 'abono', 0.0)) for _, movement in entries)
+            cargo_total_text.value = format_money(cargo_total)
+            abono_total_text.value = format_money(abono_total)
+
             total_pages = max(1, (len(entries) + MOVEMENT_PAGE_SIZE - 1) // MOVEMENT_PAGE_SIZE)
             page_state['page'] = min(page_state['page'], total_pages - 1)
             start = page_state['page'] * MOVEMENT_PAGE_SIZE
@@ -712,7 +791,14 @@ def main(page: ft.Page):
             previous_button.disabled = page_state['page'] <= 0
             next_button.disabled = page_state['page'] >= total_pages - 1
             if update:
-                for control in (body, page_label, previous_button, next_button):
+                for control in (
+                    body,
+                    cargo_total_text,
+                    abono_total_text,
+                    page_label,
+                    previous_button,
+                    next_button,
+                ):
                     try:
                         control.update()
                     except Exception:
@@ -746,16 +832,18 @@ def main(page: ft.Page):
             [
                 filter_field,
                 ft.Text(
-                    f'Vista paginada de {MOVEMENT_PAGE_SIZE} filas para mantener la interfaz fluida.',
+                    f'{len(movements)} movimiento(s)',
                     size=8,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
                 ft.Container(expand=True),
+                cargo_chip,
+                abono_chip,
                 previous_button,
                 page_label,
                 next_button,
             ],
-            spacing=5,
+            spacing=6,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         return ft.Column(
@@ -859,22 +947,30 @@ def main(page: ft.Page):
             f'{candidate.validation_failed}/{candidate.validation_total} validaciones con falla'
         )
 
-    def choose_ocr_candidate(result, engine: str):
+    def preview_ocr_candidate(result, engine: str):
         if engine == getattr(result, 'selected_ocr_engine', None):
             return
         try:
-            result.select_ocr_engine(engine)
+            result.preview_ocr_engine(engine)
         except Exception as ex:
-            status_text.value = f'❌ No fue posible cambiar OCR: {ex}'
+            status_text.value = f'❌ No fue posible mostrar OCR: {ex}'
             status_text.color = ft.Colors.RED
             status_text.update()
             return
-        index = next(
-            (i for i, item in enumerate(processing_items) if item.get('result') is result),
-            None,
-        )
-        if isinstance(index, int):
-            rebuild_selector()
+        rebuild_selector()
+        render_result(result)
+
+    def choose_ocr_candidate(result, engine: str):
+        try:
+            result.select_ocr_engine(engine)
+        except Exception as ex:
+            status_text.value = f'❌ No fue posible elegir OCR: {ex}'
+            status_text.color = ft.Colors.RED
+            status_text.update()
+            return
+        status_text.value = f'✅ {engine_label(engine)} elegido para {result.file_name}'
+        status_text.color = GOB_GREEN
+        rebuild_selector()
         render_result(result)
 
     def ocr_candidate_selector(result) -> ft.Control | None:
@@ -884,12 +980,19 @@ def main(page: ft.Page):
         engines = list(getattr(result, 'available_ocr_engines')())
         if len(engines) < 2:
             return None
-        selected = result.selected_ocr_engine
+        active = result.selected_ocr_engine
+        confirmed = result.confirmed_ocr_engine
         recommended = result.recommended_ocr_engine
         columns: list[ft.Control] = []
         for engine in engines:
             candidate = review.get_candidate(engine)
-            is_selected = engine == selected
+            is_active = engine == active
+            is_confirmed = engine == confirmed
+            badges: list[ft.Control] = []
+            if is_active:
+                badges.append(ft.Text('Vista actual', size=8, color=GOB_GREEN))
+            if is_confirmed:
+                badges.append(ft.Text('✓ Elegido para Excel', size=8, color=GOB_GREEN_DARK))
             columns.append(
                 ft.Container(
                     ft.Column(
@@ -898,44 +1001,58 @@ def main(page: ft.Page):
                                 [
                                     ft.Text(engine_label(engine), size=10, weight=ft.FontWeight.BOLD),
                                     ft.Container(expand=True),
-                                    ft.Text(
-                                        'Seleccionado' if is_selected else '',
-                                        size=8,
-                                        color=GOB_GREEN,
-                                    ),
-                                ]
+                                    *badges,
+                                ],
+                                spacing=6,
                             ),
                             ft.Text(
                                 candidate_stats(candidate),
                                 size=8,
                                 color=ft.Colors.ON_SURFACE_VARIANT,
                             ),
-                            ft.OutlinedButton(
-                                content=(
-                                    'Resultado activo'
-                                    if is_selected
-                                    else 'Conservar para exportación'
-                                ),
-                                icon=(
-                                    ft.Icons.CHECK_CIRCLE
-                                    if is_selected
-                                    else ft.Icons.SWAP_HORIZ
-                                ),
-                                disabled=is_selected,
-                                on_click=lambda e, eng=engine: choose_ocr_candidate(result, eng),
+                            ft.Row(
+                                [
+                                    ft.TextButton(
+                                        content='Ver resultado',
+                                        icon=ft.Icons.VISIBILITY_OUTLINED,
+                                        disabled=is_active,
+                                        on_click=lambda e, eng=engine: preview_ocr_candidate(result, eng),
+                                    ),
+                                    ft.OutlinedButton(
+                                        content=(
+                                            'Elegido para Excel'
+                                            if is_confirmed
+                                            else 'Elegir para Excel'
+                                        ),
+                                        icon=(
+                                            ft.Icons.CHECK_CIRCLE
+                                            if is_confirmed
+                                            else ft.Icons.DONE
+                                        ),
+                                        disabled=is_confirmed,
+                                        on_click=lambda e, eng=engine: choose_ocr_candidate(result, eng),
+                                    ),
+                                ],
+                                spacing=5,
                             ),
                         ],
                         spacing=5,
                     ),
                     padding=8,
                     border=ft.Border.all(
-                        1, GOB_GREEN if is_selected else ft.Colors.OUTLINE_VARIANT
+                        1, GOB_GREEN if is_confirmed else ft.Colors.OUTLINE_VARIANT
                     ),
-                    bgcolor=GOB_GREEN_LIGHT if is_selected else None,
+                    bgcolor=GOB_GREEN_LIGHT if is_confirmed else None,
                     border_radius=7,
                     expand=True,
                 )
             )
+
+        guidance = (
+            '⚠️ Debes elegir uno de los dos resultados antes de generar el Excel.'
+            if confirmed is None
+            else f'✓ Para exportación se conservará {engine_label(confirmed)}.'
+        )
         return ft.Container(
             ft.Column(
                 [
@@ -944,18 +1061,24 @@ def main(page: ft.Page):
                             ft.Text('Comparación OCR', size=10, weight=ft.FontWeight.BOLD),
                             ft.Container(expand=True),
                             ft.Text(
-                                f'Recomendado: {engine_label(recommended)}',
+                                f'Sugerencia automática: {engine_label(recommended)}',
                                 size=8,
                                 color=ft.Colors.ON_SURFACE_VARIANT,
                             ),
                         ]
                     ),
                     ft.Text(
-                        'El resultado seleccionado es el que se muestra y se conserva para el Excel.',
+                        'Puedes revisar ambos motores. La sugerencia automática no se guarda por defecto: la elección para Excel siempre es manual.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Row(columns, spacing=7),
+                    ft.Text(
+                        guidance,
+                        size=8,
+                        weight=ft.FontWeight.W_600,
+                        color=DANGER if confirmed is None else GOB_GREEN,
+                    ),
                 ],
                 spacing=5,
             ),
@@ -1159,26 +1282,23 @@ def main(page: ft.Page):
             ]
         )
         if method == 'OCR':
-            primary = engine_label(getattr(result, 'ocr_primary_engine', None))
-            secondary = (
-                engine_label(getattr(result, 'ocr_secondary_engine', None))
-                if getattr(result, 'ocr_secondary_engine', None)
-                else ''
-            )
-            if getattr(result, 'fallback_attempted', False):
-                fallback_text = (
-                    f'Primario: {primary} · Secundario: {secondary} · '
-                    + (
-                        'se usa el secundario'
-                        if getattr(result, 'fallback_used', False)
-                        else 'se conserva el primario'
-                    )
+            review = getattr(result, 'ocr_review', None)
+            engines = list(result.available_ocr_engines()) if review is not None else []
+            if len(engines) > 1:
+                confirmed = result.confirmed_ocr_engine
+                info_text = (
+                    f'Comparación OCR disponible · vista actual: {engine_label(result.selected_ocr_engine)} · '
+                    f'sugerencia automática: {engine_label(result.recommended_ocr_engine)}'
                 )
+                if confirmed:
+                    info_text += f' · elegido para Excel: {engine_label(confirmed)}'
+                else:
+                    info_text += ' · pendiente de elección para Excel'
             else:
-                fallback_text = f'Motor utilizado: {primary}'
+                info_text = f'Motor utilizado: {engine_label(getattr(result, "ocr_engine", None))}'
             audit_view.controls.append(
                 ft.Container(
-                    ft.Text(f'⚙️ {fallback_text}', size=8, color=GOB_GREEN),
+                    ft.Text(f'⚙️ {info_text}', size=8, color=GOB_GREEN),
                     padding=6,
                     bgcolor=GOB_GREEN_LIGHT,
                     border_radius=6,
@@ -1353,12 +1473,12 @@ def main(page: ft.Page):
                 [
                     selector,
                     ft.Text(
-                        'Se recomienda Tesseract. Cambie a PaddleOCR sólo si observa diferencias importantes entre el PDF original y el resultado exportado; suele ser más lento.',
+                        'El motor principal sólo define el orden de procesamiento OCR. Si se ejecutan ambos motores, la elección del resultado que se exporta siempre la hace el usuario.',
                         size=9,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Text(
-                        'El segundo motor sólo se utiliza cuando fallan las validaciones principales.',
+                        'El segundo motor se ejecuta cuando las validaciones principales requieren revisión.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
@@ -1387,13 +1507,19 @@ def main(page: ft.Page):
                 [
                     ft.Text('Validaciones financieras', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                     ft.Text(
-                        'A y C corresponden a las conciliaciones principales de Abonos y Cargos. Las demás validaciones se muestran en la auditoría.',
+                        'Las columnas Abonos y Cargos muestran de forma explícita el resultado de las dos conciliaciones principales.',
+                        size=9,
+                    ),
+                    ft.Divider(),
+                    ft.Text('Selección OCR', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                    ft.Text(
+                        'Cuando existen resultados de Tesseract y PaddleOCR puedes revisar ambos. Ninguno queda elegido para el Excel hasta que pulses “Elegir para Excel”.',
                         size=9,
                     ),
                     ft.Divider(),
                     ft.Text('Estados durante el procesamiento', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                     ft.Text(
-                        'Los PDFs aparecen en cuanto se clasifica su tipo. El indicador circular significa que el archivo sigue procesándose. Los resultados terminados pueden revisarse y exportarse aunque el lote continúe.',
+                        'Los PDFs aparecen en cuanto se clasifica su tipo. Coloca el cursor sobre la lista Digital u OCR y usa la rueda del mouse para recorrerla.',
                         size=9,
                     ),
                     ft.Divider(),
@@ -1406,7 +1532,7 @@ def main(page: ft.Page):
                 spacing=7,
                 tight=True,
                 scroll=ft.ScrollMode.AUTO,
-                height=330,
+                height=360,
             ),
             actions=[ft.TextButton(content='Cerrar', on_click=lambda ev: page.pop_dialog())],
         )
@@ -1785,6 +1911,31 @@ def main(page: ft.Page):
     async def export_excel(e):
         if not results:
             return
+        pending = pending_ocr_selection_files(list(results))
+        if pending:
+            status_text.value = (
+                f'⚠️ Falta elegir Tesseract o PaddleOCR para {len(pending)} archivo(s) antes de exportar.'
+            )
+            status_text.color = DANGER
+            first_pending = pending[0]
+            pending_index = next(
+                (
+                    index
+                    for index, item in enumerate(processing_items)
+                    if item.get('file_name') == first_pending and item.get('result') is not None
+                ),
+                None,
+            )
+            if isinstance(pending_index, int):
+                state['selected_index'] = pending_index
+                rebuild_selector()
+                render_result(processing_items[pending_index]['result'])
+            try:
+                status_text.update()
+            except Exception:
+                page.update()
+            return
+
         path = await ft.FilePicker().save_file(
             dialog_title='Guardar reporte Excel',
             file_name='reporte_estados_de_cuenta.xlsx',
@@ -1915,7 +2066,7 @@ def main(page: ft.Page):
                 [
                     ft.Text('📤 Exportación', size=13, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        'Incluye únicamente los resultados terminados.',
+                        'Incluye resultados terminados. Si un PDF tiene dos motores OCR, debes elegir explícitamente cuál conservar.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
