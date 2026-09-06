@@ -38,6 +38,7 @@ class PaddleOCRPDFReader:
     DEFAULT_DETECTION_MODEL_NAME = "PP-OCRv5_mobile_det"
     DEFAULT_RECOGNITION_MODEL_NAME = "latin_PP-OCRv5_mobile_rec"
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN = 1600
+    DEFAULT_TEXT_REC_BATCH_SIZE = 8
     DEFAULT_ENABLE_MKLDNN = True
     DEFAULT_CPU_THREADS = 10
 
@@ -60,11 +61,16 @@ class PaddleOCRPDFReader:
         engine = cls._get_engine(**config)
         dpi = cls._configured_dpi()
         text_det_limit_side_len = cls._configured_detection_side_len()
+        progress_enabled = cls._configured_bool(
+            "PADDLEOCR_PROGRESS",
+            False,
+        )
 
         pdf = pdfium.PdfDocument(str(file_path))
         all_words: list[dict[str, Any]] = []
         text_pages: list[str] = []
         doctop_offset = 0.0
+        total_pages = max(len(pdf) - start_page, 0)
 
         for physical_index in range(start_page, len(pdf)):
             page = pdf[physical_index]
@@ -74,6 +80,12 @@ class PaddleOCRPDFReader:
             image = bitmap.to_pil().convert("RGB")
 
             logical_page = physical_index - start_page + 1
+            if progress_enabled:
+                print(
+                    f"[PaddleOCR] página {logical_page}/{total_pages}: iniciando",
+                    flush=True,
+                )
+
             words, page_text = cls._read_page(
                 engine=engine,
                 image=image,
@@ -82,6 +94,12 @@ class PaddleOCRPDFReader:
                 doctop_offset=doctop_offset,
                 text_det_limit_side_len=text_det_limit_side_len,
             )
+
+            if progress_enabled:
+                print(
+                    f"[PaddleOCR] página {logical_page}/{total_pages}: completada",
+                    flush=True,
+                )
 
             all_words.extend(words)
             if logical_page <= cls.MAX_TEXT_PAGES:
@@ -107,6 +125,9 @@ class PaddleOCRPDFReader:
                 "network_model_downloads": False,
                 "mkldnn_enabled": config["enable_mkldnn"],
                 "cpu_threads": config["cpu_threads"],
+                "text_recognition_batch_size": config[
+                    "text_recognition_batch_size"
+                ],
                 "text_det_limit_side_len": text_det_limit_side_len,
                 "text_det_limit_type": "max",
             },
@@ -156,6 +177,9 @@ class PaddleOCRPDFReader:
                 cls.DEFAULT_ENABLE_MKLDNN,
             ),
             "cpu_threads": cls._configured_cpu_threads(),
+            "text_recognition_batch_size": (
+                cls._configured_recognition_batch_size()
+            ),
         }
 
     @staticmethod
@@ -201,6 +225,22 @@ class PaddleOCRPDFReader:
         return max(1, min(threads, 32))
 
     @classmethod
+    def _configured_recognition_batch_size(cls) -> int:
+        configured = os.getenv(
+            "PADDLEOCR_TEXT_REC_BATCH_SIZE",
+            "",
+        ).strip()
+        if not configured:
+            return cls.DEFAULT_TEXT_REC_BATCH_SIZE
+
+        try:
+            batch_size = int(configured)
+        except ValueError:
+            return cls.DEFAULT_TEXT_REC_BATCH_SIZE
+
+        return max(1, min(batch_size, 32))
+
+    @classmethod
     def _configured_dpi(cls) -> int:
         configured = os.getenv("PADDLEOCR_DPI", "").strip()
         if not configured:
@@ -240,6 +280,7 @@ class PaddleOCRPDFReader:
         recognition_model_dir: str,
         enable_mkldnn: bool,
         cpu_threads: int,
+        text_recognition_batch_size: int,
     ):
         signature = (
             language,
@@ -250,6 +291,7 @@ class PaddleOCRPDFReader:
             recognition_model_dir,
             enable_mkldnn,
             cpu_threads,
+            text_recognition_batch_size,
         )
 
         with cls._engine_lock:
@@ -276,6 +318,7 @@ class PaddleOCRPDFReader:
                     text_detection_model_dir=detection_model_dir,
                     text_recognition_model_name=recognition_model_name,
                     text_recognition_model_dir=recognition_model_dir,
+                    text_recognition_batch_size=text_recognition_batch_size,
                     use_doc_orientation_classify=False,
                     use_doc_unwarping=False,
                     use_textline_orientation=False,
