@@ -59,5 +59,26 @@ def _desktop_icon(*args, **kwargs):
 ft.Icon = _desktop_icon
 
 
+def _run_packaged_paddlex_self_test() -> bool:
+    """Valida dentro del EXE que la configuración dinámica OCR de PaddleX existe.
+
+    PaddleOCR 3.x puede importar correctamente y aun así fallar sólo después de
+    congelarse con PyInstaller si faltan los archivos de configuración de
+    PaddleX. Este modo oculto permite a CI comprobar exactamente esa condición
+    sin abrir la interfaz ni procesar datos bancarios.
+    """
+    if "--self-test-paddlex-pipeline" not in sys.argv:
+        return False
+
+    from paddlex.inference.pipelines import load_pipeline_config
+
+    config = load_pipeline_config("OCR")
+    if not config:
+        raise RuntimeError("PaddleX no pudo cargar la configuración de la pipeline OCR.")
+    return True
+
+
 if __name__ == "__main__":
+    if _run_packaged_paddlex_self_test():
+        raise SystemExit(0)
     ft.run(main)
