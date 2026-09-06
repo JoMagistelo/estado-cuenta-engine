@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,13 @@ class PDFTextStageResult:
         self.document = document
         self.initial_empty_pages = initial_empty_pages
         self.has_extractable_text = has_extractable_text
+
+
+def _cancel_requested(cancel_event: Any | None) -> bool:
+    if cancel_event is None:
+        return False
+    is_set = getattr(cancel_event, "is_set", None)
+    return bool(callable(is_set) and is_set())
 
 
 class ReaderManager:
@@ -112,11 +120,12 @@ class ReaderManager:
         start_page: int = 0,
         cancel_event: Any | None = None,
     ) -> DocumentData:
+        if _cancel_requested(cancel_event):
+            raise CancelledError()
         file_path = Path(file_path)
         document = PaddleOCRPDFReader.read(
             file_path,
             start_page=start_page,
-            cancel_event=cancel_event,
         )
         document.metadata = dict(document.metadata or {})
         document.metadata.setdefault("source_path", str(file_path.resolve()))
@@ -136,6 +145,9 @@ class ReaderManager:
         Esta función no prueba el otro motor. La decisión de fallback pertenece
         al processor y sólo ocurre después de validar el resultado primario.
         """
+        if _cancel_requested(cancel_event):
+            raise CancelledError()
+
         file_path = Path(file_path)
         normalized = str(engine or "").strip().lower()
 
@@ -148,7 +160,6 @@ class ReaderManager:
             document = TesseractPDFReader.read(
                 file_path,
                 start_page=start_page,
-                cancel_event=cancel_event,
             )
             document.metadata = dict(document.metadata or {})
             document.metadata["source_path"] = str(file_path.resolve())
