@@ -137,7 +137,7 @@ def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
     assert config["recognition_model_dir"] == str(recognition.resolve())
     assert config["detection_model_name"] == "PP-OCRv5_mobile_det"
     assert config["recognition_model_name"] == "latin_PP-OCRv5_mobile_rec"
-    assert config["enable_mkldnn"] is False
+    assert config["enable_mkldnn"] is True
     assert config["cpu_threads"] == 10
 
 
@@ -161,7 +161,7 @@ def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
         PaddleOCRPDFReader._load_config()
 
 
-def test_cpu_engine_disables_mkldnn_by_default(monkeypatch):
+def test_cpu_engine_uses_mkldnn_by_default(monkeypatch):
     captured_kwargs = {}
 
     class FakePaddleOCR:
@@ -186,12 +186,12 @@ def test_cpu_engine_disables_mkldnn_by_default(monkeypatch):
             recognition_model_name="latin_PP-OCRv5_mobile_rec",
             detection_model_dir="C:/modelos/det",
             recognition_model_dir="C:/modelos/rec",
-            enable_mkldnn=False,
+            enable_mkldnn=True,
             cpu_threads=10,
         )
 
-        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "0"
-        assert captured_kwargs["enable_mkldnn"] is False
+        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "1"
+        assert captured_kwargs["enable_mkldnn"] is True
         assert captured_kwargs["cpu_threads"] == 10
         assert captured_kwargs["device"] == "cpu"
         assert "lang" not in captured_kwargs
@@ -269,6 +269,74 @@ def test_cpu_engine_can_enable_mkldnn_explicitly(monkeypatch):
     finally:
         PaddleOCRPDFReader._engine = None
         PaddleOCRPDFReader._engine_signature = None
+
+
+def test_backend_recovery_retries_notimplemented_without_mkldnn(monkeypatch):
+    class FastEngine:
+        def predict(self, image, **kwargs):
+            raise NotImplementedError("oneDNN kernel unavailable")
+
+    class SafeEngine:
+        def predict(self, image, **kwargs):
+            return []
+
+    safe_engine = SafeEngine()
+    requested_configs = []
+
+    def fake_get_engine(**config):
+        requested_configs.append(config)
+        assert config["enable_mkldnn"] is False
+        return safe_engine
+
+    monkeypatch.setattr(PaddleOCRPDFReader, "_get_engine", fake_get_engine)
+
+    config = {
+        "language": "es",
+        "device": "cpu",
+        "detection_model_name": "PP-OCRv5_mobile_det",
+        "recognition_model_name": "latin_PP-OCRv5_mobile_rec",
+        "detection_model_dir": "C:/modelos/det",
+        "recognition_model_dir": "C:/modelos/rec",
+        "enable_mkldnn": True,
+        "cpu_threads": 10,
+    }
+
+    engine, words, page_text, recovered = PaddleOCRPDFReader._read_page_with_backend_recovery(
+        engine=FastEngine(),
+        config=config,
+        image=Image.new("RGB", (100, 200)),
+        logical_page=1,
+        page_width=612.0,
+        doctop_offset=0.0,
+        text_det_limit_side_len=1200,
+    )
+
+    assert engine is safe_engine
+    assert words == []
+    assert page_text == ""
+    assert recovered is True
+    assert len(requested_configs) == 1
+
+
+def test_backend_recovery_does_not_hide_unrelated_errors():
+    class BrokenEngine:
+        def predict(self, image, **kwargs):
+            raise ValueError("bad input")
+
+    config = {
+        "enable_mkldnn": True,
+    }
+
+    with pytest.raises(ValueError, match="bad input"):
+        PaddleOCRPDFReader._read_page_with_backend_recovery(
+            engine=BrokenEngine(),
+            config=config,
+            image=Image.new("RGB", (100, 200)),
+            logical_page=1,
+            page_width=612.0,
+            doctop_offset=0.0,
+            text_det_limit_side_len=1200,
+        )
 
 
 def test_cpu_threads_are_bounded_and_configurable(monkeypatch):

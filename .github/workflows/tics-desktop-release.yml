@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_label:
-        description: "Etiqueta de la compilación (ej. 2.4.0-rc1)"
+        description: "Etiqueta de la compilación (ej. 2.4.1-rc1)"
         required: false
         default: "manual"
       include_paddle_models:
@@ -67,7 +67,7 @@ jobs:
           python scripts/verify_windows_release.py `
             $exe `
             --output-dir dist `
-            --version "2.4.0"
+            --version "2.4.1"
           "${{ inputs.release_label }}" | Out-File -Encoding utf8 "dist/release-label.txt"
 
       - name: Prepare verified PaddleOCR model bundle
