@@ -11,12 +11,7 @@ from .tesseract_pdf_reader import TesseractPDFReader
 
 
 class PDFTextStageResult:
-    """Resultado de la etapa inicial de lectura de texto.
-
-    `document` contiene `raw_text` y todavía no incluye palabras espaciales.
-    `initial_empty_pages` indica cuántas páginas iniciales no aportaron texto y
-    `has_extractable_text` permite al pipeline decidir si requiere OCR.
-    """
+    """Resultado de la etapa inicial de lectura de texto."""
 
     __slots__ = (
         "document",
@@ -43,7 +38,6 @@ class ReaderManager:
         file_path: str | Path,
         start_page: int = 0,
     ) -> DocumentData:
-        """Lee texto y palabras espaciales desde `start_page`."""
         file_path = Path(file_path)
 
         raw_text = PDFTextReader.read(
@@ -67,7 +61,6 @@ class ReaderManager:
         file_path: str | Path,
         start_page: int = 0,
     ) -> PDFTextStageResult:
-        """Lee sólo texto para clasificar el documento antes del reader espacial."""
         file_path = Path(file_path)
         result = PDFTextReader.read_stage(
             file_path,
@@ -92,7 +85,6 @@ class ReaderManager:
         file_path: str | Path,
         start_page: int = 0,
     ) -> list[dict]:
-        """Extrae únicamente palabras y coordenadas para parsers digitales."""
         file_path = Path(file_path)
         return PDFWordReader.read(
             file_path,
@@ -104,23 +96,66 @@ class ReaderManager:
         file_path: str | Path,
         start_page: int = 0,
     ) -> DocumentData:
-        """Procesa el PDF con Tesseract, OCR primario del engine."""
-        file_path = Path(file_path)
-        document = TesseractPDFReader.read(
+        """Alias histórico de Tesseract."""
+        return ReaderManager.read_ocr_engine(
             file_path,
+            engine="tesseract",
             start_page=start_page,
         )
-        document.metadata["source_path"] = str(file_path.resolve())
-        return document
 
     @staticmethod
     def read_paddle_ocr(
         file_path: str | Path,
         start_page: int = 0,
     ) -> DocumentData:
-        """Procesa el PDF con PaddleOCR como fallback local controlado."""
         file_path = Path(file_path)
-        return PaddleOCRPDFReader.read(
+        document = PaddleOCRPDFReader.read(
             file_path,
             start_page=start_page,
+        )
+        document.metadata = dict(document.metadata or {})
+        document.metadata.setdefault("source_path", str(file_path.resolve()))
+        document.metadata.setdefault("reader", "paddleocr")
+        document.metadata.setdefault("ocr", True)
+        return document
+
+    @staticmethod
+    def read_ocr_engine(
+        file_path: str | Path,
+        engine: str,
+        start_page: int = 0,
+    ) -> DocumentData:
+        """Ejecuta exactamente un motor OCR.
+
+        Esta función no prueba el otro motor. La decisión de fallback pertenece
+        al processor y sólo ocurre después de validar el resultado primario.
+        """
+        file_path = Path(file_path)
+        normalized = str(engine or "").strip().lower()
+
+        if normalized in {"paddle", "paddle_ocr"}:
+            normalized = "paddleocr"
+        elif normalized == "tess":
+            normalized = "tesseract"
+
+        if normalized == "tesseract":
+            document = TesseractPDFReader.read(
+                file_path,
+                start_page=start_page,
+            )
+            document.metadata = dict(document.metadata or {})
+            document.metadata["source_path"] = str(file_path.resolve())
+            document.metadata.setdefault("reader", "tesseract")
+            document.metadata.setdefault("ocr", True)
+            return document
+
+        if normalized == "paddleocr":
+            return ReaderManager.read_paddle_ocr(
+                file_path,
+                start_page=start_page,
+            )
+
+        raise ValueError(
+            f"Motor OCR no soportado: {engine!r}. "
+            "Use 'tesseract' o 'paddleocr'."
         )

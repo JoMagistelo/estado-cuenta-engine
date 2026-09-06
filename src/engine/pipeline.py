@@ -1,148 +1,55 @@
 from __future__ import annotations
 
-from concurrent.futures import (
-    FIRST_COMPLETED,
-    ThreadPoolExecutor,
-    wait,
-)
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
+from detectors.bank_detector import identify_bank_key
+from detectors.document_type_detector import DocumentType, detect_document_type
+from engine.ocr_fallback_policy import normalize_ocr_engine
 from engine.statement_processor import process_single_statement_with_ocr_review
 from models.processing_result import ProcessingResult
 from readers.models import DocumentData
 from readers.reader_manager import ReaderManager
-
-from detectors.bank_detector import identify_bank_key
-from detectors.document_type_detector import (
-    DocumentType,
-    detect_document_type,
-)
 from validators.movimiento_validator import validar_movimientos
-
-
-# ============================================================
-# DOCUMENTO PREPARADO
-# ============================================================
 
 
 @dataclass(slots=True)
 class PreparedStatement:
-    """
-    Documento preparado para su procesamiento final.
-
-    La preparación determina si el documento debe procesarse
-    mediante:
-
-        - Digital
-        - OCR
-
-    Para documentos Digital ya contiene las spatial_words.
-
-    Para documentos OCR todavía NO ejecuta Tesseract.
-    """
-
     file_name: str
     pdf_path: str
     document: DocumentData | None
     processing_method: str
 
 
-# ============================================================
-# EVENTO DE PROCESAMIENTO INCREMENTAL
-# ============================================================
-
-
 @dataclass(slots=True)
 class ProcessingEvent:
-    """
-    Evento emitido por process_bank_statements_incremental().
-
-    kind:
-
-        started
-            El método de procesamiento ya fue determinado.
-
-        completed
-            El archivo terminó correctamente.
-
-        error
-            El archivo no pudo procesarse.
-    """
-
     kind: str
-
     index: int
-
     file_name: str
-
     processing_method: str | None = None
-
     result: ProcessingResult | None = None
-
     error: Exception | None = None
-
-
-# ============================================================
-# UTILIDADES
-# ============================================================
 
 
 def _rebase_spatial_words(
     spatial_words: list[dict],
     start_page: int,
 ) -> list[dict]:
-    """
-    Reconvierte spatial_words obtenidas desde la página física 1
-    para que la primera página con contenido sea la página lógica 1.
-
-    Esto evita volver a ejecutar PDFWordReader únicamente para
-    cambiar la numeración lógica de las páginas.
-
-    Ejemplo:
-
-        start_page = 2
-
-        página física 3 -> lógica 1
-        página física 4 -> lógica 2
-
-    Las páginas anteriores al start_page se descartan.
-    """
-
     if start_page <= 0:
         return spatial_words
 
     rebased_words: list[dict] = []
-
     for word in spatial_words:
-
         try:
-            page = int(
-                word.get(
-                    "page",
-                    1,
-                )
-                or 1
-            )
-        except (
-            TypeError,
-            ValueError,
-        ):
+            page = int(word.get("page", 1) or 1)
+        except (TypeError, ValueError):
             continue
-
         if page <= start_page:
             continue
-
         rebased_word = dict(word)
-
-        rebased_word["page"] = (
-            page - start_page
-        )
-
-        rebased_words.append(
-            rebased_word
-        )
-
+        rebased_word["page"] = page - start_page
+        rebased_words.append(rebased_word)
     return rebased_words
 
 
@@ -151,80 +58,18 @@ def _get_file_name(
     file_names: list[str] | None,
     index: int,
 ) -> str:
-    """
-    Obtiene el nombre visible del archivo.
-    """
-
-    return (
-        file_names[index]
-        if file_names is not None
-        else Path(pdf_path).name
-    )
-
-
-# ============================================================
-# PREPARACIÓN DE UN DOCUMENTO
-# ============================================================
+    return file_names[index] if file_names is not None else Path(pdf_path).name
 
 
 def _prepare_statement(
     pdf_path: str,
     file_name: str,
 ) -> PreparedStatement:
-    """
-    Ejecuta únicamente la etapa necesaria para determinar
-    cómo debe procesarse el documento.
-
-    Flujo:
-
-        PDF
-         ↓
-        read_text_stage()
-         ↓
-        ¿hay texto extraíble?
-         ├── NO → OCR
-         │
-         └── SÍ
-               ↓
-          ¿texto útil?
-             ├── SÍ
-             │    ↓
-             │  spatial_words
-             │    ↓
-             │  Digital
-             │
-             └── NO
-                  ↓
-             spatial_words
-                  ↓
-             ¿spatial_words útiles?
-                ├── SÍ → Digital
-                └── NO → OCR
-
-    IMPORTANTE:
-    Esta función NO ejecuta OCR.
-
-    Eso permite que los documentos OCR esperen en su propio
-    procesamiento mientras los Digitales continúan.
-    """
-
-    # ========================================================
-    # 1. SOLO TEXTO
-    # ========================================================
-
-    text_stage = ReaderManager.read_text_stage(
-        pdf_path,
-        start_page=0,
-    )
-
+    """Clasifica Digital/OCR sin ejecutar ningún motor OCR."""
+    text_stage = ReaderManager.read_text_stage(pdf_path, start_page=0)
     document = text_stage.document
 
-    # ========================================================
-    # 2. ¿HAY TEXTO EXTRAÍBLE?
-    # ========================================================
-
     if not text_stage.has_extractable_text:
-
         return PreparedStatement(
             file_name=file_name,
             pdf_path=pdf_path,
@@ -232,58 +77,21 @@ def _prepare_statement(
             processing_method="OCR",
         )
 
-    # ========================================================
-    # 3. ¿EL TEXTO ES UTILIZABLE?
-    # ========================================================
-
-    document_type = detect_document_type(
-        document
-    )
-
-    # ========================================================
-    # TEXTO ÚTIL
-    # ========================================================
-
-    if (
-        document_type
-        == DocumentType.PDF_DIGITAL
-    ):
-
-        spatial_words = (
-            ReaderManager.read_spatial_words(
-                pdf_path,
-                start_page=0,
-            )
-        )
-
-        # -----------------------------------------------
-        # PÁGINAS INICIALES VACÍAS
-        # -----------------------------------------------
-
-        initial_empty_pages = (
-            text_stage.initial_empty_pages
-        )
-
+    document_type = detect_document_type(document)
+    if document_type == DocumentType.PDF_DIGITAL:
+        spatial_words = ReaderManager.read_spatial_words(pdf_path, start_page=0)
+        initial_empty_pages = text_stage.initial_empty_pages
         if initial_empty_pages != 0:
-
-            logical_text_stage = (
-                ReaderManager.read_text_stage(
-                    pdf_path,
-                    start_page=initial_empty_pages,
-                )
+            logical_text_stage = ReaderManager.read_text_stage(
+                pdf_path,
+                start_page=initial_empty_pages,
             )
-
-            document = (
-                logical_text_stage.document
-            )
-
+            document = logical_text_stage.document
             spatial_words = _rebase_spatial_words(
                 spatial_words,
                 initial_empty_pages,
             )
-
         document.spatial_words = spatial_words
-
         return PreparedStatement(
             file_name=file_name,
             pdf_path=pdf_path,
@@ -291,66 +99,28 @@ def _prepare_statement(
             processing_method="Digital",
         )
 
-    # ========================================================
-    # TEXTO SOSPECHOSO
-    # ========================================================
-
-    spatial_words = (
-        ReaderManager.read_spatial_words(
-            pdf_path,
-            start_page=0,
-        )
-    )
-
+    spatial_words = ReaderManager.read_spatial_words(pdf_path, start_page=0)
     document.spatial_words = spatial_words
+    document_type = detect_document_type(document)
 
-    document_type = detect_document_type(
-        document
-    )
-
-    # ========================================================
-    # LAS SPATIAL_WORDS SON ÚTILES
-    # ========================================================
-
-    if (
-        document_type
-        == DocumentType.PDF_DIGITAL
-    ):
-
-        initial_empty_pages = (
-            text_stage.initial_empty_pages
-        )
-
+    if document_type == DocumentType.PDF_DIGITAL:
+        initial_empty_pages = text_stage.initial_empty_pages
         if initial_empty_pages != 0:
-
-            logical_text_stage = (
-                ReaderManager.read_text_stage(
-                    pdf_path,
-                    start_page=initial_empty_pages,
-                )
+            logical_text_stage = ReaderManager.read_text_stage(
+                pdf_path,
+                start_page=initial_empty_pages,
             )
-
-            document = (
-                logical_text_stage.document
+            document = logical_text_stage.document
+            document.spatial_words = _rebase_spatial_words(
+                spatial_words,
+                initial_empty_pages,
             )
-
-            document.spatial_words = (
-                _rebase_spatial_words(
-                    spatial_words,
-                    initial_empty_pages,
-                )
-            )
-
         return PreparedStatement(
             file_name=file_name,
             pdf_path=pdf_path,
             document=document,
             processing_method="Digital",
         )
-
-    # ========================================================
-    # LAS SPATIAL_WORDS TAMBIÉN SON INÚTILES
-    # ========================================================
 
     return PreparedStatement(
         file_name=file_name,
@@ -360,104 +130,91 @@ def _prepare_statement(
     )
 
 
-# ============================================================
-# PROCESAMIENTO FINAL
-# ============================================================
+def _result_validations(estado_cuenta, ocr_review) -> list:
+    if ocr_review is not None:
+        return list(
+            ocr_review.get_candidate(ocr_review.selected_engine).validaciones
+        )
+
+    if (
+        getattr(estado_cuenta, "movimientos", None)
+        and getattr(estado_cuenta, "resumen_financiero", None)
+    ):
+        return validar_movimientos(
+            movimientos=estado_cuenta.movimientos,
+            resumen=estado_cuenta.resumen_financiero,
+        )
+    return []
 
 
 def _process_prepared_statement(
     prepared: PreparedStatement,
+    ocr_primary_engine: str = "tesseract",
 ) -> ProcessingResult:
+    """Procesa un documento respetando el motor OCR principal elegido.
+
+    Digital nunca entra a OCR. OCR ejecuta primero un único motor y el processor
+    sólo invoca el secundario si las validaciones de abonos/cargos fallan o no
+    pudieron calcularse.
     """
-    Ejecuta el procesamiento final de un documento previamente
-    clasificado.
-
-    Digital:
-        utiliza el DocumentData ya preparado.
-
-    OCR:
-        ejecuta Tesseract como motor primario y, cuando corresponde,
-        conserva también el candidato PaddleOCR para revisión.
-    """
-
     document = prepared.document
-
-    # ========================================================
-    # OCR
-    # ========================================================
+    primary_engine = normalize_ocr_engine(ocr_primary_engine)
 
     if prepared.processing_method == "OCR":
-
-        document = ReaderManager.read_ocr(
+        document = ReaderManager.read_ocr_engine(
             prepared.pdf_path,
+            engine=primary_engine,
             start_page=0,
         )
 
-    # ========================================================
-    # DIGITAL
-    # ========================================================
-
     if document is None:
-
         raise RuntimeError(
             "El documento no contiene un DocumentData válido "
             f"para el método '{prepared.processing_method}'."
         )
 
-    # ========================================================
-    # DETECCIÓN DE BANCO
-    # ========================================================
-
     bank_key = identify_bank_key(
         raw_text=document.raw_text,
         file_name=prepared.file_name,
     )
-
     if not bank_key:
-
         raise ValueError(
             "No se pudo identificar la institución financiera "
             f"para el archivo '{prepared.file_name}'. "
-            "No se encontró una CLABE bancaria válida ni "
-            "una firma bancaria reconocible en el nombre del archivo."
+            "No se encontró una CLABE bancaria válida ni una firma bancaria "
+            "reconocible en el nombre del archivo."
         )
 
-    # ========================================================
-    # PARSER + REVISIÓN OCR
-    # ========================================================
-
-    estado_cuenta, document, ocr_review = (
-        process_single_statement_with_ocr_review(
-            document=document,
-            bank_key=bank_key,
-        )
+    estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
+        document=document,
+        bank_key=bank_key,
     )
+    validaciones = _result_validations(estado_cuenta, ocr_review)
 
-    # ========================================================
-    # VALIDACIONES DEL CANDIDATO SELECCIONADO
-    # ========================================================
+    metadata = dict(document.metadata or {})
+    selected_engine = None
+    primary_used = None
+    secondary_engine = None
+    fallback_attempted = False
+    fallback_used = False
 
-    if ocr_review is not None:
-        selected_candidate = ocr_review.get_candidate(
-            ocr_review.selected_engine
-        )
-        validaciones = list(selected_candidate.validaciones)
-    else:
-        validaciones = []
-
-        if (
-            estado_cuenta.movimientos
-            and estado_cuenta.resumen_financiero
-        ):
-
-            validaciones = validar_movimientos(
-                movimientos=estado_cuenta.movimientos,
-                resumen=estado_cuenta.resumen_financiero,
-            )
-
-    # ========================================================
-    # RESULTADO
-    # ========================================================
+    if prepared.processing_method == "OCR":
+        primary_used = str(metadata.get("ocr_primary_engine") or primary_engine)
+        secondary_engine = metadata.get("ocr_secondary_engine")
+        fallback_attempted = bool(metadata.get("ocr_fallback_attempted", False))
+        fallback_used = bool(metadata.get("ocr_fallback_selected", False))
+        selected_engine = str(metadata.get("reader") or primary_engine).lower()
+        if ocr_review is not None:
+            selected_engine = ocr_review.selected_engine
+            fallback_attempted = True
+            fallback_used = selected_engine != primary_used
+            if secondary_engine is None:
+                secondary_candidates = [
+                    engine
+                    for engine in ocr_review.available_engines()
+                    if engine != primary_used
+                ]
+                secondary_engine = secondary_candidates[0] if secondary_candidates else None
 
     return ProcessingResult(
         file_name=prepared.file_name,
@@ -468,58 +225,34 @@ def _process_prepared_statement(
         validaciones=validaciones,
         processing_method=prepared.processing_method,
         ocr_review=ocr_review,
+        ocr_engine=selected_engine,
+        ocr_primary_engine=primary_used,
+        ocr_secondary_engine=secondary_engine,
+        fallback_attempted=fallback_attempted,
+        fallback_used=fallback_used,
     )
-
-
-# ============================================================
-# API SECUENCIAL EXISTENTE
-# ============================================================
 
 
 def process_bank_statements(
     pdf_paths: list[str],
     file_names: list[str] | None = None,
+    ocr_primary_engine: str = "tesseract",
 ) -> list[ProcessingResult]:
-    """
-    Procesa múltiples estados de cuenta de forma secuencial.
-
-    Esta función conserva la API existente.
-
-    La nueva ejecución concurrente utiliza
-    process_bank_statements_incremental().
-    """
-
     results: list[ProcessingResult] = []
+    primary_engine = normalize_ocr_engine(ocr_primary_engine)
 
-    for index, pdf_path in enumerate(
-        pdf_paths
-    ):
-
-        file_name = _get_file_name(
-            pdf_path,
-            file_names,
-            index,
-        )
-
+    for index, pdf_path in enumerate(pdf_paths):
+        file_name = _get_file_name(pdf_path, file_names, index)
         prepared = _prepare_statement(
             pdf_path=pdf_path,
             file_name=file_name,
         )
-
         result = _process_prepared_statement(
-            prepared
+            prepared,
+            ocr_primary_engine=primary_engine,
         )
-
-        results.append(
-            result
-        )
-
+        results.append(result)
     return results
-
-
-# ============================================================
-# API CONCURRENTE E INCREMENTAL
-# ============================================================
 
 
 def process_bank_statements_incremental(
@@ -528,61 +261,17 @@ def process_bank_statements_incremental(
     classification_workers: int = 2,
     digital_workers: int = 4,
     ocr_workers: int = 1,
+    ocr_primary_engine: str = "tesseract",
 ):
-    """
-    Procesa múltiples estados de cuenta de forma concurrente
-    y produce resultados incrementalmente.
-
-    Arquitectura:
-
-        clasificación
-              │
-        ┌─────┴─────┐
-        │           │
-     Digital       OCR
-        │           │
-     workers      worker
-        │           │
-        └─────┬─────┘
-              │
-          resultados
-
-    Los documentos Digital pueden terminar y producir
-    resultados mientras Tesseract continúa procesando
-    documentos OCR.
-
-    El OCR se limita por defecto a un worker para evitar que
-    varios procesos pesados de Tesseract/Paddle compitan entre sí.
-    """
-
+    """Procesa lotes concurrentes y emite resultados conforme terminan."""
     total = len(pdf_paths)
-
     if total == 0:
         return
 
-    classification_workers = max(
-        1,
-        min(
-            classification_workers,
-            total,
-        ),
-    )
-
-    digital_workers = max(
-        1,
-        min(
-            digital_workers,
-            total,
-        ),
-    )
-
-    ocr_workers = max(
-        1,
-        min(
-            ocr_workers,
-            total,
-        ),
-    )
+    primary_engine = normalize_ocr_engine(ocr_primary_engine)
+    classification_workers = max(1, min(classification_workers, total))
+    digital_workers = max(1, min(digital_workers, total))
+    ocr_workers = max(1, min(ocr_workers, total))
 
     with (
         ThreadPoolExecutor(
@@ -598,29 +287,15 @@ def process_bank_statements_incremental(
             thread_name_prefix="statement-ocr",
         ) as ocr_executor,
     ):
-
         future_map = {}
 
-        # ====================================================
-        # INICIAR CLASIFICACIÓN
-        # ====================================================
-
-        for index, pdf_path in enumerate(
-            pdf_paths
-        ):
-
-            file_name = _get_file_name(
-                pdf_path,
-                file_names,
-                index,
-            )
-
+        for index, pdf_path in enumerate(pdf_paths):
+            file_name = _get_file_name(pdf_path, file_names, index)
             future = classification_executor.submit(
                 _prepare_statement,
                 pdf_path,
                 file_name,
             )
-
             future_map[future] = (
                 "classification",
                 index,
@@ -628,40 +303,19 @@ def process_bank_statements_incremental(
                 None,
             )
 
-        # ====================================================
-        # PROCESAR EVENTOS
-        # ====================================================
-
         while future_map:
-
             done, _ = wait(
                 future_map.keys(),
                 return_when=FIRST_COMPLETED,
             )
 
             for future in done:
-
-                (
-                    future_type,
-                    index,
-                    file_name,
-                    prepared,
-                ) = future_map.pop(
-                    future
-                )
-
-                # =========================================
-                # CLASIFICACIÓN TERMINADA
-                # =========================================
+                future_type, index, file_name, prepared = future_map.pop(future)
 
                 if future_type == "classification":
-
                     try:
-
                         prepared = future.result()
-
                     except Exception as ex:
-
                         yield ProcessingEvent(
                             kind="error",
                             index=index,
@@ -669,90 +323,50 @@ def process_bank_statements_incremental(
                             processing_method=None,
                             error=ex,
                         )
-
                         continue
-
-                    # -------------------------------------
-                    # INFORMAR MÉTODO
-                    # -------------------------------------
 
                     yield ProcessingEvent(
                         kind="started",
                         index=index,
                         file_name=file_name,
-                        processing_method=(
-                            prepared.processing_method
-                        ),
+                        processing_method=prepared.processing_method,
                     )
 
-                    # -------------------------------------
-                    # ENVIAR AL POOL CORRESPONDIENTE
-                    # -------------------------------------
-
-                    if (
-                        prepared.processing_method
-                        == "OCR"
-                    ):
-
-                        processing_future = (
-                            ocr_executor.submit(
-                                _process_prepared_statement,
-                                prepared,
-                            )
-                        )
-
-                    else:
-
-                        processing_future = (
-                            digital_executor.submit(
-                                _process_prepared_statement,
-                                prepared,
-                            )
-                        )
-
-                    future_map[
-                        processing_future
-                    ] = (
+                    executor = (
+                        ocr_executor
+                        if prepared.processing_method == "OCR"
+                        else digital_executor
+                    )
+                    processing_future = executor.submit(
+                        _process_prepared_statement,
+                        prepared,
+                        primary_engine,
+                    )
+                    future_map[processing_future] = (
                         "processing",
                         index,
                         file_name,
                         prepared,
                     )
+                    continue
 
-                # =========================================
-                # PROCESAMIENTO TERMINADO
-                # =========================================
-
-                else:
-
-                    try:
-
-                        result = future.result()
-
-                    except Exception as ex:
-
-                        method = (
-                            prepared.processing_method
-                            if prepared is not None
-                            else None
-                        )
-
-                        yield ProcessingEvent(
-                            kind="error",
-                            index=index,
-                            file_name=file_name,
-                            processing_method=method,
-                            error=ex,
-                        )
-
-                        continue
-
+                try:
+                    result = future.result()
+                except Exception as ex:
+                    method = prepared.processing_method if prepared is not None else None
                     yield ProcessingEvent(
-                        kind="completed",
+                        kind="error",
                         index=index,
                         file_name=file_name,
-                        processing_method=(
-                            prepared.processing_method
-                        ),
-                        result=result,
+                        processing_method=method,
+                        error=ex,
                     )
+                    continue
+
+                yield ProcessingEvent(
+                    kind="completed",
+                    index=index,
+                    file_name=file_name,
+                    processing_method=prepared.processing_method,
+                    result=result,
+                )
