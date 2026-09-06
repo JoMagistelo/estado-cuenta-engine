@@ -4,7 +4,7 @@ import re
 
 import apply_ocr_primary_ui_patch as patch
 
-
+# Runner temporal y determinista para aplicar el parche sobre la rama vigente.
 _original_replace_count = patch.replace_count
 
 
