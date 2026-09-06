@@ -82,6 +82,7 @@ def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
     monkeypatch.setenv("PADDLEOCR_LANG", "es")
     monkeypatch.delenv("PADDLEOCR_ENABLE_MKLDNN", raising=False)
     monkeypatch.delenv("PADDLEOCR_CPU_THREADS", raising=False)
+    monkeypatch.delenv("PADDLEOCR_TEXT_REC_BATCH_SIZE", raising=False)
 
     config = PaddleOCRPDFReader._load_config()
 
@@ -92,6 +93,7 @@ def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
     assert config["recognition_model_name"] == "latin_PP-OCRv5_mobile_rec"
     assert config["enable_mkldnn"] is True
     assert config["cpu_threads"] == 10
+    assert config["text_recognition_batch_size"] == 8
 
 
 def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
@@ -114,7 +116,7 @@ def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
         PaddleOCRPDFReader._load_config()
 
 
-def test_cpu_engine_enables_mkldnn_and_threads_by_default(monkeypatch):
+def test_cpu_engine_enables_mkldnn_threads_and_batch_by_default(monkeypatch):
     captured_kwargs = {}
 
     class FakePaddleOCR:
@@ -141,11 +143,13 @@ def test_cpu_engine_enables_mkldnn_and_threads_by_default(monkeypatch):
             recognition_model_dir="C:/modelos/rec",
             enable_mkldnn=True,
             cpu_threads=10,
+            text_recognition_batch_size=8,
         )
 
         assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "1"
         assert captured_kwargs["enable_mkldnn"] is True
         assert captured_kwargs["cpu_threads"] == 10
+        assert captured_kwargs["text_recognition_batch_size"] == 8
         assert captured_kwargs["device"] == "cpu"
         assert "lang" not in captured_kwargs
         assert "ocr_version" not in captured_kwargs
@@ -180,11 +184,13 @@ def test_cpu_engine_can_disable_mkldnn_for_diagnostics(monkeypatch):
             recognition_model_dir="C:/modelos/rec",
             enable_mkldnn=False,
             cpu_threads=4,
+            text_recognition_batch_size=2,
         )
 
         assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "0"
         assert captured_kwargs["enable_mkldnn"] is False
         assert captured_kwargs["cpu_threads"] == 4
+        assert captured_kwargs["text_recognition_batch_size"] == 2
     finally:
         PaddleOCRPDFReader._engine = None
         PaddleOCRPDFReader._engine_signature = None
@@ -202,6 +208,23 @@ def test_cpu_threads_are_bounded_and_configurable(monkeypatch):
 
     monkeypatch.setenv("PADDLEOCR_CPU_THREADS", "99")
     assert PaddleOCRPDFReader._configured_cpu_threads() == 32
+
+
+def test_recognition_batch_size_is_bounded_and_configurable(monkeypatch):
+    monkeypatch.delenv("PADDLEOCR_TEXT_REC_BATCH_SIZE", raising=False)
+    assert PaddleOCRPDFReader._configured_recognition_batch_size() == 8
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_REC_BATCH_SIZE", "12")
+    assert PaddleOCRPDFReader._configured_recognition_batch_size() == 12
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_REC_BATCH_SIZE", "0")
+    assert PaddleOCRPDFReader._configured_recognition_batch_size() == 1
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_REC_BATCH_SIZE", "99")
+    assert PaddleOCRPDFReader._configured_recognition_batch_size() == 32
+
+    monkeypatch.setenv("PADDLEOCR_TEXT_REC_BATCH_SIZE", "invalido")
+    assert PaddleOCRPDFReader._configured_recognition_batch_size() == 8
 
 
 def test_detection_side_limit_is_bounded_and_configurable(monkeypatch):
