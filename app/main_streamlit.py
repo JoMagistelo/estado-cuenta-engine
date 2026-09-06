@@ -18,6 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 's
 from engine.ocr_fallback_policy import normalize_ocr_engine
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
+from exporters.excel.batch_exporter import pending_ocr_selection_files
 
 APP_VERSION = '2.3'
 PROCESSING_UI_POLL_INTERVAL = 0.75
@@ -182,6 +183,29 @@ def inject_css() -> None:
             margin-top: -8px;
             margin-bottom: 6px;
         }}
+        .selector-columns {{
+            color: #6B7075;
+            font-size: .72rem;
+            font-weight: 700;
+            margin: 0 0 3px 0;
+        }}
+        .movement-total {{
+            background: {GOB_CREAM};
+            border: 1px solid #E0DDD7;
+            border-radius: 8px;
+            padding: 6px 10px;
+            min-height: 2.25rem;
+            line-height: 1.05;
+        }}
+        .movement-total .label {{
+            color: #6B7075;
+            font-size: .70rem;
+        }}
+        .movement-total .value {{
+            color: #202124;
+            font-size: .93rem;
+            font-weight: 750;
+        }}
         div[data-testid="stMetric"] {{
             background: white;
             border: 1px solid #E0E3E7;
@@ -192,6 +216,15 @@ def inject_css() -> None:
             border: 1px solid #DADDE1;
             border-radius: 10px;
             overflow: hidden;
+        }}
+        div[data-testid="stTextInput"] input {{
+            min-height: 2.25rem;
+            height: 2.25rem;
+            font-size: .88rem;
+        }}
+        div[data-baseweb="select"] > div {{
+            min-height: 2.25rem;
+            font-size: .88rem;
         }}
         </style>
         ''',
@@ -438,8 +471,9 @@ def process_label(item: dict[str, Any]) -> str:
         if result is None:
             return engine_label(st.session_state.ocr_primary_engine)
         label = engine_label(getattr(result, 'ocr_engine', None))
-        if getattr(result, 'fallback_used', False):
-            return f'{label} · fallback'
+        review = getattr(result, 'ocr_review', None)
+        if review is not None and review.requires_user_selection:
+            return f'{label} · {"elegido" if result.ocr_selection_confirmed else "elegir"}'
         if getattr(result, 'fallback_attempted', False):
             return f'{label} · revisado'
         return label
@@ -562,6 +596,10 @@ def render_selector_column(
     items: list[tuple[int, dict[str, Any]]],
 ) -> None:
     st.markdown(f'#### {title}')
+    st.markdown(
+        '<div class="selector-columns">Archivo / estado · Motor · Abonos · Cargos</div>',
+        unsafe_allow_html=True,
+    )
     if not items:
         st.caption('Sin archivos en este filtro.')
         return
@@ -575,12 +613,12 @@ def render_selector_column(
         )
         for index, item in grouped[bank]:
             result = item.get('result')
-            a = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
-            c = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
+            abonos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
+            cargos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
             selected = st.session_state.selected_index == index
             label = (
                 f"{status_label(item)} · {item['file_name']} · {process_label(item)} · "
-                f'A {a} · C {c}'
+                f'Abonos {abonos} · Cargos {cargos}'
             )
             completed = item.get('status') == 'completed' and result is not None
             if st.button(
@@ -599,7 +637,7 @@ def render_result_selector() -> None:
         return
 
     completed = completed_items()
-    filter_col, dropdown_col = st.columns([1.25, 1])
+    filter_col, dropdown_col, _spacer = st.columns([1, 1.15, 1.85])
     with filter_col:
         query = st.text_input(
             'Filtrar resultados',
@@ -711,33 +749,58 @@ def render_ocr_candidate_selector(result) -> None:
     engines = list(result.available_ocr_engines())
     if len(engines) < 2:
         return
+
     st.markdown('#### Comparación OCR')
-    selected = result.selected_ocr_engine
-    selected_engine = st.radio(
-        'Resultado que se conservará para la exportación',
-        options=engines,
-        index=engines.index(selected),
-        format_func=engine_label,
-        horizontal=True,
-        key=f'ocr_candidate_{result.file_name}',
+    active = result.selected_ocr_engine
+    confirmed = result.confirmed_ocr_engine
+    recommended = result.recommended_ocr_engine
+    st.caption(
+        f'Sugerencia automática: {engine_label(recommended)}. '
+        'Puedes revisar ambos resultados; la sugerencia no se conserva para el Excel por defecto.'
     )
-    if selected_engine != selected:
-        result.select_ocr_engine(selected_engine)
-        st.rerun()
+    if confirmed is None:
+        st.warning('Debes elegir explícitamente uno de los dos motores antes de exportar este archivo.')
+    else:
+        st.success(f'Para el Excel se conservará: {engine_label(confirmed)}.')
+
     cols = st.columns(len(engines))
     for col, engine in zip(cols, engines):
         candidate = review.get_candidate(engine)
+        is_active = engine == active
+        is_confirmed = engine == confirmed
         with col:
             with st.container(border=True):
-                st.markdown(f'**{engine_label(engine)}**')
+                title_suffix = []
+                if is_active:
+                    title_suffix.append('vista actual')
+                if is_confirmed:
+                    title_suffix.append('elegido para Excel')
+                suffix = f" · {' · '.join(title_suffix)}" if title_suffix else ''
+                st.markdown(f'**{engine_label(engine)}{suffix}**')
                 st.caption(
                     f'{candidate.movement_count} mov. · '
                     f'{candidate.validation_failed}/{candidate.validation_total} validaciones con falla'
                 )
-    st.caption(
-        f'Recomendación automática: {engine_label(result.recommended_ocr_engine)}. '
-        'La selección actual es la que se mostrará y exportará.'
-    )
+                action_cols = st.columns(2)
+                with action_cols[0]:
+                    if st.button(
+                        'Ver resultado',
+                        key=f'ocr_preview_{result.file_name}_{engine}',
+                        disabled=is_active,
+                        use_container_width=True,
+                    ):
+                        result.preview_ocr_engine(engine)
+                        st.rerun()
+                with action_cols[1]:
+                    if st.button(
+                        'Elegir para Excel' if not is_confirmed else 'Elegido ✓',
+                        key=f'ocr_confirm_{result.file_name}_{engine}',
+                        disabled=is_confirmed,
+                        type='primary' if not is_confirmed else 'secondary',
+                        use_container_width=True,
+                    ):
+                        result.select_ocr_engine(engine)
+                        st.rerun()
 
 
 def render_primary_validations(result) -> None:
@@ -883,6 +946,18 @@ def render_analytics(result) -> None:
     st.bar_chart(flow_frequency(result), height=220)
 
 
+def render_movement_total(label: str, value: float) -> None:
+    st.markdown(
+        f'''
+        <div class="movement-total">
+          <div class="label">{label}</div>
+          <div class="value">{format_money(value)}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
 def render_result(result) -> None:
     estado = getattr(result, 'estado_cuenta', None)
     if estado is None:
@@ -978,13 +1053,34 @@ def render_result(result) -> None:
         return
 
     df = movement_dataframe(result)
-    movement_query = st.text_input(
-        'Filtrar movimientos',
-        placeholder='Buscar fecha, concepto, beneficiario, referencia, importe…',
-        key=f'movement_filter_{result.file_name}',
-    )
+    filter_col, cargo_col, abono_col, _space = st.columns([2.2, 1, 1, 2.2])
+    with filter_col:
+        movement_query = st.text_input(
+            'Filtrar movimientos',
+            placeholder='Buscar fecha, concepto, beneficiario, referencia, importe…',
+            label_visibility='collapsed',
+            key=f'movement_filter_{result.file_name}',
+        )
     filtered_df = filter_movement_dataframe(df, movement_query)
-    st.caption(f'Mostrando {len(filtered_df)} de {len(df)} movimiento(s).')
+    cargo_total = (
+        pd.to_numeric(filtered_df['Cargo'], errors='coerce').fillna(0).sum()
+        if 'Cargo' in filtered_df.columns
+        else 0.0
+    )
+    abono_total = (
+        pd.to_numeric(filtered_df['Abono'], errors='coerce').fillna(0).sum()
+        if 'Abono' in filtered_df.columns
+        else 0.0
+    )
+    with cargo_col:
+        render_movement_total('Cargos', float(cargo_total))
+    with abono_col:
+        render_movement_total('Abonos', float(abono_total))
+
+    st.caption(
+        f'Mostrando {len(filtered_df)} de {len(df)} movimiento(s). '
+        'Los totales corresponden al filtro actual.'
+    )
     column_config = {
         'Cargo': st.column_config.NumberColumn('Cargo', format='$%.2f', width='small'),
         'Abono': st.column_config.NumberColumn('Abono', format='$%.2f', width='small'),
@@ -1016,14 +1112,26 @@ def render_export_section() -> None:
     if not st.session_state.results:
         return
     st.divider()
+    pending = pending_ocr_selection_files(list(st.session_state.results))
     col_text, col_button = st.columns([3, 1])
     with col_text:
         st.markdown('### 📤 Exportación')
         st.caption(
-            'El archivo incluye únicamente los resultados terminados y usa la selección OCR activa de cada PDF.'
+            'El archivo incluye únicamente resultados terminados. En PDFs con dos motores OCR, la elección para Excel debe ser explícita.'
         )
+        if pending:
+            st.warning(
+                f'Falta elegir el motor OCR para {len(pending)} archivo(s): '
+                + ', '.join(pending[:3])
+                + ('…' if len(pending) > 3 else '')
+            )
     with col_button:
-        if st.button('Preparar Excel', type='primary', use_container_width=True):
+        if st.button(
+            'Preparar Excel',
+            type='primary',
+            use_container_width=True,
+            disabled=bool(pending),
+        ):
             excel_path = None
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
@@ -1106,17 +1214,20 @@ def render_header() -> None:
                     format_func=engine_label,
                 )
                 st.caption(
-                    'Se recomienda Tesseract. Cambie a PaddleOCR sólo si observa diferencias importantes entre el PDF original y el resultado exportado; suele ser más lento.'
+                    'El motor principal sólo define el orden de procesamiento. Cuando se ejecutan ambos motores, tú eliges cuál resultado conservar para el Excel.'
                 )
                 if st.button('Guardar configuración', key='save_config'):
                     st.session_state.ocr_primary_engine = normalize_ocr_engine(engine)
                     st.success('Guardado')
             with st.popover('❔', help='Ayuda'):
                 st.markdown(
-                    '**Validaciones**  \nA y C representan las conciliaciones principales de Abonos y Cargos.'
+                    '**Validaciones**  \nLas columnas Abonos y Cargos muestran las conciliaciones principales sin abreviaturas.'
                 )
                 st.markdown(
-                    '**Estados vivos**  \nLos PDFs se muestran mientras se clasifican y procesan. Los terminados pueden revisarse y exportarse sin esperar al lote completo.'
+                    '**OCR dual**  \nSi existen resultados de Tesseract y PaddleOCR puedes revisar ambos y debes elegir explícitamente cuál conservar para Excel.'
+                )
+                st.markdown(
+                    '**Estados vivos**  \nLos PDFs se muestran mientras se clasifican y procesan. Los terminados pueden revisarse sin esperar al lote completo.'
                 )
                 st.markdown(
                     '**Formatos habilitados**  \nBBVA Digital · Banorte Digital/Escaneado · Banamex Digital · HSBC Digital/Escaneado · Scotiabank Digital · Mifel · CETESDIRECTO · MercadoPago'
