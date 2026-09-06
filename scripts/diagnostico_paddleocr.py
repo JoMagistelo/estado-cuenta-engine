@@ -15,6 +15,7 @@ from engine.statement_processor import (
     _process_once,
     process_single_statement_with_ocr_review,
 )
+from readers.paddleocr_pdf_reader import PaddleOCRConfigurationError
 from readers.reader_manager import ReaderManager
 
 
@@ -33,6 +34,15 @@ def _print_candidate(candidate) -> None:
         f"{candidate.movement_count} movimientos / "
         f"{candidate.validation_total} validaciones / "
         f"{candidate.validation_failed} fallidas"
+    )
+
+
+def _print_model_bootstrap_hint() -> None:
+    print(
+        "PREPARACIÓN: ejecuta una sola vez `python "
+        "scripts\\preparar_modelos_paddleocr.py --probar-inferencia` y repite "
+        "este diagnóstico.",
+        file=sys.stderr,
     )
 
 
@@ -67,6 +77,13 @@ def _run_forced_comparison(pdf_path: Path, visible_name: str) -> int:
             paddle_estado,
             paddle_document,
         )
+    except PaddleOCRConfigurationError as exc:
+        print(
+            f"ERROR PaddleOCR: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        _print_model_bootstrap_hint()
+        return 7
     except Exception as exc:
         print(
             f"ERROR PaddleOCR/Tesseract: {type(exc).__name__}: {exc}",
@@ -177,6 +194,8 @@ def main() -> int:
             "PaddleOCR no produjo candidato: "
             f"{review.paddle_error_type}"
         )
+        if review.paddle_error_type == "PaddleOCRConfigurationError":
+            _print_model_bootstrap_hint()
 
     requested_engine = (
         review.recommended_engine
