@@ -287,7 +287,7 @@ def main() -> int:
         default=_default_destination(),
         help=(
             "Raíz donde se instalarán los modelos. Por defecto usa "
-            "%LOCALAPPDATA%\\EstadoCuentaEngine\\PaddleOCR en Windows."
+            "LOCALAPPDATA\\EstadoCuentaEngine\\PaddleOCR en Windows."
         ),
     )
     parser.add_argument(
