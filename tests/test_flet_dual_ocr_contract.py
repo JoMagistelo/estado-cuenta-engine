@@ -12,5 +12,6 @@ def test_flet_keeps_manual_dual_ocr_review_controls():
     assert "'Elegir para Excel'" in source
     assert "result.preview_ocr_engine(engine)" in source
     assert "result.select_ocr_engine(engine)" in source
-    assert "confirmed_engine = getattr(result, 'confirmed_ocr_engine', None)" in source
-    assert "requires_user_selection" in source
+    assert "confirmed = result.confirmed_ocr_engine" in source
+    assert "if confirmed is None" in source
+    assert "la elección para Excel siempre es manual" in source
