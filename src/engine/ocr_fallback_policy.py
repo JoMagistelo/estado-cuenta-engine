@@ -60,8 +60,8 @@ def paddle_fallback_enabled(bank_key: str) -> bool:
     """Compatibilidad con la configuración histórica del fallback PaddleOCR.
 
     El flujo nuevo de UI ya no necesita esta bandera: cuando el usuario elige
-    Tesseract como primario, PaddleOCR es el secundario y sólo se ejecuta si
-    falla una validación financiera principal. La función se conserva para
+    Tesseract como primario, PaddleOCR es el secundario y se ejecuta cuando
+    el resultado presenta una señal objetiva de revisión financiera. La función se conserva para
     scripts y pruebas existentes.
     """
     if not _env_flag("PADDLEOCR_FALLBACK_ENABLED", default=False):
@@ -120,31 +120,32 @@ def fallback_trigger_reasons(
     *,
     has_movements: bool,
 ) -> tuple[str, ...]:
-    """Razones de fallback limitadas a las dos validaciones financieras clave.
+    """Describe señales objetivas que justifican ejecutar el segundo OCR.
 
-    No se activa un segundo OCR por cantidad de movimientos, campos opcionales,
-    score heurístico ni por simple disponibilidad. Si no hay movimientos, las
-    validaciones principales no podrán existir y eso se representa como
-    ``validacion_principal_ausente``.
+    Se recupera el comportamiento de revisión dual: cualquier validación con
+    tache puede indicar un problema de lectura OCR y debe permitir comparar el
+    mismo PDF con el motor secundario. También se intenta cuando faltan las
+    conciliaciones clave o no se obtuvieron movimientos/validaciones.
     """
     status = _primary_validation_map(validaciones)
+    profile = validation_profile(validaciones)
     reasons: list[str] = []
 
     missing = [name for name in PRIMARY_VALIDATION_NAMES if name not in status]
-    failed = [name for name, ok in status.items() if not ok]
+    primary_failed = [name for name, ok in status.items() if not ok]
 
-    # Se conservan estas etiquetas diagnósticas por compatibilidad, pero la
-    # decisión de fallback se toma únicamente por validaciones principales.
     if not has_movements:
         reasons.append("sin_movimientos")
     if not validaciones:
         reasons.append("sin_validaciones")
+    if profile.failed > 0:
+        reasons.append("validacion_fallida")
     if missing:
         reasons.append("validacion_principal_ausente")
-    if failed:
+    if primary_failed:
         reasons.append("validacion_principal_fallida")
 
-    return tuple(reasons)
+    return tuple(dict.fromkeys(reasons))
 
 
 def should_attempt_secondary_fallback(
@@ -152,16 +153,11 @@ def should_attempt_secondary_fallback(
     *,
     has_movements: bool = True,
 ) -> bool:
-    reasons = fallback_trigger_reasons(
-        validaciones,
-        has_movements=has_movements,
-    )
-    return any(
-        reason in {
-            "validacion_principal_ausente",
-            "validacion_principal_fallida",
-        }
-        for reason in reasons
+    return bool(
+        fallback_trigger_reasons(
+            validaciones,
+            has_movements=has_movements,
+        )
     )
 
 
@@ -171,7 +167,7 @@ def should_attempt_paddle_fallback(
     *,
     has_movements: bool = True,
 ) -> bool:
-    """API histórica: respeta la bandera vieja y el nuevo criterio estricto."""
+    """API histórica: respeta la bandera vieja y el criterio de revisión dual."""
     if not paddle_fallback_enabled(bank_key):
         return False
     return should_attempt_secondary_fallback(

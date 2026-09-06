@@ -24,8 +24,9 @@ APP_VERSION = '2.3'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 MOVEMENT_PAGE_SIZE = 60
-SELECTOR_ENGINE_WIDTH = 105
+SELECTOR_ENGINE_WIDTH = 150
 SELECTOR_STATUS_WIDTH = 54
+SELECTOR_TIME_WIDTH = 64
 SELECTOR_VALIDATION_WIDTH = 58
 
 GOB_GREEN = '#1F4D3A'
@@ -106,6 +107,16 @@ def engine_label(engine: str | None) -> str:
 def format_elapsed(seconds: float) -> str:
     seconds = max(int(seconds or 0), 0)
     return f'{seconds // 60:02d}:{seconds % 60:02d}'
+
+
+def format_seconds(seconds: Any) -> str:
+    if seconds is None:
+        return '—'
+    try:
+        value = max(float(seconds), 0.0)
+    except (TypeError, ValueError):
+        return '—'
+    return f'{value:.1f} s'
 
 
 def numeric(value: Any) -> float:
@@ -249,16 +260,21 @@ def main(page: ft.Page):
             return 'Digital'
         if method == 'OCR':
             if result is None:
-                return engine_label(settings['ocr_primary_engine'])
-            label = engine_label(getattr(result, 'ocr_engine', None))
-            review = getattr(result, 'ocr_review', None)
-            if review is not None and review.requires_user_selection:
-                if not getattr(result, 'ocr_selection_confirmed', False):
-                    return f'{label} · elegir'
-                return f'{label} · elegido'
-            if getattr(result, 'fallback_attempted', False):
-                return f'{label} · revisado'
-            return label
+                requested = item.get('requested_ocr_engine') or settings['ocr_primary_engine']
+                return engine_label(requested)
+
+            requested = getattr(result, 'ocr_requested_primary_engine', None)
+            primary = getattr(result, 'ocr_primary_engine', None)
+            secondary = getattr(result, 'ocr_secondary_engine', None)
+            if requested and primary and requested != primary:
+                return f'{engine_label(requested)} ↯ {engine_label(primary)}'
+
+            if getattr(result, 'fallback_attempted', False) and secondary:
+                available = set(result.available_ocr_engines())
+                marker = '✓' if secondary in available else '⚠'
+                return f'{engine_label(primary)} → {engine_label(secondary)} {marker}'
+
+            return engine_label(getattr(result, 'ocr_engine', None) or primary)
         return 'Detectando'
 
     def bank_key_for_item(item: dict[str, Any]) -> str:
@@ -314,6 +330,7 @@ def main(page: ft.Page):
         result = item.get('result')
         abonos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
         cargos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
+        elapsed = format_seconds(item.get('elapsed_seconds'))
         return ft.Row(
             [
                 ft.Container(
@@ -333,6 +350,11 @@ def main(page: ft.Page):
                 ft.Container(
                     status_control(item),
                     width=SELECTOR_STATUS_WIDTH,
+                    alignment=ft.Alignment.CENTER,
+                ),
+                ft.Container(
+                    ft.Text(elapsed, size=8, color=ft.Colors.ON_SURFACE_VARIANT),
+                    width=SELECTOR_TIME_WIDTH,
                     alignment=ft.Alignment.CENTER,
                 ),
                 ft.Container(
@@ -384,6 +406,7 @@ def main(page: ft.Page):
                     ft.Container(expand=True),
                     heading('Motor', SELECTOR_ENGINE_WIDTH),
                     heading('Estado', SELECTOR_STATUS_WIDTH),
+                    heading('Tiempo', SELECTOR_TIME_WIDTH),
                     heading('Abonos', SELECTOR_VALIDATION_WIDTH),
                     heading('Cargos', SELECTOR_VALIDATION_WIDTH),
                 ],
@@ -1087,6 +1110,86 @@ def main(page: ft.Page):
             border_radius=7,
         )
 
+    def ocr_execution_card(result) -> ft.Container:
+        requested = getattr(result, 'ocr_requested_primary_engine', None)
+        primary = getattr(result, 'ocr_primary_engine', None)
+        secondary = getattr(result, 'ocr_secondary_engine', None)
+        review = getattr(result, 'ocr_review', None)
+        available = set(result.available_ocr_engines()) if review is not None else set()
+
+        lines: list[ft.Control] = [
+            ft.Text(
+                f'Motor solicitado en Configuración: {engine_label(requested or primary)}',
+                size=8,
+                weight=ft.FontWeight.BOLD,
+            )
+        ]
+
+        if requested and primary and requested != primary:
+            lines.append(
+                ft.Text(
+                    f'{engine_label(requested)} no pudo iniciar; el PDF fue recuperado con {engine_label(primary)}.',
+                    size=8,
+                    color=DANGER,
+                )
+            )
+        elif primary:
+            lines.append(
+                ft.Text(
+                    f'Motor primario ejecutado: {engine_label(primary)}',
+                    size=8,
+                    color=GOB_GREEN,
+                )
+            )
+
+        if getattr(result, 'fallback_attempted', False) and secondary:
+            if secondary in available:
+                lines.append(
+                    ft.Text(
+                        f'Fallback ejecutado: {engine_label(secondary)} · candidato disponible para revisión.',
+                        size=8,
+                        color=GOB_GREEN,
+                        weight=ft.FontWeight.BOLD,
+                    )
+                )
+            else:
+                error_type = getattr(review, 'paddle_error_type', None) if review is not None else None
+                suffix = f' · error {error_type}' if error_type else ''
+                lines.append(
+                    ft.Text(
+                        f'Fallback intentado: {engine_label(secondary)} · no produjo candidato{suffix}.',
+                        size=8,
+                        color=DANGER,
+                        weight=ft.FontWeight.BOLD,
+                    )
+                )
+        else:
+            lines.append(
+                ft.Text(
+                    'Fallback: no requerido por las validaciones del motor principal.',
+                    size=8,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                )
+            )
+
+        if len(available) > 1:
+            lines.append(
+                ft.Text(
+                    'Hay dos resultados reales en memoria. Puedes alternarlos y elegir cuál se exportará.',
+                    size=8,
+                    color=GOB_GREEN_DARK,
+                )
+            )
+
+        return ft.Container(
+            ft.Column(lines, spacing=3, tight=True),
+            padding=7,
+            bgcolor=GOB_GREEN_LIGHT,
+            border_radius=6,
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+        )
+
+
     def beneficiary_analytics(movements) -> list[tuple[str, float, float]]:
         grouped: dict[str, list[float]] = {}
         for movement in movements:
@@ -1282,31 +1385,66 @@ def main(page: ft.Page):
             ]
         )
         if method == 'OCR':
-            review = getattr(result, 'ocr_review', None)
-            engines = list(result.available_ocr_engines()) if review is not None else []
-            if len(engines) > 1:
-                confirmed = result.confirmed_ocr_engine
-                info_text = (
-                    f'Comparación OCR disponible · vista actual: {engine_label(result.selected_ocr_engine)} · '
-                    f'sugerencia automática: {engine_label(result.recommended_ocr_engine)}'
-                )
-                if confirmed:
-                    info_text += f' · elegido para Excel: {engine_label(confirmed)}'
-                else:
-                    info_text += ' · pendiente de elección para Excel'
-            else:
-                info_text = f'Motor utilizado: {engine_label(getattr(result, "ocr_engine", None))}'
-            audit_view.controls.append(
-                ft.Container(
-                    ft.Text(f'⚙️ {info_text}', size=8, color=GOB_GREEN),
-                    padding=6,
-                    bgcolor=GOB_GREEN_LIGHT,
-                    border_radius=6,
-                )
-            )
+            audit_view.controls.append(ocr_execution_card(result))
             candidate_selector = ocr_candidate_selector(result)
             if candidate_selector is not None:
                 audit_view.controls.append(candidate_selector)
+
+        audit_view.controls.extend(
+            [
+                ft.Row(
+                    [
+                        metric('Saldo anterior', format_money(getattr(rf, 'saldo_anterior', None))),
+                        metric('Depósitos / Abonos', format_money(getattr(rf, 'depositos_abonos', None))),
+                        metric('Retiros / Cargos', format_money(getattr(rf, 'retiros_cargos', None))),
+                        metric('Saldo final', format_money(getattr(rf, 'saldo_final', None))),
+                    ],
+                    spacing=6,
+                ),
+                ft.Row(
+                    [
+                        validation_card(result, PRIMARY_VALIDATIONS[0], 'Validación abonos'),
+                        validation_card(result, PRIMARY_VALIDATIONS[1], 'Validación cargos'),
+                    ],
+                    spacing=6,
+                ),
+            ]
+        )
+
+        all_validations = list(getattr(result, 'validaciones', []) or [])
+        secondary_validations = [
+            item for item in all_validations if item.nombre not in PRIMARY_VALIDATIONS
+        ]
+        correct_count = sum(item.correcto for item in all_validations)
+        audit_view.controls.append(
+            ft.Text(
+                f'Integridad financiera: {correct_count}/{len(all_validations)} validaciones correctas',
+                size=8,
+                weight=ft.FontWeight.BOLD,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            )
+        )
+
+        secondary_controls = (
+            [secondary_validation_row(item) for item in secondary_validations]
+            if secondary_validations
+            else [ft.Text('No existen validaciones adicionales para este resultado.', size=8)]
+        )
+        audit_view.controls.append(
+            ft.ExpansionTile(
+                title=ft.Text(
+                    f'🔎 Otras validaciones financieras ({len(secondary_validations)})',
+                    size=9,
+                    weight=ft.FontWeight.BOLD,
+                ),
+                controls=[
+                    ft.Container(
+                        ft.Column(secondary_controls, spacing=5),
+                        padding=6,
+                    )
+                ],
+            )
+        )
 
         account_entries = [
             ('Producto principal', safe_value(getattr(dc, 'producto_principal', None))),
@@ -1329,53 +1467,6 @@ def main(page: ft.Page):
                 controls=[ft.Container(ft.Column(metrics_rows(account_entries, 3), spacing=6), padding=6)],
             )
         )
-        audit_view.controls.extend(
-            [
-                section('📊 Resumen financiero'),
-                ft.Row(
-                    [
-                        metric('Saldo anterior', format_money(getattr(rf, 'saldo_anterior', None))),
-                        metric('Depósitos / Abonos', format_money(getattr(rf, 'depositos_abonos', None))),
-                        metric('Retiros / Cargos', format_money(getattr(rf, 'retiros_cargos', None))),
-                        metric('Saldo final', format_money(getattr(rf, 'saldo_final', None))),
-                    ],
-                    spacing=6,
-                ),
-                ft.Row(
-                    [
-                        validation_card(result, PRIMARY_VALIDATIONS[0], 'Validación abonos'),
-                        validation_card(result, PRIMARY_VALIDATIONS[1], 'Validación cargos'),
-                    ],
-                    spacing=6,
-                ),
-            ]
-        )
-        all_validations = list(getattr(result, 'validaciones', []) or [])
-        secondary_validations = [
-            item for item in all_validations if item.nombre not in PRIMARY_VALIDATIONS
-        ]
-        correct_count = sum(item.correcto for item in all_validations)
-        audit_view.controls.append(
-            ft.Text(
-                f'Integridad financiera: {correct_count}/{len(all_validations)} validaciones correctas',
-                size=8,
-                weight=ft.FontWeight.BOLD,
-                color=ft.Colors.ON_SURFACE_VARIANT,
-            )
-        )
-        audit_view.controls.append(
-            ft.Text(
-                f'Otras validaciones financieras ({len(secondary_validations)})',
-                size=9,
-                weight=ft.FontWeight.BOLD,
-            )
-        )
-        if secondary_validations:
-            audit_view.controls.extend(secondary_validation_row(item) for item in secondary_validations)
-        else:
-            audit_view.controls.append(
-                ft.Text('No existen validaciones adicionales para este resultado.', size=8)
-            )
 
         summary_entries = [
             ('Saldo promedio', format_money(getattr(rf, 'saldo_promedio', None))),
@@ -1397,7 +1488,7 @@ def main(page: ft.Page):
         audit_view.controls.append(
             ft.ExpansionTile(
                 title=ft.Text(
-                    '📈 Resumen financiero ampliado · todos los campos',
+                    '📈 Detalle financiero · todos los campos',
                     size=9,
                     weight=ft.FontWeight.BOLD,
                 ),
@@ -1478,7 +1569,7 @@ def main(page: ft.Page):
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Text(
-                        'El segundo motor se ejecuta cuando las validaciones principales requieren revisión.',
+                        'El segundo motor se ejecuta si el resultado principal tiene cualquier validación con tache, faltan validaciones clave o no se detectan movimientos.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
@@ -1669,6 +1760,11 @@ def main(page: ft.Page):
         finally:
             event_queue.put(('finished', batch_id))
 
+    def finalize_item_duration(item: dict[str, Any]) -> None:
+        started_at = item.get('processing_started_at')
+        if isinstance(started_at, (int, float)):
+            item['elapsed_seconds'] = max(time.perf_counter() - started_at, 0.0)
+
     def handle_event(event):
         index = getattr(event, 'index', None)
         if not isinstance(index, int) or not 0 <= index < len(processing_items):
@@ -1678,11 +1774,14 @@ def main(page: ft.Page):
             item.update(
                 status='processing',
                 processing_method=event.processing_method,
+                processing_started_at=time.perf_counter(),
+                elapsed_seconds=None,
                 error=None,
             )
             rebuild_selector()
             return
         if event.kind == 'cancelled':
+            finalize_item_duration(item)
             item.update(
                 status='cancelled',
                 processing_method=event.processing_method or item.get('processing_method'),
@@ -1692,6 +1791,7 @@ def main(page: ft.Page):
             rebuild_selector()
             return
         if event.kind == 'completed':
+            finalize_item_duration(item)
             item.update(
                 status='completed',
                 processing_method=event.processing_method,
@@ -1716,6 +1816,7 @@ def main(page: ft.Page):
                 rebuild_selector()
             return
         if event.kind == 'error':
+            finalize_item_duration(item)
             item.update(
                 status='error',
                 processing_method=event.processing_method or item.get('processing_method'),
@@ -1850,6 +1951,9 @@ def main(page: ft.Page):
                     'status': 'classifying',
                     'result': None,
                     'error': None,
+                    'requested_ocr_engine': settings['ocr_primary_engine'],
+                    'processing_started_at': None,
+                    'elapsed_seconds': None,
                 }
             )
         selector_filter.value = ''
