@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from PyInstaller.utils.hooks import collect_all
 
 
 # PyInstaller expone SPECPATH durante la ejecución del spec. Anclar las rutas
@@ -84,13 +85,30 @@ def _build_splash() -> Path:
     return SPLASH_PATH
 
 
+def _optional_runtime(package_name: str):
+    """Incluye paquetes OCR pesados sólo cuando están instalados en el build."""
+    try:
+        return collect_all(package_name)
+    except Exception:
+        return [], [], []
+
+
 splash_image = _build_splash()
+
+extra_datas = []
+extra_binaries = []
+extra_hiddenimports = []
+for package in ("paddle", "paddleocr"):
+    datas, binaries, hiddenimports = _optional_runtime(package)
+    extra_datas.extend(datas)
+    extra_binaries.extend(binaries)
+    extra_hiddenimports.extend(hiddenimports)
 
 
 a = Analysis(
     [str(PROJECT_ROOT / "app" / "main_flet.py")],
     pathex=[str(PROJECT_ROOT / "src")],
-    binaries=[],
+    binaries=extra_binaries,
     datas=[
         (
             str(TESSERACT_DIR),
@@ -100,8 +118,9 @@ a = Analysis(
             str(ASSETS_DIR),
             "assets",
         ),
+        *extra_datas,
     ],
-    hiddenimports=[],
+    hiddenimports=extra_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(RUNTIME_HOOK)],
