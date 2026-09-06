@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
 from pathlib import Path
+from typing import Any
 
 from readers.models import DocumentData
 
+from .cancelable_ocr_reader import (
+    read_paddle_cancelable,
+    read_tesseract_cancelable,
+)
 from .paddleocr_pdf_reader import PaddleOCRPDFReader
 from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
@@ -28,6 +34,13 @@ class PDFTextStageResult:
         self.document = document
         self.initial_empty_pages = initial_empty_pages
         self.has_extractable_text = has_extractable_text
+
+
+def _cancel_requested(cancel_event: Any | None) -> bool:
+    if cancel_event is None:
+        return False
+    is_set = getattr(cancel_event, "is_set", None)
+    return bool(callable(is_set) and is_set())
 
 
 class ReaderManager:
@@ -95,24 +108,38 @@ class ReaderManager:
     def read_ocr(
         file_path: str | Path,
         start_page: int = 0,
+        cancel_event: Any | None = None,
     ) -> DocumentData:
         """Alias histórico de Tesseract."""
         return ReaderManager.read_ocr_engine(
             file_path,
             engine="tesseract",
             start_page=start_page,
+            cancel_event=cancel_event,
         )
 
     @staticmethod
     def read_paddle_ocr(
         file_path: str | Path,
         start_page: int = 0,
+        cancel_event: Any | None = None,
     ) -> DocumentData:
+        if _cancel_requested(cancel_event):
+            raise CancelledError()
+
         file_path = Path(file_path)
-        document = PaddleOCRPDFReader.read(
-            file_path,
-            start_page=start_page,
-        )
+        if cancel_event is None:
+            document = PaddleOCRPDFReader.read(
+                file_path,
+                start_page=start_page,
+            )
+        else:
+            document = read_paddle_cancelable(
+                file_path,
+                start_page=start_page,
+                cancel_event=cancel_event,
+            )
+
         document.metadata = dict(document.metadata or {})
         document.metadata.setdefault("source_path", str(file_path.resolve()))
         document.metadata.setdefault("reader", "paddleocr")
@@ -124,12 +151,16 @@ class ReaderManager:
         file_path: str | Path,
         engine: str,
         start_page: int = 0,
+        cancel_event: Any | None = None,
     ) -> DocumentData:
         """Ejecuta exactamente un motor OCR.
 
         Esta función no prueba el otro motor. La decisión de fallback pertenece
         al processor y sólo ocurre después de validar el resultado primario.
         """
+        if _cancel_requested(cancel_event):
+            raise CancelledError()
+
         file_path = Path(file_path)
         normalized = str(engine or "").strip().lower()
 
@@ -139,10 +170,18 @@ class ReaderManager:
             normalized = "tesseract"
 
         if normalized == "tesseract":
-            document = TesseractPDFReader.read(
-                file_path,
-                start_page=start_page,
-            )
+            if cancel_event is None:
+                document = TesseractPDFReader.read(
+                    file_path,
+                    start_page=start_page,
+                )
+            else:
+                document = read_tesseract_cancelable(
+                    file_path,
+                    start_page=start_page,
+                    cancel_event=cancel_event,
+                )
+
             document.metadata = dict(document.metadata or {})
             document.metadata["source_path"] = str(file_path.resolve())
             document.metadata.setdefault("reader", "tesseract")
@@ -153,6 +192,7 @@ class ReaderManager:
             return ReaderManager.read_paddle_ocr(
                 file_path,
                 start_page=start_page,
+                cancel_event=cancel_event,
             )
 
         raise ValueError(
