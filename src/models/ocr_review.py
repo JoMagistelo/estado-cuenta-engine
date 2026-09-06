@@ -43,9 +43,9 @@ class OCRReview:
     candidates: dict[str, OCRCandidate] = field(default_factory=dict)
     recommended_engine: str = "tesseract"
     selected_engine: str = "tesseract"
-    confirmed_engine: str | None = None
     trigger_reasons: tuple[str, ...] = ()
     paddle_error_type: str | None = None
+    confirmed_engine: str | None = None
 
     def available_engines(self) -> tuple[str, ...]:
         ordered = []
