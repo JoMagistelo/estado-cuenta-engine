@@ -8,6 +8,7 @@ from concurrent.futures import (
 from dataclasses import dataclass
 from pathlib import Path
 
+from engine.ocr_execution import normalize_ocr_engine
 from engine.statement_processor import process_single_statement_with_ocr_review
 from models.processing_result import ProcessingResult
 from readers.models import DocumentData
@@ -367,6 +368,7 @@ def _prepare_statement(
 
 def _process_prepared_statement(
     prepared: PreparedStatement,
+    ocr_primary_engine: str = "tesseract",
 ) -> ProcessingResult:
     """
     Ejecuta el procesamiento final de un documento previamente
@@ -381,6 +383,8 @@ def _process_prepared_statement(
     """
 
     document = prepared.document
+    ocr_primary_engine = normalize_ocr_engine(ocr_primary_engine)
+    allow_secondary_review = True
 
     # ========================================================
     # OCR
@@ -388,10 +392,34 @@ def _process_prepared_statement(
 
     if prepared.processing_method == "OCR":
 
-        document = ReaderManager.read_ocr(
-            prepared.pdf_path,
-            start_page=0,
-        )
+        if ocr_primary_engine == "paddleocr":
+            try:
+                document = ReaderManager.read_paddle_ocr(
+                    prepared.pdf_path,
+                    start_page=0,
+                )
+            except Exception as primary_exc:
+                # Una preferencia de usuario no debe provocar la
+                # pérdida del documento si PaddleOCR falla.
+                document = ReaderManager.read_ocr(
+                    prepared.pdf_path,
+                    start_page=0,
+                )
+                allow_secondary_review = False
+                document.metadata.update(
+                    {
+                        "ocr_primary_requested": "paddleocr",
+                        "ocr_primary_error_type": type(primary_exc).__name__,
+                        "ocr_primary_fallback_engine": "tesseract",
+                    }
+                )
+        else:
+            document = ReaderManager.read_ocr(
+                prepared.pdf_path,
+                start_page=0,
+            )
+
+        document.metadata["ocr_primary_requested"] = ocr_primary_engine
 
     # ========================================================
     # DIGITAL
@@ -430,6 +458,7 @@ def _process_prepared_statement(
         process_single_statement_with_ocr_review(
             document=document,
             bank_key=bank_key,
+            allow_secondary=allow_secondary_review,
         )
     )
 
@@ -479,6 +508,7 @@ def _process_prepared_statement(
 def process_bank_statements(
     pdf_paths: list[str],
     file_names: list[str] | None = None,
+    ocr_primary_engine: str = "tesseract",
 ) -> list[ProcessingResult]:
     """
     Procesa múltiples estados de cuenta de forma secuencial.
@@ -507,7 +537,8 @@ def process_bank_statements(
         )
 
         result = _process_prepared_statement(
-            prepared
+            prepared,
+            ocr_primary_engine=ocr_primary_engine,
         )
 
         results.append(
@@ -528,6 +559,7 @@ def process_bank_statements_incremental(
     classification_workers: int = 2,
     digital_workers: int = 4,
     ocr_workers: int = 1,
+    ocr_primary_engine: str = "tesseract",
 ):
     """
     Procesa múltiples estados de cuenta de forma concurrente
@@ -556,6 +588,7 @@ def process_bank_statements_incremental(
     """
 
     total = len(pdf_paths)
+    ocr_primary_engine = normalize_ocr_engine(ocr_primary_engine)
 
     if total == 0:
         return
@@ -698,6 +731,7 @@ def process_bank_statements_incremental(
                             ocr_executor.submit(
                                 _process_prepared_statement,
                                 prepared,
+                                ocr_primary_engine,
                             )
                         )
 
@@ -707,6 +741,7 @@ def process_bank_statements_incremental(
                             digital_executor.submit(
                                 _process_prepared_statement,
                                 prepared,
+                                ocr_primary_engine,
                             )
                         )
 

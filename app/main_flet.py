@@ -42,6 +42,7 @@ from engine.pipeline import (
     process_bank_statements_incremental,
 )
 from exporters.excel import export_batch_excel
+from exporters.export_snapshot import snapshot_results_for_export
 
 
 # ============================================================
@@ -295,6 +296,22 @@ def main(page: ft.Page):
         width=20,
         height=20,
         visible=False,
+    )
+
+    ocr_primary_selector = ft.Dropdown(
+        label="Motor OCR principal",
+        value="tesseract",
+        width=260,
+        options=[
+            ft.DropdownOption(
+                key="tesseract",
+                text="Tesseract primero",
+            ),
+            ft.DropdownOption(
+                key="paddleocr",
+                text="PaddleOCR primero",
+            ),
+        ],
     )
 
     dropdown_files = ft.Dropdown(
@@ -2562,6 +2579,7 @@ def main(page: ft.Page):
         paths: list[str],
         names: list[str],
         batch_id: int,
+        ocr_primary_engine: str,
     ):
 
         try:
@@ -2570,6 +2588,7 @@ def main(page: ft.Page):
                 process_bank_statements_incremental(
                     paths,
                     names,
+                    ocr_primary_engine=ocr_primary_engine,
                 )
             ):
 
@@ -2950,6 +2969,10 @@ def main(page: ft.Page):
                             False
                         )
 
+                        ocr_primary_selector.disabled = (
+                            False
+                        )
+
                         page_changed = True
 
                     # ---------------------------------------
@@ -2970,6 +2993,10 @@ def main(page: ft.Page):
                         )
 
                         upload_button.disabled = (
+                            False
+                        )
+
+                        ocr_primary_selector.disabled = (
                             False
                         )
 
@@ -3102,6 +3129,10 @@ def main(page: ft.Page):
             True
         )
 
+        ocr_primary_selector.disabled = (
+            True
+        )
+
         export_button.disabled = (
             True
         )
@@ -3139,6 +3170,7 @@ def main(page: ft.Page):
     def start_processing_worker(
         paths: list[str],
         names: list[str],
+        ocr_primary_engine: str,
     ):
 
         batch_id = (
@@ -3152,6 +3184,7 @@ def main(page: ft.Page):
             paths,
             names,
             batch_id,
+            ocr_primary_engine,
         )
 
 
@@ -3230,6 +3263,10 @@ def main(page: ft.Page):
                 True
             )
 
+            ocr_primary_engine = str(
+                ocr_primary_selector.value or "tesseract"
+            ).strip().lower()
+
             # =================================================
             # PREPARAR BATCH
             # =================================================
@@ -3246,6 +3283,7 @@ def main(page: ft.Page):
             start_processing_worker(
                 paths,
                 names,
+                ocr_primary_engine,
             )
 
         except Exception as ex:
@@ -3350,7 +3388,7 @@ def main(page: ft.Page):
             #
             # =================================================
 
-            results_snapshot = list(
+            results_snapshot = snapshot_results_for_export(
                 results
             )
 
@@ -3768,6 +3806,8 @@ def main(page: ft.Page):
             ft.Row(
 
                 controls=[
+
+                    ocr_primary_selector,
 
                     upload_button,
 
