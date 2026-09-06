@@ -90,7 +90,7 @@ def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
     assert config["recognition_model_dir"] == str(recognition.resolve())
     assert config["detection_model_name"] == "PP-OCRv5_mobile_det"
     assert config["recognition_model_name"] == "latin_PP-OCRv5_mobile_rec"
-    assert config["enable_mkldnn"] is True
+    assert config["enable_mkldnn"] is False
     assert config["cpu_threads"] == 10
 
 
@@ -114,7 +114,7 @@ def test_paddleocr_rejects_non_spanish_language(tmp_path, monkeypatch):
         PaddleOCRPDFReader._load_config()
 
 
-def test_cpu_engine_enables_mkldnn_and_threads_by_default(monkeypatch):
+def test_cpu_engine_disables_mkldnn_by_default(monkeypatch):
     captured_kwargs = {}
 
     class FakePaddleOCR:
@@ -139,12 +139,12 @@ def test_cpu_engine_enables_mkldnn_and_threads_by_default(monkeypatch):
             recognition_model_name="latin_PP-OCRv5_mobile_rec",
             detection_model_dir="C:/modelos/det",
             recognition_model_dir="C:/modelos/rec",
-            enable_mkldnn=True,
+            enable_mkldnn=False,
             cpu_threads=10,
         )
 
-        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "1"
-        assert captured_kwargs["enable_mkldnn"] is True
+        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "0"
+        assert captured_kwargs["enable_mkldnn"] is False
         assert captured_kwargs["cpu_threads"] == 10
         assert captured_kwargs["device"] == "cpu"
         assert "lang" not in captured_kwargs
@@ -154,7 +154,7 @@ def test_cpu_engine_enables_mkldnn_and_threads_by_default(monkeypatch):
         PaddleOCRPDFReader._engine_signature = None
 
 
-def test_cpu_engine_can_disable_mkldnn_for_diagnostics(monkeypatch):
+def test_cpu_engine_can_enable_mkldnn_explicitly(monkeypatch):
     captured_kwargs = {}
 
     class FakePaddleOCR:
@@ -178,12 +178,12 @@ def test_cpu_engine_can_disable_mkldnn_for_diagnostics(monkeypatch):
             recognition_model_name="latin_PP-OCRv5_mobile_rec",
             detection_model_dir="C:/modelos/det",
             recognition_model_dir="C:/modelos/rec",
-            enable_mkldnn=False,
+            enable_mkldnn=True,
             cpu_threads=4,
         )
 
-        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "0"
-        assert captured_kwargs["enable_mkldnn"] is False
+        assert os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] == "1"
+        assert captured_kwargs["enable_mkldnn"] is True
         assert captured_kwargs["cpu_threads"] == 4
     finally:
         PaddleOCRPDFReader._engine = None
