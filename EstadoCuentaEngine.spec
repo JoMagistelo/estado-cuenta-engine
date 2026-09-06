@@ -172,7 +172,12 @@ version_info = _build_version_info()
 extra_datas = []
 extra_binaries = []
 extra_hiddenimports = []
-for package in ("paddle", "paddleocr"):
+# PaddleOCR 3.x construye la canalización OCR a través de PaddleX y carga
+# configuraciones YAML/JSON de forma dinámica. Si sólo se recogen ``paddle`` y
+# ``paddleocr``, el EXE puede importar ambos paquetes pero fallar al crear
+# ``PaddleOCR`` con "The pipeline (OCR) does not exist". Incluir PaddleX
+# explícitamente conserva esos recursos dinámicos dentro del one-file.
+for package in ("paddle", "paddleocr", "paddlex"):
     datas, binaries, hiddenimports = _optional_runtime(package)
     extra_datas.extend(datas)
     extra_binaries.extend(binaries)
@@ -214,6 +219,12 @@ splash = Splash(
     text_color="#163A2C",
     text_default="[##--------------------]   8%  Iniciando aplicación...",
     always_on_top=True,
+    # El splash de PyInstaller está basado en Tcl/Tk. En algunos entornos
+    # Windows la colección mínima puede dejar visible la ventana raíz "tk" si
+    # la inicialización del script falla. Para el binario institucional se
+    # prioriza una colección Tk completa y el script sin minificar.
+    full_tk=True,
+    minify_script=False,
 )
 
 exe = EXE(
