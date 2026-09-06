@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import os
 import sys
@@ -8,14 +9,19 @@ import time
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
+
 import pandas as pd
 import streamlit as st
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
 from engine.ocr_fallback_policy import normalize_ocr_engine
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
+
 APP_VERSION = '2.3'
-PROCESSING_UI_POLL_INTERVAL = 1.25
+PROCESSING_UI_POLL_INTERVAL = 0.75
+
 GOB_GREEN = '#1F4D3A'
 GOB_GREEN_DARK = '#163A2C'
 GOB_GREEN_LIGHT = '#E8F0EC'
@@ -23,14 +29,40 @@ GOB_GOLD = '#B08D57'
 GOB_GOLD_LIGHT = '#F4EEE5'
 GOB_CREAM = '#F7F4EE'
 DANGER = '#A63D40'
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOGO_PATH = PROJECT_ROOT / 'assets' / 'logo_gobierno_mexico.png'
 PRIMARY_VALIDATIONS = ('Total depósitos / abonos', 'Total retiros / cargos')
-MOVEMENT_COLUMNS = [('fecha_corte', 'Fecha Corte'), ('numero_cuenta', 'Número de Cuenta'), ('numero_movimiento', 'No. Movimiento'), ('fecha_operacion', 'Fecha Operación'), ('fecha_liquidacion', 'Fecha Liquidación'), ('concepto', 'Concepto'), ('cargo', 'Cargo'), ('abono', 'Abono'), ('saldo_operacion', 'Saldo Operación'), ('saldo_liquidacion', 'Saldo Liquidación'), ('tipo_operacion', 'Tipo'), ('beneficiario', 'Beneficiario'), ('cuenta_beneficiario', 'Cuenta Benef.'), ('clabe_beneficiario', 'CLABE Benef.'), ('rfc', 'RFC'), ('referencia', 'Referencia'), ('clave_rastreo', 'Clave Rastreo'), ('autorizacion', 'Autorización'), ('hora_operacion', 'Hora'), ('__bank__', 'Banco'), ('caja', 'Caja'), ('concepto_original', 'Concepto Original')]
-MONEY_FIELDS = {'cargo', 'abono', 'saldo_operacion', 'saldo_liquidacion'}
+FINAL_STATUSES = {'completed', 'error', 'cancelled'}
+MOVEMENT_COLUMNS = [
+    ('fecha_corte', 'Fecha Corte'),
+    ('numero_cuenta', 'Número de Cuenta'),
+    ('numero_movimiento', 'No. Movimiento'),
+    ('fecha_operacion', 'Fecha Operación'),
+    ('fecha_liquidacion', 'Fecha Liquidación'),
+    ('concepto', 'Concepto'),
+    ('cargo', 'Cargo'),
+    ('abono', 'Abono'),
+    ('saldo_operacion', 'Saldo Operación'),
+    ('saldo_liquidacion', 'Saldo Liquidación'),
+    ('tipo_operacion', 'Tipo'),
+    ('beneficiario', 'Beneficiario'),
+    ('cuenta_beneficiario', 'Cuenta Benef.'),
+    ('clabe_beneficiario', 'CLABE Benef.'),
+    ('rfc', 'RFC'),
+    ('referencia', 'Referencia'),
+    ('clave_rastreo', 'Clave Rastreo'),
+    ('autorizacion', 'Autorización'),
+    ('hora_operacion', 'Hora'),
+    ('__bank__', 'Banco'),
+    ('caja', 'Caja'),
+    ('concepto_original', 'Concepto Original'),
+]
+
 
 def safe_value(value: Any) -> str:
     return 'N/A' if value is None or value == '' else str(value)
+
 
 def format_money(value: Any) -> str:
     if value is None:
@@ -40,7 +72,14 @@ def format_money(value: Any) -> str:
     except (TypeError, ValueError):
         return str(value)
 
-def format_optional_float(value: Any, *, suffix: str='', prefix: str='', na_value: str='N/A') -> str:
+
+def format_optional_float(
+    value: Any,
+    *,
+    suffix: str = '',
+    prefix: str = '',
+    na_value: str = 'N/A',
+) -> str:
     if value is None:
         return na_value
     try:
@@ -48,9 +87,11 @@ def format_optional_float(value: Any, *, suffix: str='', prefix: str='', na_valu
     except (TypeError, ValueError):
         return str(value)
 
+
 def engine_label(engine: str | None) -> str:
     normalized = normalize_ocr_engine(engine, default='')
     return {'tesseract': 'Tesseract', 'paddleocr': 'PaddleOCR'}.get(normalized, 'OCR')
+
 
 def numeric(value: Any) -> float:
     try:
@@ -58,17 +99,112 @@ def numeric(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
 
+
 def initialize_session_state() -> None:
-    defaults = {'processing_queue': Queue(), 'processing_items': [], 'results': [], 'worker_thread': None, 'worker_running': False, 'worker_finished': False, 'worker_error': None, 'worker_traceback': None, 'batch_signature': None, 'batch_temp_paths': [], 'selected_index': None, 'ocr_primary_engine': normalize_ocr_engine(os.getenv('OCR_PRIMARY_ENGINE', 'tesseract')), 'stop_event': threading.Event(), 'stop_requested': False, 'started_at': None, 'initial_dialog_pending': False}
+    defaults = {
+        'processing_queue': Queue(),
+        'processing_items': [],
+        'results': [],
+        'worker_thread': None,
+        'worker_running': False,
+        'worker_finished': False,
+        'worker_error': None,
+        'worker_traceback': None,
+        'batch_signature': None,
+        'batch_temp_paths': [],
+        'selected_index': None,
+        'ocr_primary_engine': normalize_ocr_engine(
+            os.getenv('OCR_PRIMARY_ENGINE', 'tesseract')
+        ),
+        'stop_event': threading.Event(),
+        'stop_requested': False,
+        'started_at': None,
+        'initial_dialog_pending': False,
+        'result_filter': '',
+        'uploader_nonce': 0,
+    }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
+
 def inject_css() -> None:
-    st.markdown(f'\n        <style>\n        .stApp {{\n            background: #FBFBFC;\n        }}\n        [data-testid="stHeader"] {{\n            background: rgba(251,251,252,0.94);\n        }}\n        .institution-card {{\n            background: white;\n            border: 1px solid #E0E3E7;\n            border-radius: 14px;\n            padding: 14px 18px;\n            margin-bottom: 12px;\n        }}\n        .app-title {{\n            font-size: 1.75rem;\n            font-weight: 750;\n            color: #202124;\n            line-height: 1.15;\n        }}\n        .version-pill {{\n            display: inline-block;\n            background: {GOB_GOLD_LIGHT};\n            border-radius: 999px;\n            padding: 4px 10px;\n            font-size: .76rem;\n            font-weight: 700;\n        }}\n        .bank-label {{\n            background: {GOB_CREAM};\n            color: {GOB_GREEN_DARK};\n            border-radius: 7px;\n            padding: 5px 8px;\n            font-size: .82rem;\n            font-weight: 700;\n            margin: 4px 0;\n        }}\n        .processing-card {{\n            background: white;\n            border: 1px solid #DADDE1;\n            border-left: 5px solid {GOB_GREEN};\n            border-radius: 12px;\n            padding: 10px 14px;\n            margin: 6px 0 12px 0;\n        }}\n        .tiny-note {{\n            color: #6B7075;\n            font-size: .78rem;\n        }}\n        div[data-testid="stMetric"] {{\n            background: white;\n            border: 1px solid #E0E3E7;\n            border-radius: 10px;\n            padding: 8px 10px;\n        }}\n        div[data-testid="stDataFrame"] {{\n            border: 1px solid #DADDE1;\n            border-radius: 10px;\n            overflow: hidden;\n        }}\n        </style>\n        ', unsafe_allow_html=True)
+    st.markdown(
+        f'''
+        <style>
+        .stApp {{
+            background: #FBFBFC;
+        }}
+        [data-testid="stHeader"] {{
+            background: rgba(251,251,252,0.94);
+        }}
+        .app-title {{
+            font-size: 1.75rem;
+            font-weight: 750;
+            color: #202124;
+            line-height: 1.15;
+        }}
+        .version-pill {{
+            display: inline-block;
+            background: {GOB_GOLD_LIGHT};
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: .76rem;
+            font-weight: 700;
+        }}
+        .bank-label {{
+            background: {GOB_CREAM};
+            color: {GOB_GREEN_DARK};
+            border-radius: 7px;
+            padding: 5px 8px;
+            font-size: .82rem;
+            font-weight: 700;
+            margin: 4px 0;
+        }}
+        .processing-card {{
+            background: white;
+            border: 1px solid #DADDE1;
+            border-left: 5px solid {GOB_GREEN};
+            border-radius: 12px;
+            padding: 10px 14px;
+            margin: 6px 0 12px 0;
+        }}
+        .processing-card.stop {{
+            border-left-color: {DANGER};
+        }}
+        .tiny-note {{
+            color: #6B7075;
+            font-size: .78rem;
+        }}
+        .live-note {{
+            color: #6B7075;
+            font-size: .78rem;
+            margin-top: -8px;
+            margin-bottom: 6px;
+        }}
+        div[data-testid="stMetric"] {{
+            background: white;
+            border: 1px solid #E0E3E7;
+            border-radius: 10px;
+            padding: 8px 10px;
+        }}
+        div[data-testid="stDataFrame"] {{
+            border: 1px solid #DADDE1;
+            border-radius: 10px;
+            overflow: hidden;
+        }}
+        </style>
+        ''',
+        unsafe_allow_html=True,
+    )
+
 
 def create_batch_signature(uploaded_files_data: tuple[tuple[str, bytes], ...]) -> tuple:
-    return tuple(((name, len(data), hashlib.sha256(data).hexdigest()) for name, data in uploaded_files_data))
+    return tuple(
+        (name, len(data), hashlib.sha256(data).hexdigest())
+        for name, data in uploaded_files_data
+    )
+
 
 def cleanup_temp_paths(paths: list[str]) -> None:
     for path in paths:
@@ -76,6 +212,7 @@ def cleanup_temp_paths(paths: list[str]) -> None:
             os.remove(path)
         except (FileNotFoundError, OSError):
             pass
+
 
 def materialize_uploaded_files(uploaded_files_data: tuple[tuple[str, bytes], ...]) -> list[str]:
     temp_paths: list[str] = []
@@ -90,13 +227,27 @@ def materialize_uploaded_files(uploaded_files_data: tuple[tuple[str, bytes], ...
         cleanup_temp_paths(temp_paths)
         raise
 
+
 def traceback_string() -> str:
     import traceback
+
     return traceback.format_exc()
 
-def processing_worker(temp_paths: list[str], names: list[str], processing_queue: Queue, primary_engine: str, stop_event: threading.Event) -> None:
+
+def processing_worker(
+    temp_paths: list[str],
+    names: list[str],
+    processing_queue: Queue,
+    primary_engine: str,
+    stop_event: threading.Event,
+) -> None:
     try:
-        for event in process_bank_statements_incremental(temp_paths, names, ocr_primary_engine=primary_engine, cancel_event=stop_event):
+        for event in process_bank_statements_incremental(
+            temp_paths,
+            names,
+            ocr_primary_engine=primary_engine,
+            cancel_event=stop_event,
+        ):
             processing_queue.put(('event', event))
     except Exception as ex:
         processing_queue.put(('worker_error', ex, traceback_string()))
@@ -104,13 +255,33 @@ def processing_worker(temp_paths: list[str], names: list[str], processing_queue:
         processing_queue.put(('finished',))
         cleanup_temp_paths(temp_paths)
 
+
 def start_processing(uploaded_files_data: tuple[tuple[str, bytes], ...]) -> None:
     temp_paths = materialize_uploaded_files(uploaded_files_data)
-    processing_items = [{'file_name': file_name, 'processing_method': None, 'status': 'classifying', 'result': None, 'error': None} for file_name, _ in uploaded_files_data]
+    processing_items = [
+        {
+            'file_name': file_name,
+            'processing_method': None,
+            'status': 'classifying',
+            'result': None,
+            'error': None,
+        }
+        for file_name, _ in uploaded_files_data
+    ]
     processing_queue = Queue()
     stop_event = threading.Event()
     primary_engine = normalize_ocr_engine(st.session_state.ocr_primary_engine)
-    worker = threading.Thread(target=processing_worker, args=(temp_paths, [name for name, _ in uploaded_files_data], processing_queue, primary_engine, stop_event), daemon=True)
+    worker = threading.Thread(
+        target=processing_worker,
+        args=(
+            temp_paths,
+            [name for name, _ in uploaded_files_data],
+            processing_queue,
+            primary_engine,
+            stop_event,
+        ),
+        daemon=True,
+    )
     st.session_state.processing_queue = processing_queue
     st.session_state.processing_items = processing_items
     st.session_state.results = []
@@ -126,11 +297,35 @@ def start_processing(uploaded_files_data: tuple[tuple[str, bytes], ...]) -> None
     st.session_state.stop_requested = False
     st.session_state.started_at = time.perf_counter()
     st.session_state.initial_dialog_pending = True
+    st.session_state.result_filter = ''
     worker.start()
 
-def consume_processing_events() -> tuple[bool, bool, bool]:
+
+def reset_batch() -> None:
+    if st.session_state.worker_running:
+        return
+    st.session_state.processing_queue = Queue()
+    st.session_state.processing_items = []
+    st.session_state.results = []
+    st.session_state.worker_thread = None
+    st.session_state.worker_finished = False
+    st.session_state.worker_error = None
+    st.session_state.worker_traceback = None
+    st.session_state.batch_signature = None
+    st.session_state.batch_temp_paths = []
+    st.session_state.selected_index = None
+    st.session_state.stop_event = threading.Event()
+    st.session_state.stop_requested = False
+    st.session_state.started_at = None
+    st.session_state.initial_dialog_pending = False
+    st.session_state.result_filter = ''
+    st.session_state.uploader_nonce += 1
+
+
+def consume_processing_events() -> tuple[bool, bool, bool, bool]:
     changed = False
     completed_added = False
+    first_selection_added = False
     finished = False
     queue = st.session_state.processing_queue
     items = st.session_state.processing_items
@@ -148,55 +343,91 @@ def consume_processing_events() -> tuple[bool, bool, bool]:
                 continue
             item = items[index]
             if event.kind == 'started':
-                item.update(processing_method=event.processing_method, status='processing', error=None)
+                item.update(
+                    processing_method=event.processing_method,
+                    status='processing',
+                    error=None,
+                )
                 changed = True
             elif event.kind == 'completed':
-                item.update(processing_method=event.processing_method, status='completed', result=event.result, error=None)
+                item.update(
+                    processing_method=event.processing_method,
+                    status='completed',
+                    result=event.result,
+                    error=None,
+                )
                 if event.result is not None:
                     results.append(event.result)
                     completed_added = True
                     if st.session_state.selected_index is None:
                         st.session_state.selected_index = index
+                        first_selection_added = True
                 changed = True
             elif event.kind == 'cancelled':
-                item.update(processing_method=event.processing_method or item.get('processing_method'), status='cancelled', result=None, error=None)
+                item.update(
+                    processing_method=(
+                        event.processing_method or item.get('processing_method')
+                    ),
+                    status='cancelled',
+                    result=None,
+                    error=None,
+                )
                 changed = True
             elif event.kind == 'error':
-                item.update(processing_method=event.processing_method, status='error', result=None, error=str(event.error or 'Error desconocido'))
+                item.update(
+                    processing_method=(
+                        event.processing_method or item.get('processing_method')
+                    ),
+                    status='error',
+                    result=None,
+                    error=str(event.error or 'Error desconocido'),
+                )
                 changed = True
         elif message_type == 'worker_error':
-            ex, tb = (message[1], message[2])
+            ex, tb = message[1], message[2]
             st.session_state.worker_error = str(ex)
             st.session_state.worker_traceback = tb
             for item in items:
-                if item.get('status') not in {'completed', 'error', 'cancelled'}:
+                if item.get('status') not in FINAL_STATUSES:
                     item.update(status='error', error=str(ex))
             changed = True
         elif message_type == 'finished':
+            if st.session_state.stop_requested:
+                for item in items:
+                    if item.get('status') not in FINAL_STATUSES:
+                        item.update(status='cancelled', result=None, error=None)
             st.session_state.worker_running = False
             st.session_state.worker_finished = True
             changed = True
             finished = True
-    return (changed, completed_added, finished)
+    return changed, completed_added, first_selection_added, finished
+
 
 def processing_counts() -> tuple[int, int, int, int, int]:
     items = st.session_state.processing_items
     total = len(items)
-    completed = sum((1 for item in items if item.get('status') == 'completed'))
-    errors = sum((1 for item in items if item.get('status') == 'error'))
-    cancelled = sum((1 for item in items if item.get('status') == 'cancelled'))
-    pending = total - completed - errors - cancelled
-    scanned_active = sum((1 for item in items if item.get('status') == 'processing' and item.get('processing_method') == 'OCR'))
-    return (total, completed, errors, cancelled, scanned_active)
+    completed = sum(item.get('status') == 'completed' for item in items)
+    errors = sum(item.get('status') == 'error' for item in items)
+    cancelled = sum(item.get('status') == 'cancelled' for item in items)
+    scanned_active = sum(
+        item.get('status') == 'processing' and item.get('processing_method') == 'OCR'
+        for item in items
+    )
+    return total, completed, errors, cancelled, scanned_active
+
 
 def validation(result, name: str):
+    if result is None:
+        return None
     for item in getattr(result, 'validaciones', []) or []:
         if item.nombre == name:
             return item
     return None
 
+
 def validation_symbol(item) -> str:
     return '—' if item is None else '✅' if item.correcto else '❌'
+
 
 def process_label(item: dict[str, Any]) -> str:
     method = item.get('processing_method')
@@ -214,14 +445,53 @@ def process_label(item: dict[str, Any]) -> str:
         return label
     return 'Detectando'
 
+
 def bank_key_for_item(item: dict[str, Any]) -> str:
     result = item.get('result')
-    if result is None:
-        return 'PENDIENTE'
-    return str(getattr(result, 'bank_key', 'desconocido') or 'desconocido').upper()
+    if result is not None:
+        return str(getattr(result, 'bank_key', 'desconocido') or 'desconocido').upper()
+    status = item.get('status')
+    if status == 'processing':
+        return 'PROCESANDO'
+    if status == 'error':
+        return 'ERROR'
+    if status == 'cancelled':
+        return 'CANCELADO'
+    return 'PENDIENTE'
+
+
+def status_label(item: dict[str, Any]) -> str:
+    return {
+        'classifying': '⏳ Detectando tipo',
+        'processing': '⏳ Procesando',
+        'completed': '✅ Terminado',
+        'error': '❌ Error',
+        'cancelled': '⏹ Cancelado',
+    }.get(str(item.get('status')), '○ Pendiente')
+
+
+def item_matches_filter(item: dict[str, Any], query: str) -> bool:
+    if not query:
+        return True
+    haystack = ' '.join(
+        [
+            str(item.get('file_name') or ''),
+            process_label(item),
+            bank_key_for_item(item),
+            status_label(item),
+            str(item.get('error') or ''),
+        ]
+    ).lower()
+    return query.lower() in haystack
+
 
 def completed_items() -> list[tuple[int, dict[str, Any]]]:
-    return [(index, item) for index, item in enumerate(st.session_state.processing_items) if item.get('status') == 'completed' and item.get('result') is not None]
+    return [
+        (index, item)
+        for index, item in enumerate(st.session_state.processing_items)
+        if item.get('status') == 'completed' and item.get('result') is not None
+    ]
+
 
 def render_processing_card() -> None:
     total, completed, errors, cancelled, scanned_active = processing_counts()
@@ -233,59 +503,193 @@ def render_processing_card() -> None:
     if st.session_state.worker_running:
         if st.session_state.stop_requested:
             title = f'Deteniendo · {completed} resultado(s) conservado(s)'
+            css_class = 'processing-card stop'
         else:
             title = f'Procesando {completed} de {total} archivos'
-        st.markdown(f"""\n            <div class="processing-card">\n              <strong>{title}</strong><br>\n              <span class="tiny-note">\n                Tiempo {elapsed // 60:02d}:{elapsed % 60:02d}\n                {(' · OCR activo' if scanned_active else '')}\n              </span>\n            </div>\n            """, unsafe_allow_html=True)
-        if st.button('⏹ Detener procesamiento', type='secondary', disabled=st.session_state.stop_requested, key='stop_processing'):
+            css_class = 'processing-card'
+        st.markdown(
+            f'''
+            <div class="{css_class}">
+              <strong>{title}</strong><br>
+              <span class="tiny-note">
+                Tiempo {elapsed // 60:02d}:{elapsed % 60:02d}
+                {(' · OCR activo' if scanned_active else '')}
+                {(' · ' + str(errors) + ' con error' if errors else '')}
+              </span>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            '⏹ Detener procesamiento',
+            type='secondary',
+            disabled=st.session_state.stop_requested,
+            key='stop_processing',
+        ):
             st.session_state.stop_requested = True
             st.session_state.stop_event.set()
             st.rerun(scope='fragment')
     elif st.session_state.stop_requested:
-        st.warning(f'⏹ Procesamiento detenido. Se conservaron {completed} resultado(s); {cancelled} archivo(s) se omitieron.')
+        st.warning(
+            f'⏹ Procesamiento detenido. Se conservaron {completed} resultado(s); '
+            f'{cancelled} archivo(s) se omitieron.'
+        )
     elif errors:
         st.warning(f'✅ {completed} correctos · ⚠️ {errors} con error')
     else:
         st.success(f'✅ {completed} archivos procesados correctamente')
 
-def render_selector_column(title: str, items: list[tuple[int, dict[str, Any]]]) -> None:
+
+def render_unclassified(items: list[tuple[int, dict[str, Any]]]) -> None:
+    if not items:
+        return
+    with st.container(border=True):
+        st.markdown('**Detectando tipo de PDF**')
+        for _index, item in items:
+            detail = item.get('error') or status_label(item)
+            st.caption(f"{status_label(item)} · {item.get('file_name', '')} · {detail}")
+
+
+def select_result(index: int) -> None:
+    if st.session_state.selected_index == index:
+        return
+    st.session_state.selected_index = index
+    st.rerun()
+
+
+def render_selector_column(
+    title: str,
+    items: list[tuple[int, dict[str, Any]]],
+) -> None:
     st.markdown(f'#### {title}')
     if not items:
-        st.caption('Sin resultados terminados')
+        st.caption('Sin archivos en este filtro.')
         return
     grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for index, item in items:
         grouped.setdefault(bank_key_for_item(item), []).append((index, item))
     for bank in sorted(grouped):
-        st.markdown(f'<div class="bank-label">{bank} · {len(grouped[bank])} archivo(s)</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="bank-label">{bank} · {len(grouped[bank])} archivo(s)</div>',
+            unsafe_allow_html=True,
+        )
         for index, item in grouped[bank]:
-            result = item['result']
+            result = item.get('result')
             a = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
             c = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
             selected = st.session_state.selected_index == index
-            label = f"{('●' if selected else '○')} {item['file_name']} · {process_label(item)} · A {a} · C {c}"
-            if st.button(label, key=f'result_{index}', use_container_width=True, type='primary' if selected else 'secondary'):
-                st.session_state.selected_index = index
-                st.rerun()
+            label = (
+                f"{status_label(item)} · {item['file_name']} · {process_label(item)} · "
+                f'A {a} · C {c}'
+            )
+            completed = item.get('status') == 'completed' and result is not None
+            if st.button(
+                label,
+                key=f'result_{index}',
+                use_container_width=True,
+                type='primary' if selected and completed else 'secondary',
+                disabled=not completed,
+            ):
+                select_result(index)
+
 
 def render_result_selector() -> None:
-    completed = completed_items()
-    if not completed:
-        st.caption('Los resultados aparecerán aquí conforme terminen.')
+    items = list(enumerate(st.session_state.processing_items))
+    if not items:
         return
-    digital = [(index, item) for index, item in completed if item.get('processing_method') == 'Digital']
-    scanned = [(index, item) for index, item in completed if item.get('processing_method') == 'OCR']
+
+    completed = completed_items()
+    filter_col, dropdown_col = st.columns([1.25, 1])
+    with filter_col:
+        query = st.text_input(
+            'Filtrar resultados',
+            value=st.session_state.result_filter,
+            placeholder='Filtrar PDF, banco o estado',
+            label_visibility='collapsed',
+            key='result_filter_widget',
+        )
+        st.session_state.result_filter = query
+    with dropdown_col:
+        if completed:
+            indices = [index for index, _item in completed]
+            selected_index = st.session_state.selected_index
+            selected_position = (
+                indices.index(selected_index) if selected_index in indices else 0
+            )
+            chosen = st.selectbox(
+                'Ir a resultado',
+                options=indices,
+                index=selected_position,
+                format_func=lambda idx: (
+                    f"{st.session_state.processing_items[idx]['file_name']} · "
+                    f"{bank_key_for_item(st.session_state.processing_items[idx])} · "
+                    f"{process_label(st.session_state.processing_items[idx])}"
+                ),
+                label_visibility='collapsed',
+                key='result_jump',
+            )
+            if chosen != st.session_state.selected_index:
+                st.session_state.selected_index = chosen
+                st.rerun()
+        else:
+            st.selectbox(
+                'Ir a resultado',
+                options=['Sin resultados terminados'],
+                disabled=True,
+                label_visibility='collapsed',
+                key='result_jump_empty',
+            )
+
+    st.markdown(
+        '<div class="live-note">Los archivos aparecen aquí mientras se procesan.</div>',
+        unsafe_allow_html=True,
+    )
+    visible = [
+        (index, item)
+        for index, item in items
+        if item_matches_filter(item, query.strip())
+    ]
+    unclassified = [
+        (index, item)
+        for index, item in visible
+        if item.get('processing_method') not in {'Digital', 'OCR'}
+    ]
+    render_unclassified(unclassified)
+
+    digital = [
+        (index, item)
+        for index, item in visible
+        if item.get('processing_method') == 'Digital'
+    ]
+    scanned = [
+        (index, item)
+        for index, item in visible
+        if item.get('processing_method') == 'OCR'
+    ]
     col_digital, col_scanned = st.columns(2)
     with col_digital:
         render_selector_column('📄 PDFs digitales', digital)
     with col_scanned:
         render_selector_column('🖨️ PDFs escaneados (OCR)', scanned)
 
+
 @st.fragment(run_every=PROCESSING_UI_POLL_INTERVAL)
-def processing_status_fragment():
-    _changed, completed_added, finished = consume_processing_events()
+def live_processing_fragment() -> None:
+    _changed, _completed_added, first_selection_added, finished = consume_processing_events()
     render_processing_card()
-    if completed_added or finished:
+    st.markdown('### Resultados disponibles')
+    render_result_selector()
+    if first_selection_added or finished:
         st.rerun()
+
+
+def render_static_processing_workspace() -> None:
+    consume_processing_events()
+    render_processing_card()
+    if st.session_state.processing_items:
+        st.markdown('### Resultados disponibles')
+        render_result_selector()
+
 
 def selected_result() -> Any | None:
     index = st.session_state.selected_index
@@ -299,6 +703,7 @@ def selected_result() -> Any | None:
         return None
     return item.get('result')
 
+
 def render_ocr_candidate_selector(result) -> None:
     review = getattr(result, 'ocr_review', None)
     if review is None:
@@ -308,7 +713,14 @@ def render_ocr_candidate_selector(result) -> None:
         return
     st.markdown('#### Comparación OCR')
     selected = result.selected_ocr_engine
-    selected_engine = st.radio('Resultado que se conservará para la exportación', options=engines, index=engines.index(selected), format_func=engine_label, horizontal=True, key=f'ocr_candidate_{result.file_name}')
+    selected_engine = st.radio(
+        'Resultado que se conservará para la exportación',
+        options=engines,
+        index=engines.index(selected),
+        format_func=engine_label,
+        horizontal=True,
+        key=f'ocr_candidate_{result.file_name}',
+    )
     if selected_engine != selected:
         result.select_ocr_engine(selected_engine)
         st.rerun()
@@ -318,8 +730,15 @@ def render_ocr_candidate_selector(result) -> None:
         with col:
             with st.container(border=True):
                 st.markdown(f'**{engine_label(engine)}**')
-                st.caption(f'{candidate.movement_count} mov. · {candidate.validation_failed}/{candidate.validation_total} validaciones con falla')
-    st.caption(f'Recomendación automática: {engine_label(result.recommended_ocr_engine)}. La selección actual es la que se mostrará y exportará.')
+                st.caption(
+                    f'{candidate.movement_count} mov. · '
+                    f'{candidate.validation_failed}/{candidate.validation_total} validaciones con falla'
+                )
+    st.caption(
+        f'Recomendación automática: {engine_label(result.recommended_ocr_engine)}. '
+        'La selección actual es la que se mostrará y exportará.'
+    )
+
 
 def render_primary_validations(result) -> None:
     cols = st.columns(2)
@@ -335,13 +754,20 @@ def render_primary_validations(result) -> None:
                     st.caption('Conciliación correcta')
                 else:
                     st.markdown(f'### ❌ Validación {short}')
-                    st.caption(f'Esperado {format_money(item.esperado)} · Obtenido {format_money(item.obtenido)} · Diferencia {format_money(item.diferencia)}')
+                    st.caption(
+                        f'Esperado {format_money(item.esperado)} · '
+                        f'Obtenido {format_money(item.obtenido)} · '
+                        f'Diferencia {format_money(item.diferencia)}'
+                    )
+
 
 def render_other_validations(result) -> None:
     all_validations = list(getattr(result, 'validaciones', []) or [])
     secondary = [item for item in all_validations if item.nombre not in PRIMARY_VALIDATIONS]
-    correct = sum((1 for item in all_validations if item.correcto))
-    st.caption(f'Integridad financiera: {correct}/{len(all_validations)} validaciones correctas')
+    correct = sum(item.correcto for item in all_validations)
+    st.caption(
+        f'Integridad financiera: {correct}/{len(all_validations)} validaciones correctas'
+    )
     st.markdown(f'**Otras validaciones financieras ({len(secondary)})**')
     if not secondary:
         st.caption('No existen validaciones adicionales para este resultado.')
@@ -350,9 +776,14 @@ def render_other_validations(result) -> None:
         with st.container(border=True):
             icon = '✅' if item.correcto else '❌'
             st.markdown(f'**{icon} {item.nombre}**')
-            st.caption(f'Esperado {format_money(item.esperado)} · Obtenido {format_money(item.obtenido)} · Diferencia {format_money(item.diferencia)}')
+            st.caption(
+                f'Esperado {format_money(item.esperado)} · '
+                f'Obtenido {format_money(item.obtenido)} · '
+                f'Diferencia {format_money(item.diferencia)}'
+            )
             if getattr(item, 'mensaje', None):
                 st.caption(safe_value(item.mensaje))
+
 
 def movement_dataframe(result) -> pd.DataFrame:
     estado = result.estado_cuenta
@@ -380,6 +811,15 @@ def movement_dataframe(result) -> pd.DataFrame:
             df[label] = pd.to_numeric(df[label], errors='coerce')
     return df
 
+
+def filter_movement_dataframe(df: pd.DataFrame, query: str) -> pd.DataFrame:
+    query = query.strip()
+    if not query or df.empty:
+        return df
+    searchable = df.fillna('').astype(str).agg(' '.join, axis=1)
+    return df[searchable.str.contains(query, case=False, regex=False, na=False)]
+
+
 def beneficiary_analytics(result) -> pd.DataFrame:
     grouped: dict[str, list[float]] = {}
     for movement in result.estado_cuenta.movimientos or []:
@@ -387,11 +827,15 @@ def beneficiary_analytics(result) -> pd.DataFrame:
         values = grouped.setdefault(str(name), [0.0, 0.0])
         values[0] += numeric(getattr(movement, 'cargo', 0.0))
         values[1] += numeric(getattr(movement, 'abono', 0.0))
-    rows = [{'Beneficiario': name, 'Cargos': values[0], 'Abonos': values[1]} for name, values in grouped.items()]
+    rows = [
+        {'Beneficiario': name, 'Cargos': values[0], 'Abonos': values[1]}
+        for name, values in grouped.items()
+    ]
     rows.sort(key=lambda row: row['Cargos'] + row['Abonos'], reverse=True)
     if not rows:
         return pd.DataFrame(columns=['Cargos', 'Abonos'])
     return pd.DataFrame(rows[:10]).set_index('Beneficiario')
+
 
 def bank_analytics() -> pd.DataFrame:
     grouped: dict[str, list[float]] = {}
@@ -402,16 +846,21 @@ def bank_analytics() -> pd.DataFrame:
         for movement in getattr(estado, 'movimientos', None) or []:
             values[0] += numeric(getattr(movement, 'cargo', 0.0))
             values[1] += numeric(getattr(movement, 'abono', 0.0))
-    rows = [{'Banco': bank, 'Cargos': values[0], 'Abonos': values[1]} for bank, values in grouped.items()]
+    rows = [
+        {'Banco': bank, 'Cargos': values[0], 'Abonos': values[1]}
+        for bank, values in grouped.items()
+    ]
     if not rows:
         return pd.DataFrame(columns=['Cargos', 'Abonos'])
     return pd.DataFrame(rows).set_index('Banco')
 
+
 def flow_frequency(result) -> pd.DataFrame:
     movements = result.estado_cuenta.movimientos or []
-    cargos = sum((1 for movement in movements if numeric(getattr(movement, 'cargo', 0.0)) > 0))
-    abonos = sum((1 for movement in movements if numeric(getattr(movement, 'abono', 0.0)) > 0))
+    cargos = sum(numeric(getattr(movement, 'cargo', 0.0)) > 0 for movement in movements)
+    abonos = sum(numeric(getattr(movement, 'abono', 0.0)) > 0 for movement in movements)
     return pd.DataFrame({'Movimientos': [cargos, abonos]}, index=['Cargos', 'Abonos'])
+
 
 def render_analytics(result) -> None:
     st.markdown('### 📊 Análisis visual')
@@ -433,6 +882,7 @@ def render_analytics(result) -> None:
     st.markdown('**Frecuencia de cargos y abonos**')
     st.bar_chart(flow_frequency(result), height=220)
 
+
 def render_result(result) -> None:
     estado = getattr(result, 'estado_cuenta', None)
     if estado is None:
@@ -443,21 +893,41 @@ def render_result(result) -> None:
     op = getattr(estado, 'otros_productos', None)
     movements = getattr(estado, 'movimientos', None) or []
     method = getattr(result, 'processing_method', 'Digital')
-    process_text = 'Digital' if method == 'Digital' else engine_label(getattr(result, 'ocr_engine', None))
+    process_text = (
+        'Digital' if method == 'Digital' else engine_label(getattr(result, 'ocr_engine', None))
+    )
+
     st.markdown(f'## 🔍 {result.file_name}')
     st.caption(f'{str(result.bank_key).upper()} · {process_text}')
     cols = st.columns(4)
-    cols[0].metric('Periodo', f"{safe_value(getattr(dc, 'periodo_inicio', None))} al {safe_value(getattr(dc, 'periodo_fin', None))}")
+    cols[0].metric(
+        'Periodo',
+        f"{safe_value(getattr(dc, 'periodo_inicio', None))} al "
+        f"{safe_value(getattr(dc, 'periodo_fin', None))}",
+    )
     cols[1].metric('Cliente', safe_value(getattr(dc, 'nombre_cliente', None)))
     cols[2].metric('Cuenta', safe_value(getattr(dc, 'numero_cuenta', None)))
     cols[3].metric('CLABE', safe_value(getattr(dc, 'clabe', None)))
+
     if method == 'OCR':
         render_ocr_candidate_selector(result)
+
     with st.expander('📌 Datos de la cuenta · todos los campos'):
-        entries = [('Producto principal', safe_value(getattr(dc, 'producto_principal', None))), ('Periodo inicio', safe_value(getattr(dc, 'periodo_inicio', None))), ('Periodo fin', safe_value(getattr(dc, 'periodo_fin', None))), ('Fecha de corte', safe_value(getattr(dc, 'fecha_corte', None))), ('Número de cuenta', safe_value(getattr(dc, 'numero_cuenta', None))), ('Número de cliente', safe_value(getattr(dc, 'numero_cliente', None))), ('CLABE', safe_value(getattr(dc, 'clabe', None))), ('Nombre del cliente', safe_value(getattr(dc, 'nombre_cliente', None))), ('RFC', safe_value(getattr(dc, 'rfc', None)))]
+        entries = [
+            ('Producto principal', safe_value(getattr(dc, 'producto_principal', None))),
+            ('Periodo inicio', safe_value(getattr(dc, 'periodo_inicio', None))),
+            ('Periodo fin', safe_value(getattr(dc, 'periodo_fin', None))),
+            ('Fecha de corte', safe_value(getattr(dc, 'fecha_corte', None))),
+            ('Número de cuenta', safe_value(getattr(dc, 'numero_cuenta', None))),
+            ('Número de cliente', safe_value(getattr(dc, 'numero_cliente', None))),
+            ('CLABE', safe_value(getattr(dc, 'clabe', None))),
+            ('Nombre del cliente', safe_value(getattr(dc, 'nombre_cliente', None))),
+            ('RFC', safe_value(getattr(dc, 'rfc', None))),
+        ]
         cols = st.columns(3)
         for i, (label, value) in enumerate(entries):
             cols[i % 3].metric(label, value)
+
     st.markdown('### 📊 Resumen financiero')
     cols = st.columns(4)
     cols[0].metric('Saldo anterior', format_money(getattr(rf, 'saldo_anterior', None)))
@@ -466,24 +936,81 @@ def render_result(result) -> None:
     cols[3].metric('Saldo final', format_money(getattr(rf, 'saldo_final', None)))
     render_primary_validations(result)
     render_other_validations(result)
+
     with st.expander('📈 Resumen financiero ampliado · todos los campos'):
-        entries = [('Saldo promedio', format_money(getattr(rf, 'saldo_promedio', None))), ('Días del periodo', safe_value(getattr(rf, 'dias_periodo', None))), ('Tasa bruta anual', format_optional_float(getattr(rf, 'tasa_bruta_anual', None), suffix='%')), ('Saldo promedio gravable', format_money(getattr(rf, 'saldo_promedio_gravable', None))), ('Intereses a favor', format_money(getattr(rf, 'intereses_a_favor', None))), ('ISR retenido', format_money(getattr(rf, 'isr_retenido', None))), ('Cheques pagados', safe_value(getattr(rf, 'cheques_pagados', None))), ('Manejo de cuenta', format_money(getattr(rf, 'manejo_cuenta', None))), ('Cargos objetados', format_money(getattr(rf, 'cargos_objetados', None))), ('Abonos objetados', format_money(getattr(rf, 'abonos_objetados', None))), ('Saldo promedio mínimo mensual', format_money(getattr(rf, 'saldo_promedio_minimo_mensual', None))), ('Saldo global', format_money(getattr(rf, 'saldo_global', None)))]
+        entries = [
+            ('Saldo promedio', format_money(getattr(rf, 'saldo_promedio', None))),
+            ('Días del periodo', safe_value(getattr(rf, 'dias_periodo', None))),
+            ('Tasa bruta anual', format_optional_float(getattr(rf, 'tasa_bruta_anual', None), suffix='%')),
+            ('Saldo promedio gravable', format_money(getattr(rf, 'saldo_promedio_gravable', None))),
+            ('Intereses a favor', format_money(getattr(rf, 'intereses_a_favor', None))),
+            ('ISR retenido', format_money(getattr(rf, 'isr_retenido', None))),
+            ('Cheques pagados', safe_value(getattr(rf, 'cheques_pagados', None))),
+            ('Manejo de cuenta', format_money(getattr(rf, 'manejo_cuenta', None))),
+            ('Cargos objetados', format_money(getattr(rf, 'cargos_objetados', None))),
+            ('Abonos objetados', format_money(getattr(rf, 'abonos_objetados', None))),
+            (
+                'Saldo promedio mínimo mensual',
+                format_money(getattr(rf, 'saldo_promedio_minimo_mensual', None)),
+            ),
+            ('Saldo global', format_money(getattr(rf, 'saldo_global', None))),
+        ]
         cols = st.columns(4)
         for i, (label, value) in enumerate(entries):
             cols[i % 4].metric(label, value)
+
     with st.expander('💰 Otros productos y comisiones · todos los campos'):
-        entries = [('Contrato', safe_value(getattr(op, 'contrato', None))), ('Producto', safe_value(getattr(op, 'producto', None))), ('Tasa interés anual', format_optional_float(getattr(op, 'tasa_interes_anual', None), suffix='%')), ('GAT nominal anual', format_optional_float(getattr(op, 'gat_nominal_anual', None), suffix='%')), ('GAT real anual', format_optional_float(getattr(op, 'gat_real_anual', None), suffix='%')), ('Total comisiones', format_optional_float(getattr(op, 'total_comisiones', None), prefix='$'))]
+        entries = [
+            ('Contrato', safe_value(getattr(op, 'contrato', None))),
+            ('Producto', safe_value(getattr(op, 'producto', None))),
+            ('Tasa interés anual', format_optional_float(getattr(op, 'tasa_interes_anual', None), suffix='%')),
+            ('GAT nominal anual', format_optional_float(getattr(op, 'gat_nominal_anual', None), suffix='%')),
+            ('GAT real anual', format_optional_float(getattr(op, 'gat_real_anual', None), suffix='%')),
+            ('Total comisiones', format_optional_float(getattr(op, 'total_comisiones', None), prefix='$')),
+        ]
         cols = st.columns(3)
         for i, (label, value) in enumerate(entries):
             cols[i % 3].metric(label, value)
+
     st.markdown(f'### 📑 Movimientos ({len(movements)})')
     if not movements:
         st.warning('No se encontraron movimientos.')
         return
+
     df = movement_dataframe(result)
-    column_config = {'Cargo': st.column_config.NumberColumn('Cargo', format='$%.2f', width='small'), 'Abono': st.column_config.NumberColumn('Abono', format='$%.2f', width='small'), 'Saldo Operación': st.column_config.NumberColumn('Saldo Operación', format='$%.2f', width='small'), 'Saldo Liquidación': st.column_config.NumberColumn('Saldo Liquidación', format='$%.2f', width='small'), 'Concepto': st.column_config.TextColumn('Concepto', width='large'), 'Concepto Original': st.column_config.TextColumn('Concepto Original', width='large')}
-    st.dataframe(df, use_container_width=True, height=430, hide_index=True, column_config=column_config)
-    render_analytics(result)
+    movement_query = st.text_input(
+        'Filtrar movimientos',
+        placeholder='Buscar fecha, concepto, beneficiario, referencia, importe…',
+        key=f'movement_filter_{result.file_name}',
+    )
+    filtered_df = filter_movement_dataframe(df, movement_query)
+    st.caption(f'Mostrando {len(filtered_df)} de {len(df)} movimiento(s).')
+    column_config = {
+        'Cargo': st.column_config.NumberColumn('Cargo', format='$%.2f', width='small'),
+        'Abono': st.column_config.NumberColumn('Abono', format='$%.2f', width='small'),
+        'Saldo Operación': st.column_config.NumberColumn(
+            'Saldo Operación', format='$%.2f', width='small'
+        ),
+        'Saldo Liquidación': st.column_config.NumberColumn(
+            'Saldo Liquidación', format='$%.2f', width='small'
+        ),
+        'Concepto': st.column_config.TextColumn('Concepto', width='large'),
+        'Concepto Original': st.column_config.TextColumn('Concepto Original', width='large'),
+    }
+    st.dataframe(
+        filtered_df,
+        use_container_width=True,
+        height=430,
+        hide_index=True,
+        column_config=column_config,
+    )
+    if st.toggle(
+        'Mostrar análisis visual',
+        value=False,
+        key=f'analytics_toggle_{result.file_name}',
+    ):
+        render_analytics(result)
+
 
 def render_export_section() -> None:
     if not st.session_state.results:
@@ -492,7 +1019,9 @@ def render_export_section() -> None:
     col_text, col_button = st.columns([3, 1])
     with col_text:
         st.markdown('### 📤 Exportación')
-        st.caption('El archivo incluye únicamente los resultados terminados y usa la selección OCR activa de cada PDF.')
+        st.caption(
+            'El archivo incluye únicamente los resultados terminados y usa la selección OCR activa de cada PDF.'
+        )
     with col_button:
         if st.button('Preparar Excel', type='primary', use_container_width=True):
             excel_path = None
@@ -502,7 +1031,13 @@ def render_export_section() -> None:
                 export_batch_excel(list(st.session_state.results), excel_path)
                 with open(excel_path, 'rb') as file:
                     data = file.read()
-                st.download_button('Descargar Excel', data=data, file_name='reporte_estados_de_cuenta.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
+                st.download_button(
+                    'Descargar Excel',
+                    data=data,
+                    file_name='reporte_estados_de_cuenta.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True,
+                )
             except Exception as ex:
                 st.error(f'Error al generar Excel: {ex}')
             finally:
@@ -512,20 +1047,31 @@ def render_export_section() -> None:
                     except (FileNotFoundError, OSError):
                         pass
 
-@st.dialog('Procesando estados de cuenta', width='small', dismissible=True, icon='spinner', on_dismiss='ignore')
+
+@st.dialog(
+    'Procesando estados de cuenta',
+    width='small',
+    dismissible=True,
+    icon='spinner',
+    on_dismiss='ignore',
+)
 def processing_dialog() -> None:
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), width=150)
-    st.write('Los resultados terminados se conservarán y podrán revisarse mientras el resto del lote continúa.')
+    st.write(
+        'Los PDFs aparecerán en Resultados disponibles en cuanto se clasifique su tipo. '
+        'Puedes cerrar esta ventana y revisar los resultados mientras continúa el lote.'
+    )
     col1, col2 = st.columns(2)
     with col1:
-        if st.button('Continuar en segundo plano', use_container_width=True, key='dialog_background'):
+        if st.button('Ver procesamiento', use_container_width=True, key='dialog_background'):
             st.rerun()
     with col2:
         if st.button('Detener', use_container_width=True, key='dialog_stop'):
             st.session_state.stop_requested = True
             st.session_state.stop_event.set()
             st.rerun()
+
 
 def render_header() -> None:
     with st.container(border=True):
@@ -534,52 +1080,115 @@ def render_header() -> None:
             if LOGO_PATH.exists():
                 st.image(str(LOGO_PATH), width=150)
         with col_title:
-            st.markdown('<div class="app-title">Extractor de Movimientos Financieros</div>', unsafe_allow_html=True)
-            st.caption('Secretaría Anticorrupción y Buen Gobierno · Dirección General de Evaluación de Confianza')
+            st.markdown(
+                '<div class="app-title">Extractor de Movimientos Financieros</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                'Secretaría Anticorrupción y Buen Gobierno · Dirección General de Evaluación de Confianza'
+            )
         with col_actions:
-            st.markdown(f'<span class="version-pill">Versión {APP_VERSION}</span>', unsafe_allow_html=True)
-            with st.popover('⚙️', help='Configuración', disabled=st.session_state.worker_running):
-                engine = st.selectbox('Motor OCR principal', options=['tesseract', 'paddleocr'], index=0 if st.session_state.ocr_primary_engine == 'tesseract' else 1, format_func=engine_label)
-                st.caption('Se recomienda Tesseract. Cambie a PaddleOCR sólo si observa diferencias importantes entre el PDF original y el resultado exportado; suele ser más lento.')
+            st.markdown(
+                f'<span class="version-pill">Versión {APP_VERSION}</span>',
+                unsafe_allow_html=True,
+            )
+            with st.popover(
+                '⚙️',
+                help='Configuración',
+                disabled=st.session_state.worker_running,
+            ):
+                engine = st.selectbox(
+                    'Motor OCR principal',
+                    options=['tesseract', 'paddleocr'],
+                    index=(
+                        0 if st.session_state.ocr_primary_engine == 'tesseract' else 1
+                    ),
+                    format_func=engine_label,
+                )
+                st.caption(
+                    'Se recomienda Tesseract. Cambie a PaddleOCR sólo si observa diferencias importantes entre el PDF original y el resultado exportado; suele ser más lento.'
+                )
                 if st.button('Guardar configuración', key='save_config'):
                     st.session_state.ocr_primary_engine = normalize_ocr_engine(engine)
                     st.success('Guardado')
             with st.popover('❔', help='Ayuda'):
-                st.markdown('**Validaciones**  \nA y C representan las conciliaciones principales de Abonos y Cargos.')
-                st.markdown('**Formatos habilitados**  \nBBVA Digital · Banorte Digital/Escaneado · Banamex Digital · HSBC Digital/Escaneado · Scotiabank Digital · Mifel · CETESDIRECTO · MercadoPago')
+                st.markdown(
+                    '**Validaciones**  \nA y C representan las conciliaciones principales de Abonos y Cargos.'
+                )
+                st.markdown(
+                    '**Estados vivos**  \nLos PDFs se muestran mientras se clasifican y procesan. Los terminados pueden revisarse y exportarse sin esperar al lote completo.'
+                )
+                st.markdown(
+                    '**Formatos habilitados**  \nBBVA Digital · Banorte Digital/Escaneado · Banamex Digital · HSBC Digital/Escaneado · Scotiabank Digital · Mifel · CETESDIRECTO · MercadoPago'
+                )
 
-def main() -> None:
-    st.set_page_config(page_title='Extractor de Movimientos Financieros', layout='wide')
-    initialize_session_state()
-    inject_css()
-    render_header()
-    if st.session_state.worker_running and st.session_state.initial_dialog_pending:
-        st.session_state.initial_dialog_pending = False
-        processing_dialog()
-    uploaded_files = st.file_uploader('Seleccionar estados de cuenta PDF', type='pdf', accept_multiple_files=True, disabled=st.session_state.worker_running)
+
+def render_upload_area() -> None:
+    uploader_key = f'statement_uploader_{st.session_state.uploader_nonce}'
+    uploaded_files = st.file_uploader(
+        'Seleccionar estados de cuenta PDF',
+        type='pdf',
+        accept_multiple_files=True,
+        disabled=st.session_state.worker_running,
+        key=uploader_key,
+    )
+
+    if (
+        not st.session_state.worker_running
+        and st.session_state.processing_items
+        and st.button('Nuevo lote', type='secondary', key='new_batch')
+    ):
+        reset_batch()
+        st.rerun()
+
     if uploaded_files:
-        uploaded_files_data = tuple(((uploaded_file.name, uploaded_file.getvalue()) for uploaded_file in uploaded_files))
+        uploaded_files_data = tuple(
+            (uploaded_file.name, uploaded_file.getvalue())
+            for uploaded_file in uploaded_files
+        )
         current_signature = create_batch_signature(uploaded_files_data)
-        if current_signature != st.session_state.batch_signature and (not st.session_state.worker_running):
+        if (
+            current_signature != st.session_state.batch_signature
+            and not st.session_state.worker_running
+        ):
             try:
                 start_processing(uploaded_files_data)
                 st.toast('Procesamiento iniciado', icon='⏳')
                 st.rerun()
             except Exception as ex:
                 st.error(f'No fue posible iniciar el procesamiento: {ex}')
+
+
+def main() -> None:
+    st.set_page_config(page_title='Extractor de Movimientos Financieros', layout='wide')
+    initialize_session_state()
+    inject_css()
+    render_header()
+
+    if st.session_state.worker_running and st.session_state.initial_dialog_pending:
+        st.session_state.initial_dialog_pending = False
+        processing_dialog()
+
+    render_upload_area()
+
     if st.session_state.worker_error:
         st.error(f'Error durante el procesamiento: {st.session_state.worker_error}')
         if st.session_state.worker_traceback:
             with st.expander('Detalle técnico'):
                 st.code(st.session_state.worker_traceback)
-    processing_status_fragment()
-    if st.session_state.processing_items:
-        st.markdown('### Resultados disponibles')
-        render_result_selector()
+
+    if st.session_state.worker_running:
+        live_processing_fragment()
+    else:
+        render_static_processing_workspace()
+
     result = selected_result()
     if result is not None:
         st.divider()
         render_result(result)
+
     render_export_section()
+
+
 if __name__ == '__main__':
     main()
