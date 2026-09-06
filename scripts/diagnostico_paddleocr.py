@@ -10,7 +10,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from detectors.bank_detector import identify_bank_key
-from engine.statement_processor import process_single_statement_with_ocr_review
+from engine.statement_processor import (
+    _build_candidate,
+    _process_once,
+    process_single_statement_with_ocr_review,
+)
 from readers.reader_manager import ReaderManager
 
 
@@ -30,6 +34,56 @@ def _print_candidate(candidate) -> None:
         f"{candidate.validation_total} validaciones / "
         f"{candidate.validation_failed} fallidas"
     )
+
+
+def _run_forced_comparison(pdf_path: Path, visible_name: str) -> int:
+    """Fuerza ambos motores para demostrar que PaddleOCR realmente infiere."""
+    try:
+        tesseract_document = ReaderManager.read_ocr(pdf_path, start_page=0)
+        bank_key = identify_bank_key(
+            raw_text=tesseract_document.raw_text,
+            file_name=visible_name,
+        )
+        if not bank_key:
+            print("ERROR: no se pudo identificar el banco.", file=sys.stderr)
+            return 3
+
+        paddle_document = ReaderManager.read_paddle_ocr(pdf_path, start_page=0)
+        tesseract_estado, tesseract_document = _process_once(
+            tesseract_document,
+            bank_key,
+        )
+        paddle_estado, paddle_document = _process_once(
+            paddle_document,
+            bank_key,
+        )
+        tesseract_candidate = _build_candidate(
+            "tesseract",
+            tesseract_estado,
+            tesseract_document,
+        )
+        paddle_candidate = _build_candidate(
+            "paddleocr",
+            paddle_estado,
+            paddle_document,
+        )
+    except Exception as exc:
+        print(
+            f"ERROR PaddleOCR/Tesseract: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 6
+
+    print("=== Comparación OCR forzada ===")
+    print(f"Banco detectado: {bank_key}")
+    _print_candidate(tesseract_candidate)
+    _print_candidate(paddle_candidate)
+    print(
+        "PaddleOCR inference: OK · reader=paddleocr · "
+        f"tokens espaciales={len(paddle_document.spatial_words)}"
+    )
+    print("No se imprimieron datos personales ni valores financieros.")
+    return 0
 
 
 def main() -> int:
@@ -56,6 +110,14 @@ def main() -> int:
             "Por defecto se utiliza la recomendación automática."
         ),
     )
+    parser.add_argument(
+        "--comparar-motores",
+        action="store_true",
+        help=(
+            "Fuerza Tesseract y PaddleOCR sobre el mismo PDF, aunque la política "
+            "de fallback no lo requiera, y reporta sólo conteos técnicos."
+        ),
+    )
     args = parser.parse_args()
 
     pdf_path = Path(args.pdf).expanduser().resolve()
@@ -64,6 +126,9 @@ def main() -> int:
         return 2
 
     visible_name = args.nombre or pdf_path.name
+
+    if args.comparar_motores:
+        return _run_forced_comparison(pdf_path, visible_name)
 
     try:
         tesseract_document = ReaderManager.read_ocr(pdf_path, start_page=0)

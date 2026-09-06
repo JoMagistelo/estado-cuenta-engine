@@ -21,8 +21,10 @@ class PaddleOCRPDFReader:
 
     El reader está diseñado como fallback controlado de Tesseract. No descarga
     modelos en runtime y no utiliza la API alojada de PaddleOCR. Los modelos de
-    detección y reconocimiento deben estar previamente instalados en rutas
-    locales autorizadas.
+    detección y reconocimiento deben estar previamente instalados. Las rutas
+    explícitas tienen prioridad y, si no existen variables de entorno, se
+    resuelven ubicaciones locales controladas (ProgramData/LocalAppData y la
+    caché local oficial de PaddleX) sin habilitar descargas.
 
     En Windows/CPU se prioriza estabilidad: oneDNN/MKL-DNN queda deshabilitado
     por defecto porque esta misma combinación PaddlePaddle 3.x + PP-OCRv5 ya
@@ -115,11 +117,21 @@ class PaddleOCRPDFReader:
 
     @classmethod
     def _load_config(cls) -> dict[str, Any]:
-        detection_dir = cls._required_model_dir(
-            "PADDLEOCR_TEXT_DETECTION_MODEL_DIR"
+        detection_model_name = os.getenv(
+            "PADDLEOCR_TEXT_DETECTION_MODEL_NAME",
+            cls.DEFAULT_DETECTION_MODEL_NAME,
+        ).strip() or cls.DEFAULT_DETECTION_MODEL_NAME
+        recognition_model_name = os.getenv(
+            "PADDLEOCR_TEXT_RECOGNITION_MODEL_NAME",
+            cls.DEFAULT_RECOGNITION_MODEL_NAME,
+        ).strip() or cls.DEFAULT_RECOGNITION_MODEL_NAME
+        detection_dir = cls._resolve_model_dir(
+            "PADDLEOCR_TEXT_DETECTION_MODEL_DIR",
+            detection_model_name,
         )
-        recognition_dir = cls._required_model_dir(
-            "PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR"
+        recognition_dir = cls._resolve_model_dir(
+            "PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR",
+            recognition_model_name,
         )
 
         language = os.getenv(
@@ -140,16 +152,8 @@ class PaddleOCRPDFReader:
                 cls.DEFAULT_DEVICE,
             ).strip()
             or cls.DEFAULT_DEVICE,
-            "detection_model_name": os.getenv(
-                "PADDLEOCR_TEXT_DETECTION_MODEL_NAME",
-                cls.DEFAULT_DETECTION_MODEL_NAME,
-            ).strip()
-            or cls.DEFAULT_DETECTION_MODEL_NAME,
-            "recognition_model_name": os.getenv(
-                "PADDLEOCR_TEXT_RECOGNITION_MODEL_NAME",
-                cls.DEFAULT_RECOGNITION_MODEL_NAME,
-            ).strip()
-            or cls.DEFAULT_RECOGNITION_MODEL_NAME,
+            "detection_model_name": detection_model_name,
+            "recognition_model_name": recognition_model_name,
             "detection_model_dir": str(detection_dir),
             "recognition_model_dir": str(recognition_dir),
             "enable_mkldnn": cls._configured_bool(
@@ -159,23 +163,87 @@ class PaddleOCRPDFReader:
             "cpu_threads": cls._configured_cpu_threads(),
         }
 
-    @staticmethod
-    def _required_model_dir(variable_name: str) -> Path:
+    @classmethod
+    def _resolve_model_dir(
+        cls,
+        variable_name: str,
+        model_name: str,
+    ) -> Path:
         configured = os.getenv(variable_name, "").strip()
-        if not configured:
-            raise PaddleOCRConfigurationError(
-                f"Falta configurar {variable_name}. "
-                "PaddleOCR no descargará modelos automáticamente."
+        if configured:
+            path = Path(configured).expanduser().resolve()
+            if not path.is_dir():
+                raise PaddleOCRConfigurationError(
+                    f"La ruta configurada en {variable_name} no existe o no es "
+                    "un directorio válido."
+                )
+            return path
+
+        candidates = cls._model_dir_candidates(model_name)
+        for candidate in candidates:
+            if candidate.is_dir():
+                return candidate.resolve()
+
+        searched = ", ".join(cls._display_path(item) for item in candidates)
+        raise PaddleOCRConfigurationError(
+            f"No se encontró el modelo local {model_name}. Configura "
+            f"{variable_name} o PADDLEOCR_MODEL_ROOT. Rutas locales revisadas: "
+            f"{searched or 'ninguna'}. PaddleOCR no descargará modelos "
+            "automáticamente."
+        )
+
+    @classmethod
+    def _model_dir_candidates(cls, model_name: str) -> list[Path]:
+        candidates: list[Path] = []
+
+        model_root = os.getenv("PADDLEOCR_MODEL_ROOT", "").strip()
+        if model_root:
+            candidates.append(Path(model_root).expanduser() / model_name)
+
+        program_data = os.getenv("PROGRAMDATA", "").strip()
+        if program_data:
+            candidates.append(
+                Path(program_data)
+                / "EstadoCuentaEngine"
+                / "PaddleOCR"
+                / model_name
             )
 
-        path = Path(configured).expanduser().resolve()
-        if not path.is_dir():
-            raise PaddleOCRConfigurationError(
-                f"La ruta configurada en {variable_name} no existe "
-                "o no es un directorio válido."
+        local_app_data = os.getenv("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            candidates.append(
+                Path(local_app_data)
+                / "EstadoCuentaEngine"
+                / "PaddleOCR"
+                / model_name
             )
 
-        return path
+        candidates.append(
+            Path.home() / ".paddlex" / "official_models" / model_name
+        )
+
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = str(candidate.expanduser()).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(candidate.expanduser())
+        return unique
+
+    @staticmethod
+    def _display_path(path: Path) -> str:
+        try:
+            home = Path.home().resolve()
+            resolved = path.expanduser().resolve()
+            try:
+                relative = resolved.relative_to(home)
+            except ValueError:
+                return str(resolved)
+            return str(Path("~") / relative)
+        except Exception:
+            return str(path)
 
     @staticmethod
     def _configured_bool(variable_name: str, default: bool) -> bool:
@@ -284,9 +352,14 @@ class PaddleOCRPDFReader:
                     cpu_threads=cpu_threads,
                 )
             except Exception as exc:
+                detail = str(exc).strip()
+                if detail:
+                    detail = f"{type(exc).__name__}: {detail[:300]}"
+                else:
+                    detail = type(exc).__name__
                 raise PaddleOCRConfigurationError(
                     "No se pudo inicializar PaddleOCR con los modelos locales "
-                    "configurados."
+                    f"configurados. Causa: {detail}."
                 ) from exc
 
             cls._engine_signature = signature

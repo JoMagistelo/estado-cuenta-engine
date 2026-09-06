@@ -51,7 +51,7 @@ def test_result_field_reads_official_json_shape():
     ) == ["HSBC", "SALDO"]
 
 
-def test_model_directories_are_required(monkeypatch):
+def test_model_directories_raise_when_no_local_model_is_resolvable(monkeypatch):
     monkeypatch.delenv(
         "PADDLEOCR_TEXT_DETECTION_MODEL_DIR",
         raising=False,
@@ -60,9 +60,56 @@ def test_model_directories_are_required(monkeypatch):
         "PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR",
         raising=False,
     )
+    monkeypatch.delenv("PADDLEOCR_MODEL_ROOT", raising=False)
+    monkeypatch.setattr(
+        PaddleOCRPDFReader,
+        "_model_dir_candidates",
+        classmethod(lambda cls, model_name: []),
+    )
 
-    with pytest.raises(PaddleOCRConfigurationError):
+    with pytest.raises(PaddleOCRConfigurationError, match="No se encontró el modelo local"):
         PaddleOCRPDFReader._load_config()
+
+
+def test_cached_paddlex_models_are_resolved_without_session_env(tmp_path, monkeypatch):
+    detection = tmp_path / "PP-OCRv5_mobile_det"
+    recognition = tmp_path / "latin_PP-OCRv5_mobile_rec"
+    detection.mkdir()
+    recognition.mkdir()
+
+    monkeypatch.delenv("PADDLEOCR_TEXT_DETECTION_MODEL_DIR", raising=False)
+    monkeypatch.delenv("PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR", raising=False)
+    monkeypatch.delenv("PADDLEOCR_MODEL_ROOT", raising=False)
+    monkeypatch.setattr(
+        PaddleOCRPDFReader,
+        "_model_dir_candidates",
+        classmethod(lambda cls, model_name: [tmp_path / model_name]),
+    )
+
+    config = PaddleOCRPDFReader._load_config()
+
+    assert config["detection_model_dir"] == str(detection.resolve())
+    assert config["recognition_model_dir"] == str(recognition.resolve())
+
+
+def test_explicit_invalid_model_path_does_not_silently_fallback(tmp_path, monkeypatch):
+    cached = tmp_path / "PP-OCRv5_mobile_det"
+    cached.mkdir()
+    monkeypatch.setenv(
+        "PADDLEOCR_TEXT_DETECTION_MODEL_DIR",
+        str(tmp_path / "missing"),
+    )
+    monkeypatch.setattr(
+        PaddleOCRPDFReader,
+        "_model_dir_candidates",
+        classmethod(lambda cls, model_name: [cached]),
+    )
+
+    with pytest.raises(PaddleOCRConfigurationError, match="ruta configurada"):
+        PaddleOCRPDFReader._resolve_model_dir(
+            "PADDLEOCR_TEXT_DETECTION_MODEL_DIR",
+            "PP-OCRv5_mobile_det",
+        )
 
 
 def test_local_model_configuration_uses_approved_paths(tmp_path, monkeypatch):
@@ -149,6 +196,40 @@ def test_cpu_engine_disables_mkldnn_by_default(monkeypatch):
         assert captured_kwargs["device"] == "cpu"
         assert "lang" not in captured_kwargs
         assert "ocr_version" not in captured_kwargs
+    finally:
+        PaddleOCRPDFReader._engine = None
+        PaddleOCRPDFReader._engine_signature = None
+
+
+def test_engine_configuration_error_preserves_underlying_reason(monkeypatch):
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            raise ValueError("modelo local incompatible")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PaddleOCR=FakePaddleOCR),
+    )
+
+    PaddleOCRPDFReader._engine = None
+    PaddleOCRPDFReader._engine_signature = None
+
+    try:
+        with pytest.raises(
+            PaddleOCRConfigurationError,
+            match="ValueError: modelo local incompatible",
+        ):
+            PaddleOCRPDFReader._get_engine(
+                language="es",
+                device="cpu",
+                detection_model_name="PP-OCRv5_mobile_det",
+                recognition_model_name="latin_PP-OCRv5_mobile_rec",
+                detection_model_dir="C:/modelos/det",
+                recognition_model_dir="C:/modelos/rec",
+                enable_mkldnn=False,
+                cpu_threads=10,
+            )
     finally:
         PaddleOCRPDFReader._engine = None
         PaddleOCRPDFReader._engine_signature = None

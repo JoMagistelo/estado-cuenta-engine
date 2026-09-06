@@ -20,7 +20,7 @@ from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
 
-APP_VERSION = '2.3'
+APP_VERSION = '2.4'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 MOVEMENT_PAGE_SIZE = 60
@@ -185,18 +185,10 @@ def main(page: ft.Page):
     )
     selector_filter = ft.TextField(
         hint_text='Filtrar PDF, banco o estado',
-        width=250,
+        width=420,
         height=38,
         text_size=11,
         prefix_icon=ft.Icons.SEARCH,
-    )
-    result_dropdown = ft.Dropdown(
-        label='Ir a resultado',
-        width=285,
-        height=38,
-        text_size=10,
-        options=[],
-        disabled=True,
     )
     export_button = ft.FilledButton(
         content='Generar Excel',
@@ -434,25 +426,6 @@ def main(page: ft.Page):
             expand=True,
         )
 
-    def refresh_result_dropdown() -> None:
-        completed = [
-            (index, item)
-            for index, item in enumerate(processing_items)
-            if item.get('status') == 'completed' and item.get('result') is not None
-        ]
-        result_dropdown.options = [
-            ft.DropdownOption(
-                key=str(index),
-                text=(
-                    f"{item.get('file_name', '')} · {bank_key_for_item(item)} · "
-                    f"{process_label(item)}"
-                ),
-            )
-            for index, item in completed
-        ]
-        result_dropdown.disabled = not completed
-        selected = state.get('selected_index')
-        result_dropdown.value = str(selected) if isinstance(selected, int) else None
 
     def rebuild_selector(*, update: bool = True) -> None:
         selector_rows.clear()
@@ -545,13 +518,11 @@ def main(page: ft.Page):
                     ft.Text('Sin archivos en este filtro.', size=8, color=ft.Colors.ON_SURFACE_VARIANT)
                 )
 
-        refresh_result_dropdown()
         if update:
             for control in (
                 digital_groups_view,
                 ocr_groups_view,
                 classifying_shell,
-                result_dropdown,
             ):
                 try:
                     control.update()
@@ -592,14 +563,6 @@ def main(page: ft.Page):
         rebuild_selector()
         render_result(result)
 
-    def on_result_dropdown_change(e) -> None:
-        try:
-            index = int(e.control.value)
-        except (TypeError, ValueError):
-            return
-        select_item(index)
-
-    result_dropdown.on_change = on_result_dropdown_change
     selector_filter.on_change = lambda e: rebuild_selector()
 
     def update_status(*, direct_update: bool = True):
@@ -1155,9 +1118,23 @@ def main(page: ft.Page):
             else:
                 error_type = getattr(review, 'paddle_error_type', None) if review is not None else None
                 suffix = f' · error {error_type}' if error_type else ''
+                error_message = ''
+                if review is not None and primary in available:
+                    try:
+                        primary_candidate = review.get_candidate(primary)
+                        error_message = str(
+                            (primary_candidate.document.metadata or {}).get(
+                                'ocr_fallback_error_message',
+                                '',
+                            )
+                            or ''
+                        ).strip()
+                    except Exception:
+                        error_message = ''
+                detail = f' · {error_message}' if error_message else ''
                 lines.append(
                     ft.Text(
-                        f'Fallback intentado: {engine_label(secondary)} · no produjo candidato{suffix}.',
+                        f'Fallback intentado: {engine_label(secondary)} · no produjo candidato{suffix}{detail}.',
                         size=8,
                         color=DANGER,
                         weight=ft.FontWeight.BOLD,
@@ -1190,14 +1167,25 @@ def main(page: ft.Page):
         )
 
 
-    def beneficiary_analytics(movements) -> list[tuple[str, float, float]]:
+    def beneficiary_analytics(
+        movements,
+    ) -> list[tuple[str, float, float, int, int]]:
         grouped: dict[str, list[float]] = {}
         for movement in movements:
             name = getattr(movement, 'beneficiario', None) or 'Sin beneficiario'
-            values = grouped.setdefault(str(name), [0.0, 0.0])
-            values[0] += numeric(getattr(movement, 'cargo', 0.0))
-            values[1] += numeric(getattr(movement, 'abono', 0.0))
-        rows = [(name, values[0], values[1]) for name, values in grouped.items()]
+            values = grouped.setdefault(str(name), [0.0, 0.0, 0.0, 0.0])
+            cargo = numeric(getattr(movement, 'cargo', 0.0))
+            abono = numeric(getattr(movement, 'abono', 0.0))
+            values[0] += cargo
+            values[1] += abono
+            if cargo > 0:
+                values[2] += 1
+            if abono > 0:
+                values[3] += 1
+        rows = [
+            (name, values[0], values[1], int(values[2]), int(values[3]))
+            for name, values in grouped.items()
+        ]
         rows.sort(key=lambda item: item[1] + item[2], reverse=True)
         return rows[:8]
 
@@ -1214,7 +1202,12 @@ def main(page: ft.Page):
         rows.sort(key=lambda item: item[1] + item[2], reverse=True)
         return rows[:8]
 
-    def analytics_bar_card(title: str, rows: list[tuple[str, float, float]]) -> ft.Container:
+    def analytics_bar_card(
+        title: str,
+        rows: list[tuple],
+        *,
+        show_counts: bool = False,
+    ) -> ft.Container:
         if not rows:
             return ft.Container(
                 ft.Column(
@@ -1232,7 +1225,7 @@ def main(page: ft.Page):
                 border_radius=7,
                 expand=True,
             )
-        maximum = max(max(cargo, abono) for _label, cargo, abono in rows) or 1.0
+        maximum = max(max(float(row[1]), float(row[2])) for row in rows) or 1.0
         controls: list[ft.Control] = [
             ft.Text(title, size=10, weight=ft.FontWeight.BOLD),
             ft.Row(
@@ -1243,13 +1236,37 @@ def main(page: ft.Page):
                 spacing=12,
             ),
         ]
-        for label, cargo, abono in rows:
+        for row in rows:
+            label, cargo, abono = row[:3]
+            cargo_count = int(row[3]) if len(row) > 3 else 0
+            abono_count = int(row[4]) if len(row) > 4 else 0
             cargo_width = max(2, int(180 * cargo / maximum))
             abono_width = max(2, int(180 * abono / maximum))
+            label_controls: list[ft.Control] = []
+            if show_counts:
+                label_controls.append(
+                    ft.Container(
+                        ft.Text(
+                            f'C {cargo_count} · A {abono_count}',
+                            size=7,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        width=58,
+                    )
+                )
+            label_controls.append(
+                ft.Text(
+                    str(label),
+                    size=8,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    expand=True,
+                )
+            )
             controls.append(
                 ft.Column(
                     [
-                        ft.Text(label, size=8, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                        ft.Row(label_controls, spacing=4),
                         ft.Row(
                             [
                                 ft.Container(width=cargo_width, height=7, bgcolor=GOB_GOLD, border_radius=3),
@@ -1320,6 +1337,7 @@ def main(page: ft.Page):
         beneficiary = analytics_bar_card(
             'Cargos y abonos por beneficiario · Top 8',
             beneficiary_analytics(movements),
+            show_counts=True,
         )
         banks = analytics_bar_card(
             'Cargos y abonos por banco · lote procesado',
@@ -1957,7 +1975,6 @@ def main(page: ft.Page):
                 }
             )
         selector_filter.value = ''
-        result_dropdown.value = None
         loading_ring.visible = True
         upload_button.disabled = True
         config_button.disabled = True
@@ -2141,8 +2158,7 @@ def main(page: ft.Page):
                     ),
                     ft.Container(expand=True),
                     selector_filter,
-                    result_dropdown,
-                ],
+                    ],
                 spacing=7,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
