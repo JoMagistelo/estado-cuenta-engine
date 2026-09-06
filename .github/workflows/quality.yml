@@ -165,24 +165,21 @@ jobs:
       - name: Build desktop executable
         run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
 
-      - name: Verify executable exists
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "dist/Extractor_de_Movimientos_Financieros.exe")) {
-            throw "No se generó el ejecutable esperado."
-          }
-
-      - name: Generate executable integrity manifest
+      - name: Verify executable and release manifest
         shell: pwsh
         run: |
           $path = "dist/Extractor_de_Movimientos_Financieros.exe"
-          $hash = Get-FileHash $path -Algorithm SHA256
-          "$($hash.Hash.ToLower())  Extractor_de_Movimientos_Financieros.exe" | Out-File -Encoding ascii "dist/Extractor_de_Movimientos_Financieros.sha256.txt"
+          if (-not (Test-Path $path)) {
+            throw "No se generó el ejecutable esperado."
+          }
+          python scripts/verify_windows_release.py $path --output-dir dist --version "2.3.0"
 
       - name: Upload build evidence
         uses: actions/upload-artifact@v4
         with:
           name: desktop-build-evidence
-          path: dist/Extractor_de_Movimientos_Financieros.sha256.txt
+          path: |
+            dist/Extractor_de_Movimientos_Financieros.sha256.txt
+            dist/release-manifest.json
           if-no-files-found: error
           retention-days: 30
