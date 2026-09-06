@@ -1,0 +1,91 @@
+name: TICS desktop release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_label:
+        description: "Etiqueta de la compilación (ej. 2.3.1-rc1)"
+        required: false
+        default: "manual"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-desktop:
+    name: Windows desktop + OCR completo
+    runs-on: windows-latest
+    env:
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install full desktop runtime
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[desktop,paddleocr]"
+          python -m pip install --group packaging
+
+      - name: Verify OCR runtimes
+        shell: pwsh
+        run: |
+          python -c "import flet, paddle, paddleocr, pytesseract; print('Flet/PaddleOCR/Tesseract Python bridge OK'); print('PaddlePaddle', paddle.__version__); print('PaddleOCR', paddleocr.__version__)"
+          if (-not (Test-Path "vendor/tesseract/tesseract.exe")) {
+            throw "No se encontró el runtime Tesseract versionado."
+          }
+
+      - name: Compile application sources
+        run: python -m compileall -q app src scripts
+
+      - name: Run non-integration regression suite
+        run: python -m pytest -m "not integration" -q
+
+      - name: Build institutional desktop executable
+        run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
+
+      - name: Verify executable and create hashes
+        shell: pwsh
+        run: |
+          $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
+          if (-not (Test-Path $exe)) {
+            throw "No se generó el ejecutable esperado."
+          }
+          $hash = Get-FileHash $exe -Algorithm SHA256
+          "$($hash.Hash.ToLower())  Extractor_de_Movimientos_Financieros.exe" | Out-File -Encoding ascii "dist/Extractor_de_Movimientos_Financieros.sha256.txt"
+          "${{ inputs.release_label }}" | Out-File -Encoding utf8 "dist/release-label.txt"
+
+      - name: Create deployment note
+        shell: pwsh
+        run: |
+          @"
+          Extractor de Movimientos Financieros - compilación TICS
+
+          El ejecutable incluye Flet, Tesseract y el runtime Python de PaddleOCR.
+          Por política del proyecto, los modelos PaddleOCR no se descargan en tiempo de ejecución.
+          TICS debe desplegar los modelos autorizados y configurar:
+            PADDLEOCR_TEXT_DETECTION_MODEL_DIR
+            PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR
+
+          Verificar el SHA-256 antes de distribuir el binario.
+          "@ | Out-File -Encoding utf8 "dist/LEEME_TICS.txt"
+
+      - name: Upload TICS deployment bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tics-desktop-${{ inputs.release_label }}
+          path: |
+            dist/Extractor_de_Movimientos_Financieros.exe
+            dist/Extractor_de_Movimientos_Financieros.sha256.txt
+            dist/release-label.txt
+            dist/LEEME_TICS.txt
+          if-no-files-found: error
+          retention-days: 30
