@@ -9,13 +9,7 @@ from validators.resultado_validacion import ResultadoValidacion
 
 @dataclass
 class ProcessingResult:
-    """Resultado completo del procesamiento de un estado de cuenta.
-
-    Para documentos OCR, ``ocr_review`` puede conservar temporalmente los
-    candidatos Tesseract y PaddleOCR. El candidato seleccionado se refleja en
-    los campos públicos existentes para mantener compatibilidad con mappers,
-    exportadores e interfaces actuales.
-    """
+    """Resultado completo del procesamiento de un estado de cuenta."""
 
     file_name: str
     bank_key: str
@@ -26,6 +20,11 @@ class ProcessingResult:
     processing_method: str = "Digital"
     debug: object | None = None
     ocr_review: OCRReview | None = None
+    ocr_engine: str | None = None
+    ocr_primary_engine: str | None = None
+    ocr_secondary_engine: str | None = None
+    fallback_attempted: bool = False
+    fallback_used: bool = False
 
     def available_ocr_engines(self) -> tuple[str, ...]:
         if self.ocr_review is None:
@@ -34,18 +33,18 @@ class ProcessingResult:
 
     @property
     def selected_ocr_engine(self) -> str | None:
-        if self.ocr_review is None:
-            return None
-        return self.ocr_review.selected_engine
+        if self.ocr_review is not None:
+            return self.ocr_review.selected_engine
+        return self.ocr_engine
 
     @property
     def recommended_ocr_engine(self) -> str | None:
-        if self.ocr_review is None:
-            return None
-        return self.ocr_review.recommended_engine
+        if self.ocr_review is not None:
+            return self.ocr_review.recommended_engine
+        return self.ocr_engine
 
     def select_ocr_engine(self, engine: str) -> None:
-        """Aplica en memoria el candidato OCR elegido por el usuario."""
+        """Compatibilidad con la revisión manual histórica."""
         if self.ocr_review is None:
             raise ValueError("Este resultado no contiene alternativas OCR.")
 
@@ -54,3 +53,8 @@ class ProcessingResult:
         self.raw_text = candidate.document.raw_text
         self.normalized_text = candidate.document.normalized_text
         self.validaciones = list(candidate.validaciones)
+        self.ocr_engine = candidate.engine
+        self.fallback_used = bool(
+            self.ocr_primary_engine
+            and candidate.engine != self.ocr_primary_engine
+        )
