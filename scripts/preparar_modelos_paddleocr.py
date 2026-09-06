@@ -178,7 +178,7 @@ def _verify_reader_configuration(destination_root: Path, *, run_inference: bool)
         "PADDLEOCR_TEXT_DETECTION_MODEL_DIR": None,
         "PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR": None,
         "PADDLEOCR_MODEL_ROOT": str(destination_root),
-        "PADDLEOCR_ENABLE_MKLDNN": "0",
+        "PADDLEOCR_ENABLE_MKLDNN": None,
         "PADDLEOCR_LANG": "es",
     }
     previous = {name: os.environ.get(name) for name in managed_vars}
@@ -204,14 +204,17 @@ def _verify_reader_configuration(destination_root: Path, *, run_inference: bool)
         image = Image.new("RGB", (720, 220), "white")
         draw = ImageDraw.Draw(image)
         draw.text((24, 80), "PRUEBA OCR 1234567890", fill="black")
-        PaddleOCRPDFReader._read_page(
+        _, _, _, recovered_backend = PaddleOCRPDFReader._read_page_with_backend_recovery(
             engine=engine,
+            config=config,
             image=image,
             logical_page=1,
             page_width=612.0,
             doctop_offset=0.0,
             text_det_limit_side_len=1200,
         )
+        if recovered_backend:
+            print("Aviso: oneDNN no fue compatible; la inferencia se recuperó sin MKL-DNN.")
     finally:
         PaddleOCRPDFReader._engine = None
         PaddleOCRPDFReader._engine_signature = None

@@ -26,12 +26,12 @@ class PaddleOCRPDFReader:
     resuelven ubicaciones locales controladas (ProgramData/LocalAppData y la
     caché local oficial de PaddleX) sin habilitar descargas.
 
-    En Windows/CPU se prioriza estabilidad: oneDNN/MKL-DNN queda deshabilitado
-    por defecto porque esta misma combinación PaddlePaddle 3.x + PP-OCRv5 ya
-    produjo ``NotImplementedError`` durante inferencia. La aceleración sigue
-    disponible como opt-in mediante ``PADDLEOCR_ENABLE_MKLDNN=1`` para pruebas
-    controladas. La detección limita además el lado mayor de la página para
-    evitar inferencia innecesaria a resolución completa.
+    En Windows/CPU con PaddlePaddle 3.2.0 se usa oneDNN/MKL-DNN por defecto,
+    recuperando el perfil de rendimiento validado en la UAT del PR #20. Si una
+    máquina concreta vuelve a producir ``NotImplementedError`` en esa ruta, el
+    reader reinicializa el engine una sola vez con MKL-DNN deshabilitado y
+    reintenta la misma página. La detección mantiene además un límite del lado
+    mayor para evitar inferencia innecesaria a resolución completa.
     """
 
     MAX_TEXT_PAGES = 5
@@ -41,7 +41,7 @@ class PaddleOCRPDFReader:
     DEFAULT_DETECTION_MODEL_NAME = "PP-OCRv5_mobile_det"
     DEFAULT_RECOGNITION_MODEL_NAME = "latin_PP-OCRv5_mobile_rec"
     DEFAULT_TEXT_DET_LIMIT_SIDE_LEN = 1600
-    DEFAULT_ENABLE_MKLDNN = False
+    DEFAULT_ENABLE_MKLDNN = True
     DEFAULT_CPU_THREADS = 10
 
     _engine: Any | None = None
@@ -77,14 +77,19 @@ class PaddleOCRPDFReader:
             image = bitmap.to_pil().convert("RGB")
 
             logical_page = physical_index - start_page + 1
-            words, page_text = cls._read_page(
-                engine=engine,
-                image=image,
-                logical_page=logical_page,
-                page_width=page_width,
-                doctop_offset=doctop_offset,
-                text_det_limit_side_len=text_det_limit_side_len,
+            engine, words, page_text, recovered_backend = (
+                cls._read_page_with_backend_recovery(
+                    engine=engine,
+                    config=config,
+                    image=image,
+                    logical_page=logical_page,
+                    page_width=page_width,
+                    doctop_offset=doctop_offset,
+                    text_det_limit_side_len=text_det_limit_side_len,
+                )
             )
+            if recovered_backend:
+                config = {**config, "enable_mkldnn": False}
 
             all_words.extend(words)
             if logical_page <= cls.MAX_TEXT_PAGES:
@@ -109,6 +114,7 @@ class PaddleOCRPDFReader:
                 "coordinate_space": "pdf_points",
                 "network_model_downloads": False,
                 "mkldnn_enabled": config["enable_mkldnn"],
+                "mkldnn_backend_recovered": not config["enable_mkldnn"] and cls.DEFAULT_ENABLE_MKLDNN,
                 "cpu_threads": config["cpu_threads"],
                 "text_det_limit_side_len": text_det_limit_side_len,
                 "text_det_limit_type": "max",
@@ -364,6 +370,52 @@ class PaddleOCRPDFReader:
 
             cls._engine_signature = signature
             return cls._engine
+
+    @staticmethod
+    def _is_mkldnn_compatibility_error(exc: Exception) -> bool:
+        if isinstance(exc, NotImplementedError):
+            return True
+        detail = f"{type(exc).__name__}: {exc}".lower()
+        return "notimplemented" in detail or "not implemented" in detail
+
+    @classmethod
+    def _read_page_with_backend_recovery(
+        cls,
+        *,
+        engine: Any,
+        config: dict[str, Any],
+        image: Image.Image,
+        logical_page: int,
+        page_width: float,
+        doctop_offset: float,
+        text_det_limit_side_len: int,
+    ) -> tuple[Any, list[dict[str, Any]], str, bool]:
+        """Usa oneDNN rápido y degrada una sola vez ante incompatibilidad real."""
+        try:
+            words, page_text = cls._read_page(
+                engine=engine,
+                image=image,
+                logical_page=logical_page,
+                page_width=page_width,
+                doctop_offset=doctop_offset,
+                text_det_limit_side_len=text_det_limit_side_len,
+            )
+            return engine, words, page_text, False
+        except Exception as exc:
+            if not config.get("enable_mkldnn") or not cls._is_mkldnn_compatibility_error(exc):
+                raise
+
+            safe_config = {**config, "enable_mkldnn": False}
+            safe_engine = cls._get_engine(**safe_config)
+            words, page_text = cls._read_page(
+                engine=safe_engine,
+                image=image,
+                logical_page=logical_page,
+                page_width=page_width,
+                doctop_offset=doctop_offset,
+                text_det_limit_side_len=text_det_limit_side_len,
+            )
+            return safe_engine, words, page_text, True
 
     @classmethod
     def _read_page(
