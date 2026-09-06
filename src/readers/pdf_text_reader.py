@@ -103,7 +103,7 @@ class PDFTextReader:
         """
         Primera etapa optimizada del pipeline.
 
-        Obtiene en una sola apertura del PDF:
+        Obtiene en una sola apertura y una sola pasada del PDF:
 
             1. raw_text de las primeras MAX_PAGES páginas.
             2. páginas iniciales vacías.
@@ -140,7 +140,14 @@ class PDFTextReader:
                 )
 
             # =================================================
-            # PRIMER RECORRIDO
+            # RECORRIDO ÚNICO
+            # =================================================
+            #
+            # Las primeras MAX_PAGES alimentan raw_text. Si ese
+            # tramo está vacío, el mismo recorrido continúa hacia
+            # delante hasta encontrar la primera página con texto
+            # o llegar al final. No es necesario volver a abrir ni
+            # volver a inspeccionar páginas ya procesadas.
             # =================================================
 
             for physical_index in range(
@@ -198,40 +205,6 @@ class PDFTextReader:
                 ):
 
                     break
-
-            # =================================================
-            # SI LAS PRIMERAS MAX_PAGES FUERON VACÍAS
-            # =================================================
-            #
-            # Debemos continuar buscando texto más adelante.
-            #
-            # Esto permite distinguir:
-            #
-            #   PDF imagen
-            #
-            # de:
-            #
-            #   PDF digital cuyo contenido comienza
-            #   después de MAX_PAGES páginas vacías.
-            #
-            # =================================================
-
-            if not found_extractable_text:
-
-                for physical_index in range(
-                    start_page + PDFTextReader.MAX_PAGES,
-                    total_pages,
-                ):
-
-                    page = pdf.pages[physical_index]
-
-                    text = page.extract_text()
-
-                    if text and text.strip():
-
-                        found_extractable_text = True
-
-                        break
 
         return PDFTextStageData(
             raw_text="\n".join(pages),
