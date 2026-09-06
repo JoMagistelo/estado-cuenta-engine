@@ -352,9 +352,14 @@ class PaddleOCRPDFReader:
                     cpu_threads=cpu_threads,
                 )
             except Exception as exc:
+                detail = str(exc).strip()
+                if detail:
+                    detail = f"{type(exc).__name__}: {detail[:300]}"
+                else:
+                    detail = type(exc).__name__
                 raise PaddleOCRConfigurationError(
                     "No se pudo inicializar PaddleOCR con los modelos locales "
-                    "configurados."
+                    f"configurados. Causa: {detail}."
                 ) from exc
 
             cls._engine_signature = signature

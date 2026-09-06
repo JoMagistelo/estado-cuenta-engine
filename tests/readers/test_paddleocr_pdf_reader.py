@@ -201,6 +201,40 @@ def test_cpu_engine_disables_mkldnn_by_default(monkeypatch):
         PaddleOCRPDFReader._engine_signature = None
 
 
+def test_engine_configuration_error_preserves_underlying_reason(monkeypatch):
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            raise ValueError("modelo local incompatible")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PaddleOCR=FakePaddleOCR),
+    )
+
+    PaddleOCRPDFReader._engine = None
+    PaddleOCRPDFReader._engine_signature = None
+
+    try:
+        with pytest.raises(
+            PaddleOCRConfigurationError,
+            match="ValueError: modelo local incompatible",
+        ):
+            PaddleOCRPDFReader._get_engine(
+                language="es",
+                device="cpu",
+                detection_model_name="PP-OCRv5_mobile_det",
+                recognition_model_name="latin_PP-OCRv5_mobile_rec",
+                detection_model_dir="C:/modelos/det",
+                recognition_model_dir="C:/modelos/rec",
+                enable_mkldnn=False,
+                cpu_threads=10,
+            )
+    finally:
+        PaddleOCRPDFReader._engine = None
+        PaddleOCRPDFReader._engine_signature = None
+
+
 def test_cpu_engine_can_enable_mkldnn_explicitly(monkeypatch):
     captured_kwargs = {}
 
