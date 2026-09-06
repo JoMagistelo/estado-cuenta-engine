@@ -203,13 +203,14 @@ def _process_prepared_statement(
     Digital nunca entra a OCR. En OCR se ejecuta primero el motor solicitado. Si
     éste no logra iniciar, el otro OCR puede recuperar el documento. Después del
     parsing, el processor sólo invoca un secundario disponible cuando las
-    validaciones principales de abonos/cargos lo requieren.
+    validaciones del resultado indican que conviene comparar el segundo OCR.
     """
     if _cancel_requested(cancel_event):
         raise CancelledError()
 
     document = prepared.document
-    primary_engine = normalize_ocr_engine(ocr_primary_engine)
+    requested_primary_engine = normalize_ocr_engine(ocr_primary_engine)
+    primary_engine = requested_primary_engine
     if prepared.processing_method == 'OCR':
         document, primary_engine = _read_ocr_with_startup_recovery(
             prepared.pdf_path,
@@ -288,6 +289,9 @@ def _process_prepared_statement(
         processing_method=prepared.processing_method,
         ocr_review=ocr_review,
         ocr_engine=selected_engine,
+        ocr_requested_primary_engine=(
+            requested_primary_engine if prepared.processing_method == 'OCR' else None
+        ),
         ocr_primary_engine=primary_used,
         ocr_secondary_engine=secondary_engine,
         fallback_attempted=fallback_attempted,

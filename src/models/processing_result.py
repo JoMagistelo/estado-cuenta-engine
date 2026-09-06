@@ -21,6 +21,7 @@ class ProcessingResult:
     debug: object | None = None
     ocr_review: OCRReview | None = None
     ocr_engine: str | None = None
+    ocr_requested_primary_engine: str | None = None
     ocr_primary_engine: str | None = None
     ocr_secondary_engine: str | None = None
     fallback_attempted: bool = False
