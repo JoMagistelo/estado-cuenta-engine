@@ -18,7 +18,7 @@ SPLASH_PATH = BUILD_DIR / "splash_institucional.png"
 ICON_PATH = BUILD_DIR / "extractor_movimientos.ico"
 VERSION_INFO_PATH = BUILD_DIR / "windows_version_info.txt"
 
-APP_VERSION = (2, 3, 0, 0)
+APP_VERSION = (2, 4, 0, 0)
 
 
 def _font(size: int, *, bold: bool = False):

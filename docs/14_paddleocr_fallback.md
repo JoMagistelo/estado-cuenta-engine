@@ -116,7 +116,7 @@ Controles implementados:
 - no utiliza una API OCR alojada;
 - no envía PDF, texto extraído o información financiera a servicios externos;
 - no descarga modelos durante el procesamiento;
-- exige rutas locales explícitas para los modelos;
+- resuelve únicamente modelos locales: variables explícitas, raíz administrada, ProgramData/LocalAppData o caché oficial local de PaddleX;
 - deshabilita la comprobación automática de proveedores de modelos mediante `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1`;
 - el fallback está deshabilitado por defecto;
 - la telemetría técnica utiliza estados y conteos, no importes ni contenido bancario;
@@ -132,7 +132,7 @@ La línea técnica utiliza:
 - modelo de reconocimiento `latin_PP-OCRv5_mobile_rec`;
 - `PADDLEOCR_LANG=es` como único idioma admitido por la aplicación;
 - inferencia CPU como configuración inicial;
-- oneDNN/MKL-DNN habilitado por defecto para conservar rendimiento práctico en CPU;
+- oneDNN/MKL-DNN deshabilitado por defecto para priorizar estabilidad en Windows/CPU; puede habilitarse de forma explícita después de UAT;
 - límite del lado mayor de detección para evitar procesamiento innecesario de páginas completas a alta resolución.
 
 La versión 3.2.0 del runtime se fija deliberadamente para mantener una combinación reproducible con PaddleOCR 3.7 en Windows y Python 3.12/3.13. No debe actualizarse de forma independiente sin repetir pruebas funcionales y de rendimiento.
@@ -202,9 +202,19 @@ $env:PADDLEOCR_ENABLE_MKLDNN = "1"
 $env:PADDLEOCR_CPU_THREADS = "10"
 ```
 
+Desde la versión 2.4 las dos variables de directorio siguen teniendo prioridad, pero dejan de depender de la sesión actual de PowerShell cuando los modelos ya están instalados en una ubicación local reconocida. El reader busca, en este orden:
+
+1. `PADDLEOCR_TEXT_DETECTION_MODEL_DIR` / `PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR`;
+2. `PADDLEOCR_MODEL_ROOT\<modelo>`;
+3. `%PROGRAMDATA%\EstadoCuentaEngine\PaddleOCR\<modelo>`;
+4. `%LOCALAPPDATA%\EstadoCuentaEngine\PaddleOCR\<modelo>`;
+5. `~\.paddlex\official_models\<modelo>`.
+
+En todos los casos se pasa un directorio local explícito al runtime; esta resolución **no habilita descargas**. Si una variable individual está configurada con una ruta inválida, se rechaza en lugar de ocultar el error usando otra ubicación.
+
 `PADDLEOCR_LANG` debe permanecer en `es`. Cualquier otro valor es rechazado por el reader.
 
-`PADDLEOCR_ENABLE_MKLDNN=1` es la configuración operativa normal para CPU. Puede establecerse en `0` únicamente para diagnóstico de compatibilidad; esa configuración puede reducir de forma importante el rendimiento.
+`PADDLEOCR_ENABLE_MKLDNN=0` es la configuración estable predeterminada. `PADDLEOCR_ENABLE_MKLDNN=1` queda como opt-in de rendimiento y debe probarse con el runtime aprobado antes de adoptarse.
 
 `PADDLEOCR_CPU_THREADS` se acota internamente entre 1 y 32. `PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN` se acota entre 960 y 2400.
 
