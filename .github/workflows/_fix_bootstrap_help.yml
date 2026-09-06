@@ -21,6 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - run: python -m pip install -e .
       - run: python scripts/_fix_bootstrap_help.py
       - run: python scripts/preparar_modelos_paddleocr.py --help
       - shell: bash
