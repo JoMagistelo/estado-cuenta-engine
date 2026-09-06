@@ -37,6 +37,25 @@ if (-not (Test-Path $Exe)) {
     throw "No se generó el ejecutable esperado: $Exe"
 }
 
+# PaddleOCR 3.x depende de configuraciones dinámicas de PaddleX que pueden estar
+# presentes en site-packages y faltar sólo dentro del ejecutable congelado. El
+# self-test se ejecuta en el EXE real y evita entregar un binario que importe
+# PaddleOCR pero falle después con "The pipeline (OCR) does not exist".
+$PaddleRuntimeAvailable = & $Python -c "import importlib.util; print('1' if importlib.util.find_spec('paddleocr') and importlib.util.find_spec('paddlex') else '0')"
+if ($PaddleRuntimeAvailable.Trim() -eq "1") {
+    $Smoke = Start-Process `
+        -FilePath $Exe `
+        -ArgumentList "--self-test-paddlex-pipeline" `
+        -Wait `
+        -PassThru
+    if ($Smoke.ExitCode -ne 0) {
+        throw "El EXE no pudo cargar la pipeline OCR de PaddleX (ExitCode=$($Smoke.ExitCode))."
+    }
+}
+else {
+    Write-Warning "PaddleOCR/PaddleX no están instalados en este entorno; el EXE se construirá sin ese runtime."
+}
+
 & $Python scripts\verify_windows_release.py `
     $Exe `
     --output-dir (Join-Path $ProjectRoot "dist") `
@@ -46,6 +65,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($IncludePaddleModels) {
+    if ($PaddleRuntimeAvailable.Trim() -ne "1") {
+        throw "-IncludePaddleModels requiere instalar primero .[paddleocr] en el entorno de build."
+    }
+
     $ModelDestination = Join-Path $ProjectRoot "dist\models\paddleocr"
     $BootstrapArgs = @(
         "scripts\preparar_modelos_paddleocr.py",
