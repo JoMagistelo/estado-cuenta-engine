@@ -152,12 +152,19 @@ def _process_prepared_statement(
     document = prepared.document
     primary_engine = normalize_ocr_engine(ocr_primary_engine)
     if prepared.processing_method == 'OCR':
-        document = ReaderManager.read_ocr_engine(
-            prepared.pdf_path,
-            engine=primary_engine,
-            start_page=0,
-            cancel_event=cancel_event,
-        )
+        if cancel_event is None:
+            document = ReaderManager.read_ocr_engine(
+                prepared.pdf_path,
+                engine=primary_engine,
+                start_page=0,
+            )
+        else:
+            document = ReaderManager.read_ocr_engine(
+                prepared.pdf_path,
+                engine=primary_engine,
+                start_page=0,
+                cancel_event=cancel_event,
+            )
         if _cancel_requested(cancel_event):
             raise CancelledError()
 
@@ -178,11 +185,17 @@ def _process_prepared_statement(
             "una firma bancaria reconocible en el nombre del archivo."
         )
 
-    estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
-        document=document,
-        bank_key=bank_key,
-        cancel_event=cancel_event,
-    )
+    if cancel_event is None:
+        estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
+            document=document,
+            bank_key=bank_key,
+        )
+    else:
+        estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
+            document=document,
+            bank_key=bank_key,
+            cancel_event=cancel_event,
+        )
     if _cancel_requested(cancel_event):
         raise CancelledError()
 
