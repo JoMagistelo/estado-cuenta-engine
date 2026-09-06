@@ -106,8 +106,8 @@ for package in ("paddle", "paddleocr"):
 
 
 a = Analysis(
-    [str(PROJECT_ROOT / "app" / "main_flet.py")],
-    pathex=[str(PROJECT_ROOT / "src")],
+    [str(PROJECT_ROOT / "app" / "main_desktop.py")],
+    pathex=[str(PROJECT_ROOT / "src"), str(PROJECT_ROOT / "app")],
     binaries=extra_binaries,
     datas=[
         (
