@@ -1,0 +1,33 @@
+name: Apply temporary v2.4.1 metadata patch
+
+on:
+  push:
+    branches:
+      - fix/v2.4.1-paddle-adaptive-performance
+    paths:
+      - '.github/workflows/_apply_v241_metadata_version_patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v2.4.1-paddle-adaptive-performance
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python scripts/_apply_v241_metadata_version_patch.py
+      - run: python -m py_compile src/readers/paddleocr_pdf_reader.py src/readers/cancelable_ocr_reader.py app/main_flet.py app/main_streamlit.py
+      - shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/readers/paddleocr_pdf_reader.py src/readers/cancelable_ocr_reader.py app/main_flet.py app/main_streamlit.py pyproject.toml EstadoCuentaEngine.spec scripts/build_windows_release.ps1 .github/workflows/quality.yml .github/workflows/tics-desktop-release.yml
+          git diff --cached --quiet && exit 0
+          git commit -m 'chore: release PaddleOCR performance hotfix 2.4.1'
+          git push origin HEAD:fix/v2.4.1-paddle-adaptive-performance
