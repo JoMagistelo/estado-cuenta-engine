@@ -5,7 +5,7 @@ on:
     branches:
       - fix/paddleocr-isolated-batching-timeout-v2
     paths:
-      - scripts/apply_ocr_primary_ui_patch.py
+      - scripts/apply_ocr_primary_ui_patch_v2.py
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply deterministic patch
-        run: python scripts/apply_ocr_primary_ui_patch.py
+        run: python scripts/apply_ocr_primary_ui_patch_v2.py
       - name: Commit patch
         shell: pwsh
         run: |
