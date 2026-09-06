@@ -72,6 +72,16 @@ def _stop_process(process: Any) -> None:
         process.join(timeout=3)
 
 
+def _raise_worker_error(error_type: str | None) -> None:
+    normalized = str(error_type or "PaddleOCRWorkerError")
+    error_class = type(
+        normalized,
+        (PaddleOCRWorkerError,),
+        {},
+    )
+    raise error_class(normalized)
+
+
 def read_paddle_ocr_isolated(
     file_path: str,
     start_page: int = 0,
@@ -110,7 +120,7 @@ def read_paddle_ocr_isolated(
             _stop_process(process)
 
         if status != "ok" or document is None:
-            raise PaddleOCRWorkerError(str(error_type or "PaddleOCRWorkerError"))
+            _raise_worker_error(error_type)
 
         return document
     finally:
