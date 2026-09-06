@@ -66,7 +66,7 @@ class _FakeContext:
 
 def test_timeout_is_bounded_and_configurable(monkeypatch):
     monkeypatch.delenv("PADDLEOCR_TIMEOUT_SECONDS", raising=False)
-    assert paddleocr_runner.configured_timeout_seconds() == 120
+    assert paddleocr_runner.configured_timeout_seconds() == 300
 
     monkeypatch.setenv("PADDLEOCR_TIMEOUT_SECONDS", "45")
     assert paddleocr_runner.configured_timeout_seconds() == 45
@@ -78,7 +78,7 @@ def test_timeout_is_bounded_and_configurable(monkeypatch):
     assert paddleocr_runner.configured_timeout_seconds() == 900
 
     monkeypatch.setenv("PADDLEOCR_TIMEOUT_SECONDS", "invalido")
-    assert paddleocr_runner.configured_timeout_seconds() == 120
+    assert paddleocr_runner.configured_timeout_seconds() == 300
 
 
 def test_isolated_reader_returns_document(monkeypatch):
