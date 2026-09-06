@@ -32,11 +32,18 @@ class OCRCandidate:
 
 @dataclass(slots=True)
 class OCRReview:
-    """Comparación en memoria de resultados Tesseract/PaddleOCR."""
+    """Comparación en memoria de resultados Tesseract/PaddleOCR.
+
+    ``selected_engine`` representa la vista activa que se está mostrando en la
+    interfaz. Cuando existen dos motores, esa vista puede venir de la sugerencia
+    automática y NO equivale a una decisión de exportación. ``confirmed_engine``
+    sólo se establece por una elección explícita del usuario.
+    """
 
     candidates: dict[str, OCRCandidate] = field(default_factory=dict)
     recommended_engine: str = "tesseract"
     selected_engine: str = "tesseract"
+    confirmed_engine: str | None = None
     trigger_reasons: tuple[str, ...] = ()
     paddle_error_type: str | None = None
 
@@ -52,6 +59,16 @@ class OCRReview:
 
         return tuple(ordered)
 
+    @property
+    def requires_user_selection(self) -> bool:
+        """Indica si hay alternativas reales que el usuario debe resolver."""
+        return len(self.available_engines()) > 1
+
+    @property
+    def selection_confirmed(self) -> bool:
+        """True cuando no hay elección que hacer o ya se confirmó una."""
+        return not self.requires_user_selection or self.confirmed_engine is not None
+
     def get_candidate(self, engine: str) -> OCRCandidate:
         normalized = engine.strip().lower()
         try:
@@ -61,7 +78,15 @@ class OCRReview:
                 f"No existe candidato OCR disponible para '{engine}'."
             ) from exc
 
-    def select(self, engine: str) -> OCRCandidate:
+    def preview(self, engine: str) -> OCRCandidate:
+        """Cambia únicamente la vista activa sin confirmar la exportación."""
         candidate = self.get_candidate(engine)
         self.selected_engine = candidate.engine
+        return candidate
+
+    def select(self, engine: str, *, confirm: bool = True) -> OCRCandidate:
+        """Activa un candidato y, por defecto, confirma la elección manual."""
+        candidate = self.preview(engine)
+        if confirm:
+            self.confirmed_engine = candidate.engine
         return candidate
