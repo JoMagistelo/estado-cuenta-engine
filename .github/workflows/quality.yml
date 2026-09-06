@@ -214,7 +214,7 @@ jobs:
           if (-not (Test-Path $path)) {
             throw "No se generó el ejecutable esperado."
           }
-          python scripts/verify_windows_release.py $path --output-dir dist --version "2.4.0"
+          python scripts/verify_windows_release.py $path --output-dir dist --version "2.4.1"
 
       - name: Upload build evidence
         uses: actions/upload-artifact@v4
