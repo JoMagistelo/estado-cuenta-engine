@@ -8,6 +8,9 @@ from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
+from .utils.movement_date_hardening import (
+    normalize_ambiguous_movement_date_words,
+)
 
 
 def parse_banorte(document: DocumentData) -> EstadoCuenta:
@@ -73,12 +76,22 @@ def parse_banorte(document: DocumentData) -> EstadoCuenta:
     # MOVIMIENTOS
     # ============================================================
     #
-    # Este extractor ya funciona correctamente y se conserva
-    # exactamente con el mismo mecanismo.
+    # Banorte puede codificar físicamente una fecha de dos dígitos y una
+    # clave numérica como una sola palabra, por ejemplo:
+    #
+    #     22-JUN-2650114599TRANSBPI07617702
+    #
+    # Se normaliza únicamente una COPIA de esas palabras ambiguas antes del
+    # pipeline de movimientos. El resto de extractores conserva exactamente
+    # ``spatial_words`` para no modificar el comportamiento ya validado.
     #
 
-    movimientos = extract_movimientos_words(
+    movement_words = normalize_ambiguous_movement_date_words(
         spatial_words
+    )
+
+    movimientos = extract_movimientos_words(
+        movement_words
     )
 
     # ============================================================
