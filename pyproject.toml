@@ -22,7 +22,9 @@ streamlit = [
     "streamlit>=1.55,<2",
 ]
 desktop = [
-    "flet>=0.86.5,<0.87",
+    # El extra desktop instala también el cliente Flet de escritorio requerido
+    # para que el EXE portable no dependa de una instalación dinámica al iniciar.
+    "flet[desktop]>=0.86.5,<0.87",
 ]
 paddleocr = [
     "paddleocr>=3.7,<3.8",
