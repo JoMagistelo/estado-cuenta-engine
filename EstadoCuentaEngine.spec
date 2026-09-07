@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 
 import importlib.metadata as importlib_metadata
@@ -15,9 +16,13 @@ ASSETS_DIR = PROJECT_ROOT / "assets"
 BUILD_DIR = PROJECT_ROOT / "build"
 ICON_PATH = BUILD_DIR / "extractor_movimientos.ico"
 VERSION_INFO_PATH = BUILD_DIR / "windows_version_info.txt"
+PADDLEOCR_BUNDLE_ENV = "PADDLEOCR_BUNDLE_ROOT"
+PADDLEOCR_MODEL_NAMES = (
+    "PP-OCRv5_mobile_det",
+    "latin_PP-OCRv5_mobile_rec",
+)
 
 APP_VERSION = (2, 4, 2, 0)
-
 
 
 def _build_icon() -> Path:
@@ -144,6 +149,42 @@ def _paddlex_ocr_metadata():
     return metadata_datas
 
 
+def _bundled_paddle_model_datas():
+    """Incluye modelos verificados sólo cuando el build portable los solicita."""
+    configured = os.getenv(PADDLEOCR_BUNDLE_ENV, "").strip()
+    if not configured:
+        return []
+
+    model_root = Path(configured).expanduser().resolve()
+    if not model_root.is_dir():
+        raise RuntimeError(
+            f"{PADDLEOCR_BUNDLE_ENV} no apunta a un directorio válido: {model_root}"
+        )
+
+    missing = []
+    for model_name in PADDLEOCR_MODEL_NAMES:
+        model_dir = model_root / model_name
+        usable = model_dir.is_dir() and any(
+            item.is_file() for item in model_dir.rglob("*")
+        )
+        if not usable:
+            missing.append(model_name)
+
+    manifest = model_root / "paddleocr-models-manifest.json"
+    if not manifest.is_file():
+        missing.append("paddleocr-models-manifest.json")
+
+    if missing:
+        raise RuntimeError(
+            "El bundle portable PaddleOCR está incompleto. Faltan: "
+            + ", ".join(missing)
+        )
+
+    # En modo one-file, PyInstaller extraerá esta carpeta en
+    # sys._MEIPASS/models/paddleocr durante la ejecución.
+    return [(str(model_root), "models/paddleocr")]
+
+
 app_icon = _build_icon()
 version_info = _build_version_info()
 
@@ -166,6 +207,7 @@ for package in ("paddle", "paddleocr", "paddlex"):
 # runtime. ``collect_all`` no garantiza que esos ``.dist-info`` queden dentro
 # del one-file, por lo que se copian explícitamente.
 extra_datas.extend(_paddlex_ocr_metadata())
+portable_paddle_datas = _bundled_paddle_model_datas()
 
 
 a = Analysis(
@@ -185,6 +227,7 @@ a = Analysis(
             str(app_icon),
             "assets",
         ),
+        *portable_paddle_datas,
         *extra_datas,
     ],
     hiddenimports=extra_hiddenimports,
@@ -200,7 +243,7 @@ pyz = PYZ(a.pure)
 
 # El splash de PyInstaller se deshabilita deliberadamente: su implementación
 # usa Tcl/Tk y puede mostrar una ventana raíz `tk` en Windows. El feedback de
-# arranque queda a cargo del modal Flet nativo de `app/main_desktop.py`.
+# arranque queda a cargo del launcher Flet nativo de `app/main_desktop.py`.
 exe = EXE(
     pyz,
     a.scripts,
