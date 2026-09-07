@@ -7,22 +7,19 @@ on:
         description: "Etiqueta de la compilación (ej. 2.4.2-rc1)"
         required: false
         default: "manual"
-      include_paddle_models:
-        description: "Incluir modelos oficiales PaddleOCR y su instalador offline"
-        required: true
-        type: boolean
-        default: true
 
 permissions:
   contents: read
 
 jobs:
   build-windows-desktop:
-    name: Windows desktop + OCR completo
+    name: Windows portable offline + OCR completo
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     env:
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "1"
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
 
     steps:
       - name: Checkout
@@ -55,90 +52,94 @@ jobs:
       - name: Run non-integration regression suite
         run: python -m pytest -m "not integration" -q
 
-      - name: Build institutional desktop executable
-        run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
+      - name: Build verified portable offline desktop
+        shell: pwsh
+        run: |
+          .\scripts\build_windows_release.ps1 `
+            -Python python `
+            -PortableOffline `
+            -AllowPaddleModelDownload `
+            -SkipTests
 
-      - name: Verify bundled PaddleX OCR config and dependency metadata
+      - name: Re-run strict embedded OCR tests
         shell: pwsh
         run: |
           $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
           if (-not (Test-Path $exe)) {
             throw "No se generó el ejecutable esperado."
           }
-          $process = Start-Process -FilePath $exe -ArgumentList "--self-test-paddlex-pipeline" -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "El EXE no pudo validar la pipeline/dependencias OCR de PaddleX (ExitCode=$($process.ExitCode))."
+
+          $paddlex = Start-Process `
+            -FilePath $exe `
+            -ArgumentList "--self-test-paddlex-pipeline" `
+            -Wait `
+            -PassThru
+          if ($paddlex.ExitCode -ne 0) {
+            throw "El EXE no pudo validar PaddleX (ExitCode=$($paddlex.ExitCode))."
           }
 
-      - name: Verify release executable
+          $portable = Start-Process `
+            -FilePath $exe `
+            -ArgumentList "--self-test-portable-paddleocr-runtime" `
+            -Wait `
+            -PassThru
+          if ($portable.ExitCode -ne 0) {
+            throw "El EXE no pudo inferir con sus modelos PaddleOCR embebidos (ExitCode=$($portable.ExitCode))."
+          }
+
+      - name: Add release label
         shell: pwsh
         run: |
-          $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
-          python scripts/verify_windows_release.py `
-            $exe `
-            --output-dir dist `
-            --version "2.4.2"
           "${{ inputs.release_label }}" | Out-File -Encoding utf8 "dist/release-label.txt"
 
-      - name: Prepare verified PaddleOCR model bundle
-        if: ${{ inputs.include_paddle_models }}
-        shell: pwsh
-        run: |
-          python scripts/preparar_modelos_paddleocr.py `
-            --destino "dist/models/paddleocr" `
-            --fuente bos `
-            --probar-inferencia
-          Copy-Item "scripts/instalar_modelos_paddleocr.ps1" "dist/instalar_modelos_paddleocr.ps1" -Force
-
-      - name: Verify real PaddleOCR inference inside release EXE
-        if: ${{ inputs.include_paddle_models }}
-        shell: pwsh
-        run: |
-          $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
-          $env:PADDLEOCR_MODEL_ROOT = (Resolve-Path "dist/models/paddleocr").Path
-          $process = Start-Process -FilePath $exe -ArgumentList "--self-test-paddleocr-runtime" -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "El EXE de TIC no pudo ejecutar inferencia PaddleOCR real (ExitCode=$($process.ExitCode))."
-          }
-
-      - name: Create deployment note
+      - name: Create TICS deployment note
         shell: pwsh
         run: |
           @"
           Extractor de Movimientos Financieros - compilación TICS
 
-          El ejecutable incluye Flet, Tesseract y el runtime Python de PaddleOCR.
-          PaddleOCR no descarga modelos durante el procesamiento de estados de cuenta.
+          PERFIL DESKTOP PORTABLE OFFLINE
 
-          Si esta entrega contiene la carpeta models/paddleocr:
-          1. ejecutar instalar_modelos_paddleocr.ps1 con privilegios de despliegue;
-          2. el script copiará los modelos a %PROGRAMDATA%\EstadoCuentaEngine\PaddleOCR;
-          3. no es necesario configurar variables de entorno para el uso normal.
+          El archivo Extractor_de_Movimientos_Financieros.exe contiene:
+          - interfaz Flet;
+          - motor de extracción;
+          - Tesseract y tessdata;
+          - PaddlePaddle/PaddleOCR/PaddleX;
+          - modelos PP-OCRv5_mobile_det y latin_PP-OCRv5_mobile_rec.
 
-          Antes de publicar este bundle, CI comprobó dentro del EXE real:
-          - configuración de la pipeline OCR de PaddleX;
-          - metadata de dependencias ocr/ocr-core;
-          - inicialización de modelos locales;
+          La persona usuaria final sólo necesita el EXE. No debe instalar Python,
+          PaddleOCR, Tesseract, modelos ni ejecutar scripts auxiliares.
+
+          Durante la construcción se permitió adquisición de modelos oficiales sólo
+          en el runner de CI. El runtime del EXE fuerza operación local y no descarga
+          modelos durante el procesamiento.
+
+          Antes de publicar, CI comprobó dentro del EXE real:
+          - configuración y metadata OCR de PaddleX;
+          - resolución de ambos modelos desde sys._MEIPASS/models/paddleocr;
           - una llamada real a PaddleOCR predict().
 
-          El archivo models/paddleocr/paddleocr-models-manifest.json registra hashes,
-          tamaños y versiones del runtime del bundle preparado en CI.
+          paddleocr-models-manifest.json queda como evidencia de hashes, tamaños y
+          versiones de los modelos embebidos. No necesita distribuirse al usuario.
 
-          Verificar el SHA-256 y release-manifest.json antes de distribuir el binario.
+          Verificar SHA-256 y release-manifest.json antes de distribuir el binario.
           Si la política institucional lo requiere, aplicar firma de código antes de producción.
+
+          Streamlit es un despliegue de servidor separado y debe ejecutarse mediante
+          scripts/run_streamlit_offline.ps1 o configuración equivalente de TIC.
           "@ | Out-File -Encoding utf8 "dist/LEEME_TICS.txt"
 
-      - name: Upload TICS deployment bundle
+      - name: Upload TICS portable deployment bundle
         uses: actions/upload-artifact@v4
         with:
-          name: tics-desktop-${{ inputs.release_label }}
+          name: tics-desktop-portable-${{ inputs.release_label }}
           path: |
             dist/Extractor_de_Movimientos_Financieros.exe
             dist/Extractor_de_Movimientos_Financieros.sha256.txt
             dist/release-manifest.json
+            dist/paddleocr-models-manifest.json
             dist/release-label.txt
+            dist/LEEME_TIC.txt
             dist/LEEME_TICS.txt
-            dist/instalar_modelos_paddleocr.ps1
-            dist/models/paddleocr/**
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
