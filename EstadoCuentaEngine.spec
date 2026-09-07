@@ -190,7 +190,14 @@ version_info = _build_version_info()
 
 extra_datas = []
 extra_binaries = []
-extra_hiddenimports = []
+
+# ``main_desktop`` carga la UI con importlib.import_module("main_flet") para
+# mantener el import pesado fuera del hilo de Flet. PyInstaller no puede inferir
+# imports realizados de esa forma, por lo que el módulo debe declararse como
+# hidden import. Sin esto el EXE inicia el splash pero falla con
+# ModuleNotFoundError: No module named 'main_flet'.
+extra_hiddenimports = ["main_flet"]
+
 # PaddleOCR 3.x construye la canalización OCR a través de PaddleX y carga
 # configuraciones YAML/JSON de forma dinámica. Si sólo se recogen ``paddle`` y
 # ``paddleocr``, el EXE puede importar ambos paquetes pero fallar al crear
