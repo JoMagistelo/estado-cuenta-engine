@@ -271,7 +271,19 @@ def test_cpu_engine_can_enable_mkldnn_explicitly(monkeypatch):
         PaddleOCRPDFReader._engine_signature = None
 
 
+def _install_fake_numpy(monkeypatch):
+    fake_array = SimpleNamespace(shape=(200, 100, 3))
+    monkeypatch.setitem(
+        sys.modules,
+        "numpy",
+        SimpleNamespace(asarray=lambda image: fake_array),
+    )
+    return fake_array
+
+
 def test_backend_recovery_retries_notimplemented_without_mkldnn(monkeypatch):
+    _install_fake_numpy(monkeypatch)
+
     class FastEngine:
         def predict(self, image, **kwargs):
             raise NotImplementedError("oneDNN kernel unavailable")
@@ -318,7 +330,9 @@ def test_backend_recovery_retries_notimplemented_without_mkldnn(monkeypatch):
     assert len(requested_configs) == 1
 
 
-def test_backend_recovery_does_not_hide_unrelated_errors():
+def test_backend_recovery_does_not_hide_unrelated_errors(monkeypatch):
+    _install_fake_numpy(monkeypatch)
+
     class BrokenEngine:
         def predict(self, image, **kwargs):
             raise ValueError("bad input")
@@ -372,12 +386,7 @@ def test_detection_side_limit_is_bounded_and_configurable(monkeypatch):
 
 def test_read_page_limits_detector_by_max_side(monkeypatch):
     captured_kwargs = {}
-    fake_array = SimpleNamespace(shape=(200, 100, 3))
-    monkeypatch.setitem(
-        sys.modules,
-        "numpy",
-        SimpleNamespace(asarray=lambda image: fake_array),
-    )
+    fake_array = _install_fake_numpy(monkeypatch)
 
     class FakeEngine:
         def predict(self, image, **kwargs):
@@ -396,6 +405,7 @@ def test_read_page_limits_detector_by_max_side(monkeypatch):
 
     assert words == []
     assert page_text == ""
+    assert fake_array.shape == (200, 100, 3)
     assert captured_kwargs == {
         "text_det_limit_side_len": 1200,
         "text_det_limit_type": "max",

@@ -20,7 +20,7 @@ from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
 
-APP_VERSION = '2.4.1'
+APP_VERSION = '2.4.2'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 MOVEMENT_PAGE_SIZE = 60
@@ -1403,10 +1403,14 @@ def main(page: ft.Page):
             ]
         )
         if method == 'OCR':
-            audit_view.controls.append(ocr_execution_card(result))
             candidate_selector = ocr_candidate_selector(result)
             if candidate_selector is not None:
+                # Cuando ya existen dos candidatos, Comparación OCR contiene
+                # toda la información accionable. Evitamos duplicarla con la
+                # tarjeta verde de ejecución que sólo es útil para diagnóstico.
                 audit_view.controls.append(candidate_selector)
+            else:
+                audit_view.controls.append(ocr_execution_card(result))
 
         audit_view.controls.extend(
             [

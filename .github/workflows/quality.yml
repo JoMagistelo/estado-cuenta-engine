@@ -186,6 +186,7 @@ jobs:
   desktop-build:
     name: PyInstaller Windows build
     runs-on: windows-latest
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -207,7 +208,7 @@ jobs:
       - name: Build desktop executable
         run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
 
-      - name: Verify bundled PaddleX OCR pipeline
+      - name: Verify bundled PaddleX OCR config and dependency metadata
         shell: pwsh
         run: |
           $path = "dist/Extractor_de_Movimientos_Financieros.exe"
@@ -216,14 +217,32 @@ jobs:
           }
           $process = Start-Process -FilePath $path -ArgumentList "--self-test-paddlex-pipeline" -Wait -PassThru
           if ($process.ExitCode -ne 0) {
-            throw "El EXE no pudo cargar la pipeline OCR de PaddleX (ExitCode=$($process.ExitCode))."
+            throw "El EXE no pudo validar la pipeline/dependencias OCR de PaddleX (ExitCode=$($process.ExitCode))."
+          }
+
+      - name: Prepare models for frozen PaddleOCR smoke test
+        shell: pwsh
+        run: |
+          python scripts/preparar_modelos_paddleocr.py `
+            --destino "build/frozen-paddle-models" `
+            --fuente bos `
+            --probar-inferencia
+
+      - name: Verify real PaddleOCR inference inside EXE
+        shell: pwsh
+        run: |
+          $path = "dist/Extractor_de_Movimientos_Financieros.exe"
+          $env:PADDLEOCR_MODEL_ROOT = (Resolve-Path "build/frozen-paddle-models").Path
+          $process = Start-Process -FilePath $path -ArgumentList "--self-test-paddleocr-runtime" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "El EXE no pudo ejecutar inferencia PaddleOCR real (ExitCode=$($process.ExitCode))."
           }
 
       - name: Verify executable and release manifest
         shell: pwsh
         run: |
           $path = "dist/Extractor_de_Movimientos_Financieros.exe"
-          python scripts/verify_windows_release.py $path --output-dir dist --version "2.4.1"
+          python scripts/verify_windows_release.py $path --output-dir dist --version "2.4.2"
 
       - name: Upload build evidence
         uses: actions/upload-artifact@v4
