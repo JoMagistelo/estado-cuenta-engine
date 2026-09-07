@@ -17,7 +17,7 @@ def test_flet_keeps_manual_dual_ocr_review_controls():
     assert "la elección para Excel siempre es manual" in source
 
 
-def test_dual_ocr_comparison_replaces_execution_diagnostic_card():
+def test_dual_ocr_comparison_is_the_only_ocr_result_card():
     source = (Path(__file__).resolve().parents[1] / "app" / "main_flet.py").read_text(
         encoding="utf-8"
     )
@@ -27,5 +27,5 @@ def test_dual_ocr_comparison_replaces_execution_diagnostic_card():
             if candidate_selector is not None:"""
     assert expected in source
     assert "audit_view.controls.append(candidate_selector)" in source
-    assert """else:
-                audit_view.controls.append(ocr_execution_card(result))""" in source
+    assert "ocr_execution_card" not in source
+    assert "Motor solicitado en Configuración:" not in source
