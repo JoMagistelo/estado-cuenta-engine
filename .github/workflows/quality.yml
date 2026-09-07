@@ -184,9 +184,9 @@ jobs:
           python -m compileall -q app
 
   desktop-build:
-    name: PyInstaller Windows build
+    name: PyInstaller portable offline Windows
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
 
     steps:
       - name: Checkout
@@ -205,51 +205,39 @@ jobs:
           python -m pip install -e ".[desktop,paddleocr]"
           python -m pip install --group packaging
 
-      - name: Build desktop executable
-        run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
+      - name: Build and verify portable offline executable
+        shell: pwsh
+        run: |
+          .\scripts\build_windows_release.ps1 `
+            -Python python `
+            -PortableOffline `
+            -AllowPaddleModelDownload `
+            -SkipTests
 
-      - name: Verify bundled PaddleX OCR config and dependency metadata
+      - name: Re-run strict embedded PaddleOCR self-test
         shell: pwsh
         run: |
           $path = "dist/Extractor_de_Movimientos_Financieros.exe"
           if (-not (Test-Path $path)) {
             throw "No se generó el ejecutable esperado."
           }
-          $process = Start-Process -FilePath $path -ArgumentList "--self-test-paddlex-pipeline" -Wait -PassThru
+          $process = Start-Process `
+            -FilePath $path `
+            -ArgumentList "--self-test-portable-paddleocr-runtime" `
+            -Wait `
+            -PassThru
           if ($process.ExitCode -ne 0) {
-            throw "El EXE no pudo validar la pipeline/dependencias OCR de PaddleX (ExitCode=$($process.ExitCode))."
+            throw "El EXE no pudo inferir con PaddleOCR embebido (ExitCode=$($process.ExitCode))."
           }
 
-      - name: Prepare models for frozen PaddleOCR smoke test
-        shell: pwsh
-        run: |
-          python scripts/preparar_modelos_paddleocr.py `
-            --destino "build/frozen-paddle-models" `
-            --fuente bos `
-            --probar-inferencia
-
-      - name: Verify real PaddleOCR inference inside EXE
-        shell: pwsh
-        run: |
-          $path = "dist/Extractor_de_Movimientos_Financieros.exe"
-          $env:PADDLEOCR_MODEL_ROOT = (Resolve-Path "build/frozen-paddle-models").Path
-          $process = Start-Process -FilePath $path -ArgumentList "--self-test-paddleocr-runtime" -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "El EXE no pudo ejecutar inferencia PaddleOCR real (ExitCode=$($process.ExitCode))."
-          }
-
-      - name: Verify executable and release manifest
-        shell: pwsh
-        run: |
-          $path = "dist/Extractor_de_Movimientos_Financieros.exe"
-          python scripts/verify_windows_release.py $path --output-dir dist --version "2.4.2"
-
-      - name: Upload build evidence
+      - name: Upload portable build evidence
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-build-evidence
+          name: desktop-portable-offline-evidence
           path: |
             dist/Extractor_de_Movimientos_Financieros.sha256.txt
             dist/release-manifest.json
+            dist/paddleocr-models-manifest.json
+            dist/LEEME_TIC.txt
           if-no-files-found: error
           retention-days: 30

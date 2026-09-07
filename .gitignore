@@ -12,6 +12,7 @@ htmlcov/
 # Build y distribución
 build/
 dist/
+.packaging/
 *.egg-info/
 
 # Configuración local y secretos
