@@ -20,7 +20,7 @@ from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
 
-APP_VERSION = '2.4.2'
+APP_VERSION = '3.0'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 SELECTOR_ENGINE_WIDTH = 150
@@ -1727,11 +1727,6 @@ def main(page: ft.Page):
                                                 'Puedes seguir revisando los resultados.',
                                                 size=9,
                                                 weight=ft.FontWeight.W_600,
-                                            ),
-                                            ft.Text(
-                                                'Te avisaremos con un sonido cuando el lote haya terminado.',
-                                                size=8,
-                                                color=ft.Colors.ON_SURFACE_VARIANT,
                                             ),
                                         ],
                                         spacing=1,

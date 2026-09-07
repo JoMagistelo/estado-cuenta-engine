@@ -115,8 +115,10 @@ def _configure_startup_window(page: ft.Page) -> None:
     page.window.height = STARTUP_HEIGHT
     page.window.min_width = STARTUP_WIDTH
     page.window.min_height = STARTUP_HEIGHT
-    page.window.max_width = STARTUP_WIDTH
-    page.window.max_height = STARTUP_HEIGHT
+    # No fijamos max_width/max_height durante el splash: en Windows/Flet esos
+    # límites pueden sobrevivir a la transición y dejar la ventana principal
+    # marcada como maximizada aunque siga físicamente limitada al tamaño previo.
+    # resizable=False y maximizable=False ya mantienen fijo este arranque.
     page.window.maximized = False
     page.window.prevent_close = False
     page.window.resizable = False

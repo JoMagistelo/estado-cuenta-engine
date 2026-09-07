@@ -50,7 +50,7 @@ def write_table_sheet(
     """
 
     ws.sheet_view.showGridLines = False
-    ws.sheet_view.zoomScale = 90
+    ws.sheet_view.zoomScale = 55
     ws.sheet_properties.tabColor = GOB_GREEN
 
     if not rows:

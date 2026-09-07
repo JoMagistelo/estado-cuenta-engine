@@ -73,8 +73,23 @@ def estado_cuenta_to_tables(
                 "Banco":
                     result.bank_key,
 
+                "Número de Cliente":
+                    dc.numero_cliente,
+
+                "Nombre del Cliente":
+                    dc.nombre_cliente,
+
+                "RFC":
+                    dc.rfc,
+
                 "Producto Principal":
                     dc.producto_principal,
+
+                "Número de Cuenta":
+                    dc.numero_cuenta,
+
+                "CLABE":
+                    dc.clabe,
 
                 "Periodo de Inicio":
                     dc.periodo_inicio,
@@ -84,21 +99,6 @@ def estado_cuenta_to_tables(
 
                 "Fecha de Corte":
                     dc.fecha_corte,
-
-                "Número de Cuenta":
-                    dc.numero_cuenta,
-
-                "Número de Cliente":
-                    dc.numero_cliente,
-
-                "CLABE":
-                    dc.clabe,
-
-                "Nombre del Cliente":
-                    dc.nombre_cliente,
-
-                "RFC":
-                    dc.rfc,
 
             }
 
@@ -163,35 +163,14 @@ def estado_cuenta_to_tables(
                 "Banco":
                     result.bank_key,
 
-                "Saldo Promedio":
-                    rf.saldo_promedio,
-
                 "Días del Periodo ":
                     rf.dias_periodo,
-
-                "Tasa Bruta Anual":
-                    rf.tasa_bruta_anual,
-
-                "Saldo Promedio Gravable":
-                    rf.saldo_promedio_gravable,
 
                 "Intereses a Favor":
                     rf.intereses_a_favor,
 
                 "ISR Retenido":
                     rf.isr_retenido,
-
-                "Cheques Pagados":
-                    rf.cheques_pagados,
-
-                "Manejo de Cuenta":
-                    rf.manejo_cuenta,
-
-                "Cargos Objetados":
-                    rf.cargos_objetados,
-
-                "Abonos Objetados":
-                    rf.abonos_objetados,
 
                 "Saldo Anterior":
                     rf.saldo_anterior,
@@ -205,8 +184,29 @@ def estado_cuenta_to_tables(
                 "Saldo Final":
                     rf.saldo_final,
 
+                "Saldo Promedio":
+                    rf.saldo_promedio,
+
                 "Saldo Promedio Mínimo Mensual":
                     rf.saldo_promedio_minimo_mensual,
+
+                "Saldo Promedio Gravable":
+                    rf.saldo_promedio_gravable,
+
+                "Tasa Bruta Anual":
+                    rf.tasa_bruta_anual,
+
+                "Cheques Pagados":
+                    rf.cheques_pagados,
+
+                "Manejo de Cuenta":
+                    rf.manejo_cuenta,
+
+                "Cargos Objetados":
+                    rf.cargos_objetados,
+
+                "Abonos Objetados":
+                    rf.abonos_objetados,
 
                 "Saldo Global":
                     rf.saldo_global,
@@ -320,13 +320,13 @@ def estado_cuenta_to_tables(
         "Datos de la Cuenta":
             estados_cuenta,
 
-        "Otros Productos":
-            otros_productos,
-
         "Resumen Financiero":
             resumen_financiero,
 
         "Movimientos":
             movimientos,
+
+        "Otros Productos":
+            otros_productos,
 
     }
