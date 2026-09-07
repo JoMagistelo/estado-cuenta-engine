@@ -160,6 +160,10 @@ def main(page: ft.Page):
         'cancel_event': threading.Event(),
         'stop_requested': False,
         'loading_dialog_open': False,
+        'loading_dialog_timer_text': None,
+        'loading_dialog_status_text': None,
+        'loading_dialog_progress_bar': None,
+        'completion_notified': False,
         'close_dialog_open': False,
         'close_after_stop': False,
     }
@@ -323,6 +327,7 @@ def main(page: ft.Page):
 
     def selector_row_content(index: int, item: dict[str, Any]) -> ft.Row:
         result = item.get('result')
+        file_name = str(item.get('file_name') or '')
         abonos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[0]))
         cargos = validation_symbol(validation(result, PRIMARY_VALIDATIONS[1]))
         elapsed = format_seconds(item.get('elapsed_seconds'))
@@ -330,7 +335,7 @@ def main(page: ft.Page):
             [
                 ft.Container(
                     ft.Text(
-                        item.get('file_name', ''),
+                        file_name,
                         size=9,
                         max_lines=1,
                         overflow=ft.TextOverflow.ELLIPSIS,
@@ -369,12 +374,14 @@ def main(page: ft.Page):
     def make_selector_row(index: int, item: dict[str, Any]) -> ft.Container:
         selected = state.get('selected_index') == index
         completed = item.get('status') == 'completed' and item.get('result') is not None
+        file_name = str(item.get('file_name') or '')
         row = ft.Container(
             content=selector_row_content(index, item),
             padding=ft.Padding.symmetric(horizontal=7, vertical=5),
             border=ft.Border.all(1, GOB_GREEN if selected else ft.Colors.OUTLINE_VARIANT),
             bgcolor=GOB_GREEN_LIGHT if selected else None,
             border_radius=6,
+            tooltip=file_name or None,
             on_click=(lambda e, i=index: select_item(i)) if completed else None,
         )
         selector_rows[index] = row
@@ -455,15 +462,17 @@ def main(page: ft.Page):
                     icon = ft.Icon(ft.Icons.BLOCK, size=14)
                 else:
                     icon = ft.ProgressRing(width=12, height=12)
+                file_name = str(item.get('file_name') or '')
                 classifying_view.controls.append(
                     ft.Row(
                         [
                             icon,
                             ft.Text(
-                                item.get('file_name', ''),
+                                file_name,
                                 size=8,
                                 max_lines=1,
                                 overflow=ft.TextOverflow.ELLIPSIS,
+                                tooltip=file_name or None,
                             ),
                             ft.Container(expand=True),
                             ft.Text(status_text_for_item(item), size=8),
@@ -574,6 +583,7 @@ def main(page: ft.Page):
         errors = sum(item.get('status') == 'error' for item in processing_items)
         cancelled = sum(item.get('status') == 'cancelled' for item in processing_items)
         active_or_pending = total - completed - errors - cancelled
+        finished = completed + errors + cancelled
         scanned_active = sum(
             item.get('status') == 'processing' and item.get('processing_method') == 'OCR'
             for item in processing_items
@@ -604,6 +614,29 @@ def main(page: ft.Page):
         elif errors:
             status_text.value = f'❌ No fue posible procesar {errors} archivos'
             status_text.color = ft.Colors.RED
+
+        dialog_status = state.get('loading_dialog_status_text')
+        dialog_progress = state.get('loading_dialog_progress_bar')
+        if dialog_status is not None:
+            if state['stop_requested'] and active_or_pending:
+                dialog_status.value = 'Deteniendo el lote de forma segura…'
+            elif active_or_pending:
+                dialog_status.value = f'{finished} de {total} archivos finalizados'
+            elif errors:
+                dialog_status.value = f'Lote finalizado · {errors} archivo(s) con error'
+            else:
+                dialog_status.value = f'{completed} de {total} archivos finalizados'
+            try:
+                dialog_status.update()
+            except Exception:
+                pass
+        if dialog_progress is not None:
+            dialog_progress.value = (finished / total) if total else 0.0
+            try:
+                dialog_progress.update()
+            except Exception:
+                pass
+
         if direct_update:
             try:
                 status_text.update()
@@ -1043,100 +1076,6 @@ def main(page: ft.Page):
             border_radius=7,
         )
 
-    def ocr_execution_card(result) -> ft.Container:
-        requested = getattr(result, 'ocr_requested_primary_engine', None)
-        primary = getattr(result, 'ocr_primary_engine', None)
-        secondary = getattr(result, 'ocr_secondary_engine', None)
-        review = getattr(result, 'ocr_review', None)
-        available = set(result.available_ocr_engines()) if review is not None else set()
-
-        lines: list[ft.Control] = [
-            ft.Text(
-                f'Motor solicitado en Configuración: {engine_label(requested or primary)}',
-                size=8,
-                weight=ft.FontWeight.BOLD,
-            )
-        ]
-
-        if requested and primary and requested != primary:
-            lines.append(
-                ft.Text(
-                    f'{engine_label(requested)} no pudo iniciar; el PDF fue recuperado con {engine_label(primary)}.',
-                    size=8,
-                    color=DANGER,
-                )
-            )
-        elif primary:
-            lines.append(
-                ft.Text(
-                    f'Motor primario ejecutado: {engine_label(primary)}',
-                    size=8,
-                    color=GOB_GREEN,
-                )
-            )
-
-        if getattr(result, 'fallback_attempted', False) and secondary:
-            if secondary in available:
-                lines.append(
-                    ft.Text(
-                        f'Fallback ejecutado: {engine_label(secondary)} · candidato disponible para revisión.',
-                        size=8,
-                        color=GOB_GREEN,
-                        weight=ft.FontWeight.BOLD,
-                    )
-                )
-            else:
-                error_type = getattr(review, 'paddle_error_type', None) if review is not None else None
-                suffix = f' · error {error_type}' if error_type else ''
-                error_message = ''
-                if review is not None and primary in available:
-                    try:
-                        primary_candidate = review.get_candidate(primary)
-                        error_message = str(
-                            (primary_candidate.document.metadata or {}).get(
-                                'ocr_fallback_error_message',
-                                '',
-                            )
-                            or ''
-                        ).strip()
-                    except Exception:
-                        error_message = ''
-                detail = f' · {error_message}' if error_message else ''
-                lines.append(
-                    ft.Text(
-                        f'Fallback intentado: {engine_label(secondary)} · no produjo candidato{suffix}{detail}.',
-                        size=8,
-                        color=DANGER,
-                        weight=ft.FontWeight.BOLD,
-                    )
-                )
-        else:
-            lines.append(
-                ft.Text(
-                    'Fallback: no requerido por las validaciones del motor principal.',
-                    size=8,
-                    color=ft.Colors.ON_SURFACE_VARIANT,
-                )
-            )
-
-        if len(available) > 1:
-            lines.append(
-                ft.Text(
-                    'Hay dos resultados reales en memoria. Puedes alternarlos y elegir cuál se exportará.',
-                    size=8,
-                    color=GOB_GREEN_DARK,
-                )
-            )
-
-        return ft.Container(
-            ft.Column(lines, spacing=3, tight=True),
-            padding=7,
-            bgcolor=GOB_GREEN_LIGHT,
-            border_radius=6,
-            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
-        )
-
-
     def beneficiary_analytics(
         movements,
     ) -> list[tuple[str, float, float, int, int]]:
@@ -1375,12 +1314,7 @@ def main(page: ft.Page):
         if method == 'OCR':
             candidate_selector = ocr_candidate_selector(result)
             if candidate_selector is not None:
-                # Cuando ya existen dos candidatos, Comparación OCR contiene
-                # toda la información accionable. Evitamos duplicarla con la
-                # tarjeta verde de ejecución que sólo es útil para diagnóstico.
                 audit_view.controls.append(candidate_selector)
-            else:
-                audit_view.controls.append(ocr_execution_card(result))
 
         audit_view.controls.extend(
             [
@@ -1621,14 +1555,36 @@ def main(page: ft.Page):
         )
         page.show_dialog(dialog)
 
+    def clear_loading_dialog_refs() -> None:
+        state['loading_dialog_timer_text'] = None
+        state['loading_dialog_status_text'] = None
+        state['loading_dialog_progress_bar'] = None
+
     def close_loading_dialog():
         if not state['loading_dialog_open']:
+            clear_loading_dialog_refs()
             return
         state['loading_dialog_open'] = False
+        clear_loading_dialog_refs()
         try:
             page.pop_dialog()
             page.update()
         except Exception:
+            pass
+
+    def play_completion_sound() -> None:
+        if state['completion_notified'] or state['stop_requested']:
+            return
+        state['completion_notified'] = True
+        if sys.platform != 'win32':
+            return
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            # El sonido es únicamente feedback visual/sonoro y nunca debe
+            # interferir con el resultado ni con el ejecutable portable.
             pass
 
     def request_stop(_=None, *, close_after: bool = False):
@@ -1650,31 +1606,160 @@ def main(page: ft.Page):
 
     def show_loading_dialog():
         logo = (
-            ft.Image(src=str(LOGO_PATH), width=120, height=55, fit=ft.BoxFit.CONTAIN)
+            ft.Image(src=str(LOGO_PATH), width=130, height=60, fit=ft.BoxFit.CONTAIN)
             if LOGO_PATH.exists()
-            else ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=38, color=GOB_GREEN)
+            else ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=40, color=GOB_GREEN)
         )
+        dialog_timer = ft.Text(
+            format_elapsed(state['elapsed_seconds']),
+            size=30,
+            weight=ft.FontWeight.BOLD,
+            color=GOB_GREEN_DARK,
+        )
+        dialog_status = ft.Text(
+            f'0 de {len(processing_items)} archivos finalizados',
+            size=9,
+            weight=ft.FontWeight.W_600,
+            color=GOB_GREEN_DARK,
+        )
+        dialog_progress = ft.ProgressBar(
+            value=0.0,
+            bar_height=5,
+            color=GOB_GREEN,
+            bgcolor=GOB_GREEN_LIGHT,
+        )
+        state['loading_dialog_timer_text'] = dialog_timer
+        state['loading_dialog_status_text'] = dialog_status
+        state['loading_dialog_progress_bar'] = dialog_progress
+
         dialog = ft.AlertDialog(
-            modal=False,
-            title=ft.Text('Procesando estados de cuenta', weight=ft.FontWeight.BOLD),
-            content=ft.Column(
+            modal=True,
+            bgcolor=ft.Colors.WHITE,
+            elevation=12,
+            title=ft.Row(
                 [
-                    ft.Row(
-                        [logo, ft.ProgressRing(width=26, height=26)],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
+                    ft.Icon(ft.Icons.HOURGLASS_TOP, color=GOB_GREEN, size=23),
                     ft.Text(
-                        'Los PDFs aparecerán en Resultados disponibles en cuanto se clasifique su tipo. Puedes cerrar esta ventana y revisar los resultados mientras continúa el lote.',
-                        size=9,
-                        color=ft.Colors.ON_SURFACE_VARIANT,
+                        'Procesando estados de cuenta',
+                        size=16,
+                        weight=ft.FontWeight.BOLD,
+                        color=GOB_GREEN_DARK,
                     ),
                 ],
-                spacing=10,
-                tight=True,
+                spacing=8,
+            ),
+            content=ft.Container(
+                width=500,
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                logo,
+                                ft.Container(expand=True),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text(
+                                                'TIEMPO TRANSCURRIDO',
+                                                size=8,
+                                                weight=ft.FontWeight.BOLD,
+                                                color=ft.Colors.ON_SURFACE_VARIANT,
+                                            ),
+                                            dialog_timer,
+                                        ],
+                                        spacing=0,
+                                        horizontal_alignment=ft.CrossAxisAlignment.END,
+                                    ),
+                                    padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                                    bgcolor=GOB_GOLD_LIGHT,
+                                    border_radius=10,
+                                ),
+                            ],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Row(
+                                        [
+                                            ft.ProgressRing(
+                                                width=22,
+                                                height=22,
+                                                stroke_width=2.5,
+                                                color=GOB_GREEN,
+                                            ),
+                                            ft.Column(
+                                                [
+                                                    ft.Text(
+                                                        'Procesamiento activo',
+                                                        size=10,
+                                                        weight=ft.FontWeight.BOLD,
+                                                        color=GOB_GREEN_DARK,
+                                                    ),
+                                                    dialog_status,
+                                                ],
+                                                spacing=2,
+                                                expand=True,
+                                            ),
+                                        ],
+                                        spacing=9,
+                                    ),
+                                    dialog_progress,
+                                ],
+                                spacing=10,
+                            ),
+                            padding=12,
+                            bgcolor=GOB_CREAM,
+                            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+                            border_radius=10,
+                        ),
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.Icon(
+                                        ft.Icons.NOTIFICATIONS_ACTIVE_OUTLINED,
+                                        color=GOB_GOLD,
+                                        size=21,
+                                    ),
+                                    ft.Column(
+                                        [
+                                            ft.Text(
+                                                'Puedes seguir revisando los resultados.',
+                                                size=9,
+                                                weight=ft.FontWeight.W_600,
+                                            ),
+                                            ft.Text(
+                                                'Te avisaremos con un sonido cuando el lote haya terminado.',
+                                                size=8,
+                                                color=ft.Colors.ON_SURFACE_VARIANT,
+                                            ),
+                                        ],
+                                        spacing=1,
+                                        expand=True,
+                                    ),
+                                ],
+                                spacing=9,
+                            ),
+                            padding=10,
+                            bgcolor=GOB_GOLD_LIGHT,
+                            border_radius=9,
+                        ),
+                        ft.Text(
+                            'Los PDFs aparecerán en Resultados disponibles conforme termine cada archivo.',
+                            size=8,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                    ],
+                    spacing=12,
+                    tight=True,
+                ),
             ),
             actions=[
-                ft.TextButton(
+                ft.FilledButton(
                     content='Ver procesamiento',
+                    icon=ft.Icons.VISIBILITY_OUTLINED,
+                    bgcolor=GOB_GREEN,
+                    color=BUTTON_TEXT,
                     on_click=lambda ev: close_loading_dialog(),
                 ),
                 ft.OutlinedButton(
@@ -1803,7 +1888,6 @@ def main(page: ft.Page):
                 rebuild_selector()
                 if first_result:
                     render_result(event.result)
-                close_loading_dialog()
             else:
                 rebuild_selector()
             return
@@ -1818,6 +1902,7 @@ def main(page: ft.Page):
             rebuild_selector()
 
     def finish_controls():
+        was_running = state['running']
         if state['stop_requested']:
             for item in processing_items:
                 if item.get('status') not in FINAL_STATUSES:
@@ -1846,6 +1931,8 @@ def main(page: ft.Page):
                 control.update()
             except Exception:
                 pass
+        if was_running:
+            play_completion_sound()
         if state['close_after_stop']:
             page.run_task(close_window_after_finish)
 
@@ -1912,8 +1999,13 @@ def main(page: ft.Page):
                 state['last_timer_refresh'] = now
                 state['elapsed_seconds'] = now - state['started_at']
                 timer_text.value = format_elapsed(state['elapsed_seconds'])
+                dialog_timer = state.get('loading_dialog_timer_text')
+                if dialog_timer is not None:
+                    dialog_timer.value = timer_text.value
                 try:
                     timer_text.update()
+                    if dialog_timer is not None:
+                        dialog_timer.update()
                 except Exception:
                     return
             await asyncio.sleep(PROCESSING_UI_POLL_INTERVAL)
@@ -1927,7 +2019,9 @@ def main(page: ft.Page):
         state['last_timer_refresh'] = 0.0
         state['cancel_event'] = threading.Event()
         state['stop_requested'] = False
+        state['completion_notified'] = False
         state['close_after_stop'] = False
+        clear_loading_dialog_refs()
         results.clear()
         processing_items.clear()
         try:
