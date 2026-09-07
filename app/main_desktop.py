@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -24,6 +25,10 @@ DANGER = "#A63D40"
 
 STARTUP_WIDTH = 680
 STARTUP_HEIGHT = 420
+PADDLEOCR_MODEL_NAMES = (
+    "PP-OCRv5_mobile_det",
+    "latin_PP-OCRv5_mobile_rec",
+)
 
 
 def _desktop_resource_root() -> Path:
@@ -35,6 +40,42 @@ def _desktop_resource_root() -> Path:
 
 def _asset_path(name: str) -> Path:
     return _desktop_resource_root() / "assets" / name
+
+
+def _bundled_paddle_model_root() -> Path | None:
+    """Devuelve el root PaddleOCR extraído del one-file, si está completo."""
+    if not getattr(sys, "frozen", False) or not getattr(sys, "_MEIPASS", None):
+        return None
+
+    root = _desktop_resource_root() / "models" / "paddleocr"
+    if all((root / model_name).is_dir() for model_name in PADDLEOCR_MODEL_NAMES):
+        return root.resolve()
+    return None
+
+
+def _configure_offline_runtime() -> Path | None:
+    """Fuerza operación local y prioriza los modelos incluidos en el EXE."""
+    # PaddleX no debe consultar fuentes de modelos durante el procesamiento.
+    os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "1"
+
+    # Algunas dependencias transitivas conocen repositorios Hugging Face. Estos
+    # flags convierten el runtime de escritorio en un consumidor estrictamente
+    # local aunque una dependencia intente resolver recursos por nombre.
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+
+    bundled_root = _bundled_paddle_model_root()
+    if bundled_root is None:
+        return None
+
+    # Un EXE portable debe comportarse igual en cualquier computadora. Si el
+    # sistema destino conserva variables antiguas, no deben desviar al reader
+    # hacia modelos externos, ProgramData o una instalación previa.
+    os.environ.pop("PADDLEOCR_TEXT_DETECTION_MODEL_DIR", None)
+    os.environ.pop("PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR", None)
+    os.environ["PADDLEOCR_MODEL_ROOT"] = str(bundled_root)
+    return bundled_root
 
 
 _original_icon = ft.Icon
@@ -310,6 +351,8 @@ async def _desktop_main(page: ft.Page) -> None:
     await asyncio.sleep(0.10)
 
     try:
+        _configure_offline_runtime()
+
         _update_startup_progress(
             page,
             progress,
@@ -317,7 +360,7 @@ async def _desktop_main(page: ft.Page) -> None:
             detail,
             value=0.26,
             message="Inicializando aplicación…",
-            detail_message="Comprobando recursos de escritorio.",
+            detail_message="Comprobando recursos locales de escritorio.",
         )
 
         _update_startup_progress(
@@ -372,6 +415,8 @@ def _run_packaged_paddlex_self_test() -> bool:
     if "--self-test-paddlex-pipeline" not in sys.argv:
         return False
 
+    _configure_offline_runtime()
+
     from paddlex.inference.pipelines import load_pipeline_config
     from paddlex.utils.deps import require_extra
 
@@ -385,15 +430,11 @@ def _run_packaged_paddlex_self_test() -> bool:
     return True
 
 
-def _run_packaged_paddleocr_runtime_self_test() -> bool:
-    """Inicializa modelos locales y ejecuta predict() dentro del EXE real."""
-    if "--self-test-paddleocr-runtime" not in sys.argv:
-        return False
-
+def _execute_paddleocr_runtime_self_test(config: dict) -> None:
+    """Ejecuta una inferencia sintética sin información bancaria."""
     from PIL import Image, ImageDraw
     from readers.paddleocr_pdf_reader import PaddleOCRPDFReader
 
-    config = PaddleOCRPDFReader._load_config()
     engine = PaddleOCRPDFReader._get_engine(**config)
     image = Image.new("RGB", (720, 220), "white")
     draw = ImageDraw.Draw(image)
@@ -406,11 +447,54 @@ def _run_packaged_paddleocr_runtime_self_test() -> bool:
         doctop_offset=0.0,
         text_det_limit_side_len=1200,
     )
+
+
+def _run_packaged_paddleocr_runtime_self_test() -> bool:
+    """Inicializa modelos locales y ejecuta predict() dentro del EXE real."""
+    if "--self-test-paddleocr-runtime" not in sys.argv:
+        return False
+
+    _configure_offline_runtime()
+
+    from readers.paddleocr_pdf_reader import PaddleOCRPDFReader
+
+    config = PaddleOCRPDFReader._load_config()
+    _execute_paddleocr_runtime_self_test(config)
+    return True
+
+
+def _run_packaged_portable_paddleocr_runtime_self_test() -> bool:
+    """Demuestra que PaddleOCR funciona exclusivamente con modelos del one-file."""
+    if "--self-test-portable-paddleocr-runtime" not in sys.argv:
+        return False
+
+    bundled_root = _configure_offline_runtime()
+    if bundled_root is None:
+        raise RuntimeError(
+            "El ejecutable no contiene models/paddleocr con los dos modelos requeridos."
+        )
+
+    from readers.paddleocr_pdf_reader import PaddleOCRPDFReader
+
+    config = PaddleOCRPDFReader._load_config()
+    expected_root = bundled_root.resolve()
+    for key in ("detection_model_dir", "recognition_model_dir"):
+        resolved = Path(config[key]).resolve()
+        try:
+            resolved.relative_to(expected_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{key} no fue resuelto desde el bundle portable: {resolved}"
+            ) from exc
+
+    _execute_paddleocr_runtime_self_test(config)
     return True
 
 
 if __name__ == "__main__":
     if _run_packaged_paddlex_self_test():
+        raise SystemExit(0)
+    if _run_packaged_portable_paddleocr_runtime_self_test():
         raise SystemExit(0)
     if _run_packaged_paddleocr_runtime_self_test():
         raise SystemExit(0)
