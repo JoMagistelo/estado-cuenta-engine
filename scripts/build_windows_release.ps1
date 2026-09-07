@@ -26,7 +26,7 @@ if (-not $SkipTests) {
     }
 }
 
-foreach ($folder in @("build", "dist")) {
+foreach ($folder in @("build", "dist", ".packaging")) {
     if (Test-Path $folder) {
         Remove-Item $folder -Recurse -Force
     }
@@ -42,8 +42,10 @@ if ($PortableOffline) {
     }
 
     # El perfil portable prepara y valida los modelos ANTES de PyInstaller para
-    # que el spec pueda incorporarlos físicamente dentro del one-file.
-    $PortableModelRoot = Join-Path $ProjectRoot "build\portable-paddleocr"
+    # que el spec pueda incorporarlos físicamente dentro del one-file. El
+    # staging vive fuera de build/, porque build/ es el workpath temporal de
+    # PyInstaller y puede limpiarse/recrearse durante la construcción.
+    $PortableModelRoot = Join-Path $ProjectRoot ".packaging\portable-paddleocr"
     $BootstrapArgs = @(
         "scripts\preparar_modelos_paddleocr.py",
         "--destino", $PortableModelRoot,
