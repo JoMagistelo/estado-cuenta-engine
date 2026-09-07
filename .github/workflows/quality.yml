@@ -197,23 +197,32 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install desktop and packaging dependencies
+      - name: Install full desktop and packaging dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[desktop]"
+          python -m pip install -e ".[desktop,paddleocr]"
           python -m pip install --group packaging
 
       - name: Build desktop executable
         run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
 
-      - name: Verify executable and release manifest
+      - name: Verify bundled PaddleX OCR pipeline
         shell: pwsh
         run: |
           $path = "dist/Extractor_de_Movimientos_Financieros.exe"
           if (-not (Test-Path $path)) {
             throw "No se generó el ejecutable esperado."
           }
+          $process = Start-Process -FilePath $path -ArgumentList "--self-test-paddlex-pipeline" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "El EXE no pudo cargar la pipeline OCR de PaddleX (ExitCode=$($process.ExitCode))."
+          }
+
+      - name: Verify executable and release manifest
+        shell: pwsh
+        run: |
+          $path = "dist/Extractor_de_Movimientos_Financieros.exe"
           python scripts/verify_windows_release.py $path --output-dir dist --version "2.4.1"
 
       - name: Upload build evidence
