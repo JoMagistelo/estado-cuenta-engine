@@ -23,7 +23,6 @@ from exporters.excel.batch_exporter import pending_ocr_selection_files
 APP_VERSION = '2.4.2'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
-MOVEMENT_PAGE_SIZE = 60
 SELECTOR_ENGINE_WIDTH = 150
 SELECTOR_STATUS_WIDTH = 54
 SELECTOR_TIME_WIDTH = 64
@@ -132,7 +131,11 @@ def main(page: ft.Page):
     page.window.height = 660
     page.window.min_width = 920
     page.window.min_height = 560
-    page.window.maximized = True
+    page.window.max_width = None
+    page.window.max_height = None
+    page.window.resizable = True
+    page.window.maximizable = True
+    page.window.maximized = False
     page.window.prevent_close = True
     page.padding = 14
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -680,10 +683,6 @@ def main(page: ft.Page):
         )
         cargo_total_text = ft.Text('$0.00', size=10, weight=ft.FontWeight.BOLD)
         abono_total_text = ft.Text('$0.00', size=10, weight=ft.FontWeight.BOLD)
-        page_label = ft.Text('', size=8, color=ft.Colors.ON_SURFACE_VARIANT)
-        previous_button = ft.IconButton(icon=ft.Icons.CHEVRON_LEFT, tooltip='Página anterior')
-        next_button = ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT, tooltip='Página siguiente')
-        page_state = {'page': 0}
 
         def total_chip(label: str, value_control: ft.Text, *, accent: str) -> ft.Container:
             return ft.Container(
@@ -729,19 +728,15 @@ def main(page: ft.Page):
                 if query in searchable_text(original_index, movement)
             ]
 
-        def rebuild_page(*, update: bool = True) -> None:
+        def rebuild_rows(*, update: bool = True) -> None:
             entries = filtered_entries()
             cargo_total = sum(numeric(getattr(movement, 'cargo', 0.0)) for _, movement in entries)
             abono_total = sum(numeric(getattr(movement, 'abono', 0.0)) for _, movement in entries)
             cargo_total_text.value = format_money(cargo_total)
             abono_total_text.value = format_money(abono_total)
 
-            total_pages = max(1, (len(entries) + MOVEMENT_PAGE_SIZE - 1) // MOVEMENT_PAGE_SIZE)
-            page_state['page'] = min(page_state['page'], total_pages - 1)
-            start = page_state['page'] * MOVEMENT_PAGE_SIZE
-            chunk = entries[start:start + MOVEMENT_PAGE_SIZE]
             rows: list[ft.Control] = []
-            for display_position, (original_index, movement) in enumerate(chunk, start=1):
+            for display_position, (original_index, movement) in enumerate(entries, start=1):
                 cells = []
                 for field_name, _label, width in MOVEMENT_COLUMNS:
                     value = movement_value(
@@ -768,44 +763,22 @@ def main(page: ft.Page):
                     padding=10,
                 )
             ]
-            first_visible = start + 1 if entries else 0
-            last_visible = min(start + MOVEMENT_PAGE_SIZE, len(entries))
-            page_label.value = (
-                f'{first_visible}-{last_visible} de {len(entries)} · '
-                f'Página {page_state["page"] + 1}/{total_pages}'
-            )
-            previous_button.disabled = page_state['page'] <= 0
-            next_button.disabled = page_state['page'] >= total_pages - 1
             if update:
                 for control in (
                     body,
                     cargo_total_text,
                     abono_total_text,
-                    page_label,
-                    previous_button,
-                    next_button,
                 ):
                     try:
                         control.update()
                     except Exception:
                         pass
 
-        def previous_page(_):
-            page_state['page'] = max(0, page_state['page'] - 1)
-            rebuild_page()
-
-        def next_page(_):
-            page_state['page'] += 1
-            rebuild_page()
-
         def filter_changed(_):
-            page_state['page'] = 0
-            rebuild_page()
+            rebuild_rows()
 
-        previous_button.on_click = previous_page
-        next_button.on_click = next_page
         filter_field.on_change = filter_changed
-        rebuild_page(update=False)
+        rebuild_rows(update=False)
 
         table_surface = ft.Container(
             ft.Column([header, body], spacing=0),
@@ -825,9 +798,6 @@ def main(page: ft.Page):
                 ft.Container(expand=True),
                 cargo_chip,
                 abono_chip,
-                previous_button,
-                page_label,
-                next_button,
             ],
             spacing=6,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
