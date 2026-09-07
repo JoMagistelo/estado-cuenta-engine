@@ -219,8 +219,12 @@ def estado_cuenta_to_tables(
         # MOVIMIENTOS
         # =====================================================
 
+        # Un resultado OCR válido puede no contener movimientos. La UI ya
+        # normaliza ese caso como una lista vacía; el mapper hace lo mismo para
+        # que la exportación conserve las demás hojas aun si un parser/lector
+        # entrega `None` de forma excepcional.
         for numero, mov in enumerate(
-            ec.movimientos,
+            ec.movimientos or [],
             start=1,
         ):
 
