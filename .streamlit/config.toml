@@ -1,0 +1,3 @@
+[browser]
+# El despliegue institucional no debe enviar telemetría de uso a Internet.
+gatherUsageStats = false
