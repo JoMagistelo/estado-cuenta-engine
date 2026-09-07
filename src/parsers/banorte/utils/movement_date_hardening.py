@@ -14,23 +14,30 @@ from typing import Any, Sequence
 # separación explícita, los dos primeros dígitos del folio pueden confundirse
 # con parte del año ("22-JUN-2650").
 #
-# Esta normalización es deliberadamente mínima: sólo inserta un espacio cuando
-# después del año de dos dígitos viene INMEDIATAMENTE otro dígito. No cambia
-# coordenadas, páginas ni el diccionario original, y no toca los casos normales
-# como "25-JUN-24COMPRA".
-AMBIGUOUS_NUMERIC_SUFFIX_DATE_PATTERN = re.compile(
+# Esta normalización es deliberadamente mínima: sólo actúa cuando después del
+# año corto hay más dígitos y esos primeros cuatro dígitos NO forman un año de
+# cuatro cifras razonable. Así se preservan fechas ya soportadas como
+# "22-JUN-2026" y "22-JUN-2026COMPRA", además de "25-JUN-24COMPRA".
+DATE_AND_NUMERIC_BODY_PATTERN = re.compile(
     r"^"
-    r"(?P<date>"
+    r"(?P<prefix>"
     r"\d{1,2}"
     r"-"
     r"[A-ZÁÉÍÓÚÑ]{3}"
     r"-"
-    r"\d{2}"
     r")"
-    r"(?P<suffix>\d\S*)"
+    r"(?P<body>\d{3,}\S*)"
     r"$",
     re.IGNORECASE,
 )
+
+
+def _starts_with_plausible_four_digit_year(body: str) -> bool:
+    if len(body) < 4 or not body[:4].isdigit():
+        return False
+
+    year = int(body[:4])
+    return 1900 <= year <= 2099
 
 
 def normalize_ambiguous_movement_date_token(value: Any) -> str:
@@ -42,17 +49,27 @@ def normalize_ambiguous_movement_date_token(value: Any) -> str:
         ->
         22-JUN-26 50114599TRANSBPI07617702
 
-    La función no intenta reescribir fechas normales ni conceptos pegados que
-    comienzan con letras, ya soportados por el extractor existente.
+    La función no reescribe fechas normales de cuatro dígitos ni conceptos
+    alfanuméricos pegados que ya son soportados por el extractor existente.
     """
 
     text = "" if value is None else str(value)
-    match = AMBIGUOUS_NUMERIC_SUFFIX_DATE_PATTERN.match(text)
+    match = DATE_AND_NUMERIC_BODY_PATTERN.match(text)
 
     if match is None:
         return text
 
-    return f"{match.group('date')} {match.group('suffix')}"
+    body = match.group("body")
+
+    # Si los primeros cuatro dígitos ya representan un año razonable, no se
+    # modifica el token. Esto evita convertir 22-JUN-2026 en 22-JUN-20 26.
+    if _starts_with_plausible_four_digit_year(body):
+        return text
+
+    date = f"{match.group('prefix')}{body[:2]}"
+    suffix = body[2:]
+
+    return f"{date} {suffix}"
 
 
 def normalize_ambiguous_movement_date_words(

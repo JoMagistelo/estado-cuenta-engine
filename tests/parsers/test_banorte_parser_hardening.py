@@ -63,6 +63,18 @@ def test_existing_alphanumeric_glued_date_behavior_is_preserved() -> None:
     assert normalized_words[0]["text"] == "25-JUN-24COMPRA"
 
 
+def test_existing_four_digit_year_behavior_is_preserved() -> None:
+    assert normalize_ambiguous_movement_date_token("22-JUN-2026") == "22-JUN-2026"
+    assert normalize_ambiguous_movement_date_token("22-JUN-2026COMPRA") == (
+        "22-JUN-2026COMPRA"
+    )
+    # Ante un caso numérico verdaderamente ambiguo que ya empieza por un año
+    # plausible de cuatro cifras, se prefiere no modificar datos existentes.
+    assert normalize_ambiguous_movement_date_token("22-JUN-20265011TRACE") == (
+        "22-JUN-20265011TRACE"
+    )
+
+
 def test_regular_date_and_unrelated_numeric_text_are_untouched() -> None:
     assert normalize_ambiguous_movement_date_token("22-JUN-26") == "22-JUN-26"
     assert normalize_ambiguous_movement_date_token("50114599TRANSBPI07617702") == (
