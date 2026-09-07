@@ -14,12 +14,13 @@ def test_spec_collects_paddlex_dynamic_resources_and_metadata():
     assert "_paddlex_ocr_metadata()" in source
 
 
-def test_spec_uses_full_tk_for_institutional_splash():
+def test_spec_uses_native_flet_startup_without_tcl_tk_splash():
     source = (ROOT / "EstadoCuentaEngine.spec").read_text(encoding="utf-8")
 
-    assert "full_tk=True" in source
-    assert "minify_script=False" in source
-    assert "pyinstaller_splash_runtime.py" in source
+    assert "Splash(" not in source
+    assert "full_tk=True" not in source
+    assert "pyinstaller_splash_runtime.py" not in source
+    assert "runtime_hooks=[]" in source
 
 
 def test_desktop_entrypoint_validates_frozen_paddlex_dependencies_and_runtime():
@@ -38,6 +39,8 @@ def test_desktop_entrypoint_keeps_native_loading_feedback_and_window_icon():
 
     assert 'title=ft.Text("Cargando aplicación"' in source
     assert "ft.ProgressRing(width=28, height=28)" in source
+    assert "ft.ProgressBar" in source
     assert "page.window.icon = str(icon_path)" in source
-    assert "import main_flet as ui" in source
+    assert "async def _desktop_main" in source
+    assert 'await asyncio.to_thread(importlib.import_module, "main_flet")' in source
     assert "ft.run(_desktop_main)" in source
