@@ -37,10 +37,20 @@ def test_desktop_entrypoint_validates_frozen_paddlex_dependencies_and_runtime():
 def test_desktop_entrypoint_keeps_native_loading_feedback_and_window_icon():
     source = (ROOT / "app" / "main_desktop.py").read_text(encoding="utf-8")
 
-    assert 'title=ft.Text("Cargando aplicación"' in source
-    assert "ft.ProgressRing(width=28, height=28)" in source
+    assert '"Extractor de Movimientos Financieros"' in source
+    assert '"Secretaría Anticorrupción y Buen Gobierno"' in source
+    assert "ft.ProgressRing(" in source
     assert "ft.ProgressBar" in source
     assert "page.window.icon = str(icon_path)" in source
+    assert "page.window.progress_bar = value" in source
+    assert "page.window.resizable = False" in source
+    assert "page.window.maximizable = False" in source
+    assert "page.window.always_on_top = True" in source
+    assert "await page.window.center()" in source
     assert "async def _desktop_main" in source
     assert 'await asyncio.to_thread(importlib.import_module, "main_flet")' in source
-    assert "ft.run(_desktop_main)" in source
+    assert "page.controls.clear()" in source
+    assert "page.window.resizable = True" in source
+    assert "page.window.maximizable = True" in source
+    assert "await _show_startup_error(page, ex)" in source
+    assert "ft.run(_desktop_main, view=ft.AppView.FLET_APP_HIDDEN)" in source
