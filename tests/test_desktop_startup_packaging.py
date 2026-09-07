@@ -12,6 +12,22 @@ def test_pyinstaller_spec_does_not_create_tcl_tk_splash():
     assert "runtime_hooks=[]" in spec
 
 
+def test_pyinstaller_spec_includes_dynamically_loaded_main_flet():
+    spec = (ROOT / "EstadoCuentaEngine.spec").read_text(encoding="utf-8")
+
+    # main_desktop usa importlib.import_module("main_flet"). PyInstaller no
+    # descubre ese import dinámico durante Analysis, así que debe declararse.
+    assert 'extra_hiddenimports = ["main_flet"]' in spec
+    assert "hiddenimports=extra_hiddenimports" in spec
+
+
+def test_desktop_extra_installs_flet_desktop_client():
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    # El portable no debe intentar instalar flet-desktop al primer arranque.
+    assert '"flet[desktop]>=0.86.5,<0.87"' in pyproject
+
+
 def test_desktop_entrypoint_renders_professional_startup_before_heavy_ui_import():
     source = (ROOT / "app" / "main_desktop.py").read_text(encoding="utf-8")
 
