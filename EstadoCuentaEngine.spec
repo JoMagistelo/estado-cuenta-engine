@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import importlib.metadata as importlib_metadata
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 
@@ -12,80 +12,12 @@ from PyInstaller.utils.hooks import collect_all, copy_metadata
 PROJECT_ROOT = Path(SPECPATH).resolve()
 TESSERACT_DIR = PROJECT_ROOT / "vendor" / "tesseract"
 ASSETS_DIR = PROJECT_ROOT / "assets"
-LOGO_PATH = ASSETS_DIR / "logo_gobierno_mexico.png"
-RUNTIME_HOOK = PROJECT_ROOT / "scripts" / "pyinstaller_splash_runtime.py"
 BUILD_DIR = PROJECT_ROOT / "build"
-SPLASH_PATH = BUILD_DIR / "splash_institucional.png"
 ICON_PATH = BUILD_DIR / "extractor_movimientos.ico"
 VERSION_INFO_PATH = BUILD_DIR / "windows_version_info.txt"
 
 APP_VERSION = (2, 4, 2, 0)
 
-
-def _font(size: int, *, bold: bool = False):
-    candidates = (
-        "arialbd.ttf" if bold else "arial.ttf",
-        "segoeuib.ttf" if bold else "segoeui.ttf",
-    )
-    for candidate in candidates:
-        try:
-            return ImageFont.truetype(candidate, size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
-
-
-def _centered_text(draw, text: str, y: int, font, fill: str, width: int) -> None:
-    box = draw.textbbox((0, 0), text, font=font)
-    text_width = box[2] - box[0]
-    draw.text(((width - text_width) / 2, y), text, font=font, fill=fill)
-
-
-def _build_splash() -> Path:
-    """Genera el splash en build/ sin agregar binarios derivados al repo."""
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    width, height = 760, 390
-    canvas = Image.new("RGB", (width, height), "#FFFFFF")
-    draw = ImageDraw.Draw(canvas)
-
-    if LOGO_PATH.is_file():
-        with Image.open(LOGO_PATH) as source:
-            logo = source.convert("RGBA")
-            logo.thumbnail((430, 125), Image.Resampling.LANCZOS)
-            x = (width - logo.width) // 2
-            canvas.paste(logo, (x, 45), logo)
-
-    _centered_text(
-        draw,
-        "Extractor de Movimientos Financieros",
-        205,
-        _font(28, bold=True),
-        "#163A2C",
-        width,
-    )
-    _centered_text(
-        draw,
-        "Dirección General de Evaluación de Confianza",
-        248,
-        _font(16),
-        "#4D5358",
-        width,
-    )
-
-    # El área inferior queda reservada para el indicador dinámico enviado por
-    # ``pyi_splash.update_text``. Antes se dibujaba aquí una barra fija que no
-    # podía reflejar el avance real del arranque.
-    draw.rounded_rectangle(
-        (108, 292, 652, 330),
-        radius=10,
-        fill="#F3F6F4",
-        outline="#DDE8E2",
-        width=1,
-    )
-    draw.rectangle((0, height - 8, width, height), fill="#B08D57")
-
-    canvas.save(SPLASH_PATH, format="PNG", optimize=True)
-    return SPLASH_PATH
 
 
 def _build_icon() -> Path:
@@ -212,7 +144,6 @@ def _paddlex_ocr_metadata():
     return metadata_datas
 
 
-splash_image = _build_splash()
 app_icon = _build_icon()
 version_info = _build_version_info()
 
@@ -259,7 +190,7 @@ a = Analysis(
     hiddenimports=extra_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[str(RUNTIME_HOOK)],
+    runtime_hooks=[],
     excludes=[],
     noarchive=False,
     optimize=0,
@@ -267,28 +198,12 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-splash = Splash(
-    str(splash_image),
-    binaries=a.binaries,
-    datas=a.datas,
-    text_pos=(122, 304),
-    text_size=12,
-    text_color="#163A2C",
-    text_default="[##--------------------]   8%  Iniciando aplicación...",
-    always_on_top=True,
-    # El splash de PyInstaller está basado en Tcl/Tk. En algunos entornos
-    # Windows la colección mínima puede dejar visible la ventana raíz "tk" si
-    # la inicialización del script falla. Para el binario institucional se
-    # prioriza una colección Tk completa y el script sin minificar.
-    full_tk=True,
-    minify_script=False,
-)
-
+# El splash de PyInstaller se deshabilita deliberadamente: su implementación
+# usa Tcl/Tk y puede mostrar una ventana raíz `tk` en Windows. El feedback de
+# arranque queda a cargo del modal Flet nativo de `app/main_desktop.py`.
 exe = EXE(
     pyz,
     a.scripts,
-    splash,
-    splash.binaries,
     a.binaries,
     a.datas,
     [],
