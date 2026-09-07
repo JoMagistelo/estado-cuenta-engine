@@ -46,7 +46,21 @@ Para Streamlit, TIC debe desplegar los dos modelos en una ubicación local contr
 
 También puede definirse `PADDLEOCR_MODEL_ROOT` a una ruta local administrada. El reader no descarga modelos durante el procesamiento.
 
-La configuración del repositorio deshabilita `browser.gatherUsageStats` de Streamlit para evitar telemetría de uso.
+El launcher recomendado para el servicio es:
+
+```powershell
+.\scripts\run_streamlit_offline.ps1
+```
+
+O, si TIC conserva los modelos en otra ruta local:
+
+```powershell
+.\scripts\run_streamlit_offline.ps1 -ModelRoot "D:\Modelos\EstadoCuentaEngine\PaddleOCR"
+```
+
+Ese launcher fuerza modo offline para PaddleX y dependencias que conozcan repositorios de modelos. La configuración `.streamlit/config.toml` deshabilita además `browser.gatherUsageStats` para evitar telemetría de uso.
+
+Streamlit seguirá usando HTTP/WebSocket dentro de la red institucional porque es una aplicación web; la restricción offline significa que el motor no requiere ni debe iniciar conexiones hacia Internet para modelos, telemetría o procesamiento bancario.
 
 ## Criterio operativo
 
