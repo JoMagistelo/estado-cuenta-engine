@@ -20,7 +20,7 @@ from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
 
-APP_VERSION = '2.4.1'
+APP_VERSION = '2.4.2'
 PROCESSING_UI_POLL_INTERVAL = 0.75
 
 GOB_GREEN = '#1F4D3A'

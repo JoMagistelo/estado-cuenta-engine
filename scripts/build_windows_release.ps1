@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "2.4.1",
+    [string]$Version = "2.4.2",
     [switch]$SkipTests,
     [switch]$IncludePaddleModels,
     [switch]$AllowPaddleModelDownload
@@ -89,6 +89,30 @@ if ($IncludePaddleModels) {
         "scripts\instalar_modelos_paddleocr.ps1" `
         "dist\instalar_modelos_paddleocr.ps1" `
         -Force
+
+    # La prueba anterior valida configuración y metadata. Ésta inicializa los
+    # mismos modelos locales del bundle y ejecuta predict() dentro del EXE
+    # congelado, que es donde históricamente aparecieron las regresiones.
+    $PreviousPaddleModelRoot = $env:PADDLEOCR_MODEL_ROOT
+    try {
+        $env:PADDLEOCR_MODEL_ROOT = $ModelDestination
+        $RuntimeSmoke = Start-Process `
+            -FilePath $Exe `
+            -ArgumentList "--self-test-paddleocr-runtime" `
+            -Wait `
+            -PassThru
+        if ($RuntimeSmoke.ExitCode -ne 0) {
+            throw "El EXE no pudo ejecutar inferencia PaddleOCR real (ExitCode=$($RuntimeSmoke.ExitCode))."
+        }
+    }
+    finally {
+        if ($null -eq $PreviousPaddleModelRoot) {
+            Remove-Item Env:PADDLEOCR_MODEL_ROOT -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:PADDLEOCR_MODEL_ROOT = $PreviousPaddleModelRoot
+        }
+    }
 }
 
 $PaddleNote = if ($IncludePaddleModels) {

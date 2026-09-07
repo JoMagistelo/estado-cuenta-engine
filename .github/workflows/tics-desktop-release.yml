@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_label:
-        description: "Etiqueta de la compilación (ej. 2.4.1-rc1)"
+        description: "Etiqueta de la compilación (ej. 2.4.2-rc1)"
         required: false
         default: "manual"
       include_paddle_models:
@@ -20,6 +20,7 @@ jobs:
   build-windows-desktop:
     name: Windows desktop + OCR completo
     runs-on: windows-latest
+    timeout-minutes: 40
     env:
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "1"
 
@@ -43,7 +44,7 @@ jobs:
       - name: Verify OCR runtimes
         shell: pwsh
         run: |
-          python -c "import flet, paddle, paddleocr, pytesseract; print('Flet/PaddleOCR/Tesseract Python bridge OK'); print('PaddlePaddle', paddle.__version__); print('PaddleOCR', paddleocr.__version__)"
+          python -c "import flet, paddle, paddleocr, paddlex, pytesseract; print('Flet/PaddleOCR/Tesseract Python bridge OK'); print('PaddlePaddle', paddle.__version__); print('PaddleOCR', paddleocr.__version__)"
           if (-not (Test-Path "vendor/tesseract/tesseract.exe")) {
             throw "No se encontró el runtime Tesseract versionado."
           }
@@ -57,7 +58,7 @@ jobs:
       - name: Build institutional desktop executable
         run: pyinstaller --clean --noconfirm EstadoCuentaEngine.spec
 
-      - name: Verify bundled PaddleX OCR pipeline
+      - name: Verify bundled PaddleX OCR config and dependency metadata
         shell: pwsh
         run: |
           $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
@@ -66,7 +67,7 @@ jobs:
           }
           $process = Start-Process -FilePath $exe -ArgumentList "--self-test-paddlex-pipeline" -Wait -PassThru
           if ($process.ExitCode -ne 0) {
-            throw "El EXE no pudo cargar la pipeline OCR de PaddleX (ExitCode=$($process.ExitCode))."
+            throw "El EXE no pudo validar la pipeline/dependencias OCR de PaddleX (ExitCode=$($process.ExitCode))."
           }
 
       - name: Verify release executable
@@ -76,7 +77,7 @@ jobs:
           python scripts/verify_windows_release.py `
             $exe `
             --output-dir dist `
-            --version "2.4.1"
+            --version "2.4.2"
           "${{ inputs.release_label }}" | Out-File -Encoding utf8 "dist/release-label.txt"
 
       - name: Prepare verified PaddleOCR model bundle
@@ -88,6 +89,17 @@ jobs:
             --fuente bos `
             --probar-inferencia
           Copy-Item "scripts/instalar_modelos_paddleocr.ps1" "dist/instalar_modelos_paddleocr.ps1" -Force
+
+      - name: Verify real PaddleOCR inference inside release EXE
+        if: ${{ inputs.include_paddle_models }}
+        shell: pwsh
+        run: |
+          $exe = "dist/Extractor_de_Movimientos_Financieros.exe"
+          $env:PADDLEOCR_MODEL_ROOT = (Resolve-Path "dist/models/paddleocr").Path
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test-paddleocr-runtime" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "El EXE de TIC no pudo ejecutar inferencia PaddleOCR real (ExitCode=$($process.ExitCode))."
+          }
 
       - name: Create deployment note
         shell: pwsh
@@ -102,6 +114,12 @@ jobs:
           1. ejecutar instalar_modelos_paddleocr.ps1 con privilegios de despliegue;
           2. el script copiará los modelos a %PROGRAMDATA%\EstadoCuentaEngine\PaddleOCR;
           3. no es necesario configurar variables de entorno para el uso normal.
+
+          Antes de publicar este bundle, CI comprobó dentro del EXE real:
+          - configuración de la pipeline OCR de PaddleX;
+          - metadata de dependencias ocr/ocr-core;
+          - inicialización de modelos locales;
+          - una llamada real a PaddleOCR predict().
 
           El archivo models/paddleocr/paddleocr-models-manifest.json registra hashes,
           tamaños y versiones del runtime del bundle preparado en CI.

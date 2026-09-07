@@ -2,8 +2,9 @@
 
 from pathlib import Path
 
+import importlib.metadata as importlib_metadata
 from PIL import Image, ImageDraw, ImageFont
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 
 # PyInstaller expone SPECPATH durante la ejecución del spec. Anclar las rutas
@@ -18,7 +19,7 @@ SPLASH_PATH = BUILD_DIR / "splash_institucional.png"
 ICON_PATH = BUILD_DIR / "extractor_movimientos.ico"
 VERSION_INFO_PATH = BUILD_DIR / "windows_version_info.txt"
 
-APP_VERSION = (2, 4, 1, 0)
+APP_VERSION = (2, 4, 2, 0)
 
 
 def _font(size: int, *, bold: bool = False):
@@ -165,6 +166,52 @@ def _optional_runtime(package_name: str):
         return [], [], []
 
 
+def _paddlex_ocr_metadata():
+    """Copia metadatos que PaddleX consulta con ``importlib.metadata``.
+
+    PaddleX 3.x decide si la pipeline OCR puede crearse leyendo los extras de su
+    propia distribución y consultando la metadata de cada dependencia.
+    PyInstaller puede congelar los módulos y, aun así, omitir sus ``.dist-info``;
+    eso provoca un falso "OCR requires additional dependencies" únicamente en
+    el EXE. Conservamos la metadata base instalada y, de forma estricta, la del
+    extra ``ocr-core`` que PaddleOCR 3.7 declara como requisito.
+    """
+    try:
+        import paddlex
+    except ImportError:
+        return []
+
+    base_dependencies = set(paddlex.utils.deps.BASE_DEP_SPECS.keys())
+    ocr_core_dependencies = set(
+        paddlex.utils.deps.EXTRAS.get("ocr-core", {}).keys()
+    )
+    missing_ocr_core = []
+    for dependency in sorted(ocr_core_dependencies):
+        try:
+            importlib_metadata.version(dependency)
+        except importlib_metadata.PackageNotFoundError:
+            missing_ocr_core.append(dependency)
+
+    if missing_ocr_core:
+        raise RuntimeError(
+            "El entorno de build no tiene completo paddlex[ocr-core]. Faltan: "
+            + ", ".join(missing_ocr_core)
+        )
+
+    metadata_names = {"paddlex", "paddleocr"}
+    metadata_names.update(base_dependencies)
+    metadata_names.update(ocr_core_dependencies)
+
+    metadata_datas = []
+    for dependency in sorted(metadata_names):
+        try:
+            importlib_metadata.version(dependency)
+        except importlib_metadata.PackageNotFoundError:
+            continue
+        metadata_datas.extend(copy_metadata(dependency))
+    return metadata_datas
+
+
 splash_image = _build_splash()
 app_icon = _build_icon()
 version_info = _build_version_info()
@@ -184,6 +231,12 @@ for package in ("paddle", "paddleocr", "paddlex"):
     extra_hiddenimports.extend(hiddenimports)
 
 
+# PaddleX comprueba los extras OCR mediante metadata de distribución en
+# runtime. ``collect_all`` no garantiza que esos ``.dist-info`` queden dentro
+# del one-file, por lo que se copian explícitamente.
+extra_datas.extend(_paddlex_ocr_metadata())
+
+
 a = Analysis(
     [str(PROJECT_ROOT / "app" / "main_desktop.py")],
     pathex=[str(PROJECT_ROOT / "src"), str(PROJECT_ROOT / "app")],
@@ -195,6 +248,10 @@ a = Analysis(
         ),
         (
             str(ASSETS_DIR),
+            "assets",
+        ),
+        (
+            str(app_icon),
             "assets",
         ),
         *extra_datas,

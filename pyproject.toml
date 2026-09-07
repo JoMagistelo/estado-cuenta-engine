@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "extractor-de-movimientos-financieros"
-version = "2.4.1"
+version = "2.4.2"
 description = "Motor institucional para lectura, extracción, validación y exportación de estados de cuenta."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -27,6 +27,9 @@ desktop = [
 paddleocr = [
     "paddleocr>=3.7,<3.8",
     "paddlepaddle==3.2.0",
+    # Explícito para que desarrollo, PyInstaller y TIC compartan el mismo
+    # contrato de dependencias que el constructor OCR de PaddleX valida.
+    "paddlex[ocr-core]>=3.7,<3.8",
 ]
 
 [dependency-groups]
