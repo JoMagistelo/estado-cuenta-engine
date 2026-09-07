@@ -77,6 +77,7 @@ def _configure_startup_window(page: ft.Page) -> None:
     page.window.max_width = STARTUP_WIDTH
     page.window.max_height = STARTUP_HEIGHT
     page.window.maximized = False
+    page.window.prevent_close = False
     page.window.resizable = False
     page.window.maximizable = False
     page.window.always_on_top = True
@@ -102,7 +103,7 @@ def _build_startup_surface(
     """Construye un splash Flet nativo que ocupa toda la ventana de arranque."""
     progress = ft.ProgressBar(
         value=0.08,
-        height=5,
+        bar_height=5,
         color=GOB_GREEN,
         bgcolor="#DED8CF",
     )
@@ -233,6 +234,8 @@ async def _show_startup_error(page: ft.Page, ex: Exception) -> None:
     _configure_startup_window(page)
     page.window.always_on_top = False
     page.window.progress_bar = None
+    page.window.prevent_close = False
+    page.window.on_event = None
 
     async def close_error(_):
         await page.window.close()
