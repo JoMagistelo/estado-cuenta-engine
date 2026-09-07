@@ -267,6 +267,10 @@ def _prepare_main_window(page: ft.Page) -> None:
     page.window.progress_bar = None
     page.window.max_width = None
     page.window.max_height = None
+    # La ventana principal debe aparecer alineada con el escritorio, no conservar
+    # la posición centrada que usa únicamente el splash de inicio.
+    page.window.left = 0
+    page.window.top = 0
     page.window.bgcolor = None
     page.bgcolor = None
 
