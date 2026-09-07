@@ -1,14 +1,14 @@
 """Punto de entrada del ejecutable de escritorio institucional.
 
-El arranque del binario se divide en dos fases: PyInstaller muestra su splash
-durante la extracción del one-file y, cuando el cliente Flet ya existe, esta
-entrada muestra un modal nativo mientras se importa y construye la interfaz.
-Así el usuario nunca depende de una ventana Tcl/Tk vacía para saber que la
-aplicación sigue cargando.
+El binario one-file deja que PyInstaller termine su extracción sin crear un
+splash Tcl/Tk. En cuanto el cliente Flet ya existe, esta entrada muestra un
+modal nativo con progreso mientras se importa y construye la interfaz.
 """
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import sys
 from pathlib import Path
 
@@ -48,8 +48,10 @@ def _desktop_icon(*args, **kwargs):
 ft.Icon = _desktop_icon
 
 
-def _show_native_startup_dialog(page: ft.Page) -> None:
-    """Muestra feedback de arranque después de que el cliente Flet ya abrió."""
+def _show_native_startup_dialog(
+    page: ft.Page,
+) -> tuple[ft.AlertDialog, ft.ProgressBar, ft.Text]:
+    """Muestra un arranque Flet visible y actualizable por etapas."""
     page.title = "Extractor de Movimientos Financieros"
     icon_path = _asset_path("extractor_movimientos.ico")
     if sys.platform == "win32" and icon_path.is_file():
@@ -61,6 +63,12 @@ def _show_native_startup_dialog(page: ft.Page) -> None:
         if logo_path.is_file()
         else ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=44, color="#1F4D3A")
     )
+    progress = ft.ProgressBar(value=0.12, width=360)
+    status = ft.Text(
+        "Inicializando interfaz de escritorio...",
+        size=10,
+        color=ft.Colors.ON_SURFACE_VARIANT,
+    )
     dialog = ft.AlertDialog(
         modal=True,
         title=ft.Text("Cargando aplicación", weight=ft.FontWeight.BOLD),
@@ -70,17 +78,28 @@ def _show_native_startup_dialog(page: ft.Page) -> None:
                     [logo, ft.ProgressRing(width=28, height=28)],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
-                ft.Text(
-                    "Preparando componentes, OCR y ventana principal...",
-                    size=10,
-                    color=ft.Colors.ON_SURFACE_VARIANT,
-                ),
+                progress,
+                status,
             ],
             spacing=10,
             tight=True,
         ),
     )
     page.show_dialog(dialog)
+    page.update()
+    return dialog, progress, status
+
+
+def _update_startup_progress(
+    page: ft.Page,
+    progress: ft.ProgressBar,
+    status: ft.Text,
+    *,
+    value: float,
+    message: str,
+) -> None:
+    progress.value = value
+    status.value = message
     page.update()
 
 
@@ -92,17 +111,48 @@ def _close_native_startup_dialog(page: ft.Page) -> None:
         pass
 
 
-def _desktop_main(page: ft.Page) -> None:
-    """Carga la UI de forma diferida para que el modal nativo sea visible."""
-    _show_native_startup_dialog(page)
+async def _desktop_main(page: ft.Page) -> None:
+    """Carga la UI sin bloquear el primer pintado del modal de arranque."""
+    _, progress, status = _show_native_startup_dialog(page)
+
+    # Ceder el control al loop de Flet garantiza que el diálogo alcance a
+    # pintarse antes de iniciar imports pesados.
+    await asyncio.sleep(0.08)
+
     try:
-        # Importar aquí, y no al cargar este módulo, permite que Flet pinte el
-        # modal antes de importar el resto de la aplicación.
-        import main_flet as ui
+        _update_startup_progress(
+            page,
+            progress,
+            status,
+            value=0.32,
+            message="Cargando componentes de la aplicación...",
+        )
+
+        # El import de main_flet arrastra la mayor parte del grafo de la app.
+        # Ejecutarlo fuera del hilo del loop mantiene visible/animado el modal.
+        ui = await asyncio.to_thread(importlib.import_module, "main_flet")
+
+        _update_startup_progress(
+            page,
+            progress,
+            status,
+            value=0.72,
+            message="Preparando recursos y ventana principal...",
+        )
+        await asyncio.sleep(0)
 
         ui.PROJECT_ROOT = _desktop_resource_root()
         ui.LOGO_PATH = ui.PROJECT_ROOT / "assets" / "logo_gobierno_mexico.png"
         ui.main(page)
+
+        _update_startup_progress(
+            page,
+            progress,
+            status,
+            value=1.0,
+            message="Aplicación lista.",
+        )
+        await asyncio.sleep(0.05)
     finally:
         _close_native_startup_dialog(page)
 
