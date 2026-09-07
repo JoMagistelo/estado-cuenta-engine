@@ -9,12 +9,12 @@ def test_result_rows_expose_full_filename_only_as_hover_feedback():
     assert "tooltip=file_name or None" in SOURCE
 
 
-def test_processing_dialog_has_visual_timer_progress_and_completion_notice():
+def test_processing_dialog_has_visual_timer_and_progress_without_sound_notice():
     assert "loading_dialog_timer_text" in SOURCE
     assert "loading_dialog_progress_bar" in SOURCE
     assert "TIEMPO TRANSCURRIDO" in SOURCE
     assert "Procesamiento activo" in SOURCE
-    assert "Te avisaremos con un sonido cuando el lote haya terminado." in SOURCE
+    assert "Te avisaremos con un sonido cuando el lote haya terminado." not in SOURCE
 
 
 def test_completion_sound_uses_only_windows_standard_library():
