@@ -1,8 +1,9 @@
 """Punto de entrada del ejecutable de escritorio institucional.
 
-El binario one-file deja que PyInstaller termine su extracción sin crear un
-splash Tcl/Tk. En cuanto el cliente Flet ya existe, esta entrada muestra un
-modal nativo con progreso mientras se importa y construye la interfaz.
+El binario one-file evita el splash Tcl/Tk de PyInstaller. En cuanto el cliente
+Flet está disponible, esta entrada construye una ventana de arranque compacta
+y centrada, la muestra antes de importar la UI pesada y la mantiene visible
+hasta que la interfaz principal queda preparada.
 """
 
 from __future__ import annotations
@@ -13,6 +14,16 @@ import sys
 from pathlib import Path
 
 import flet as ft
+
+
+GOB_GREEN = "#1F4D3A"
+GOB_GREEN_DARK = "#163A2C"
+GOB_GOLD = "#B08D57"
+GOB_CREAM = "#F7F4EE"
+DANGER = "#A63D40"
+
+STARTUP_WIDTH = 680
+STARTUP_HEIGHT = 420
 
 
 def _desktop_resource_root() -> Path:
@@ -48,113 +59,312 @@ def _desktop_icon(*args, **kwargs):
 ft.Icon = _desktop_icon
 
 
-def _show_native_startup_dialog(
-    page: ft.Page,
-) -> tuple[ft.AlertDialog, ft.ProgressBar, ft.Text]:
-    """Muestra un arranque Flet visible y actualizable por etapas."""
+def _configure_startup_window(page: ft.Page) -> None:
+    """Configura la primera superficie visible sin mostrar una ventana vacía."""
     page.title = "Extractor de Movimientos Financieros"
+    page.theme_mode = ft.ThemeMode.LIGHT
+    page.padding = 0
+    page.bgcolor = GOB_CREAM
+
     icon_path = _asset_path("extractor_movimientos.ico")
     if sys.platform == "win32" and icon_path.is_file():
         page.window.icon = str(icon_path)
 
+    page.window.width = STARTUP_WIDTH
+    page.window.height = STARTUP_HEIGHT
+    page.window.min_width = STARTUP_WIDTH
+    page.window.min_height = STARTUP_HEIGHT
+    page.window.max_width = STARTUP_WIDTH
+    page.window.max_height = STARTUP_HEIGHT
+    page.window.maximized = False
+    page.window.prevent_close = False
+    page.window.resizable = False
+    page.window.maximizable = False
+    page.window.always_on_top = True
+    page.window.bgcolor = GOB_CREAM
+    page.window.progress_bar = 0.08
+
+
+def _startup_logo() -> ft.Control:
     logo_path = _asset_path("logo_gobierno_mexico.png")
-    logo = (
-        ft.Image(src=str(logo_path), width=170, height=72, fit=ft.BoxFit.CONTAIN)
-        if logo_path.is_file()
-        else ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=44, color="#1F4D3A")
+    if logo_path.is_file():
+        return ft.Image(
+            src=str(logo_path),
+            width=220,
+            height=86,
+            fit=ft.BoxFit.CONTAIN,
+        )
+    return ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=52, color=GOB_GREEN)
+
+
+def _build_startup_surface(
+    page: ft.Page,
+) -> tuple[ft.ProgressBar, ft.Text, ft.Text]:
+    """Construye un splash Flet nativo que ocupa toda la ventana de arranque."""
+    progress = ft.ProgressBar(
+        value=0.08,
+        bar_height=5,
+        color=GOB_GREEN,
+        bgcolor="#DED8CF",
     )
-    progress = ft.ProgressBar(value=0.12, width=360)
     status = ft.Text(
-        "Inicializando interfaz de escritorio...",
-        size=10,
+        "Preparando entorno de trabajo…",
+        size=12,
+        weight=ft.FontWeight.W_600,
+        color=GOB_GREEN_DARK,
+    )
+    detail = ft.Text(
+        "Inicializando recursos de la aplicación.",
+        size=9,
         color=ft.Colors.ON_SURFACE_VARIANT,
     )
-    dialog = ft.AlertDialog(
-        modal=True,
-        title=ft.Text("Cargando aplicación", weight=ft.FontWeight.BOLD),
-        content=ft.Column(
+
+    page.add(
+        ft.Column(
             [
-                ft.Row(
-                    [logo, ft.ProgressRing(width=28, height=28)],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ft.Container(height=6, bgcolor=GOB_GOLD),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            _startup_logo(),
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        "Extractor de Movimientos Financieros",
+                                        size=22,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=GOB_GREEN_DARK,
+                                        text_align=ft.TextAlign.CENTER,
+                                    ),
+                                    ft.Text(
+                                        "Secretaría Anticorrupción y Buen Gobierno",
+                                        size=10,
+                                        weight=ft.FontWeight.W_500,
+                                        color=ft.Colors.ON_SURFACE,
+                                        text_align=ft.TextAlign.CENTER,
+                                    ),
+                                    ft.Text(
+                                        "Dirección General de Evaluación de Confianza",
+                                        size=9,
+                                        color=ft.Colors.ON_SURFACE_VARIANT,
+                                        text_align=ft.TextAlign.CENTER,
+                                    ),
+                                ],
+                                spacing=2,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Container(height=6),
+                            progress,
+                            ft.Row(
+                                [
+                                    ft.ProgressRing(
+                                        width=24,
+                                        height=24,
+                                        stroke_width=2.6,
+                                        color=GOB_GREEN,
+                                    ),
+                                    ft.Column([status, detail], spacing=2, expand=True),
+                                ],
+                                spacing=10,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Divider(height=12),
+                            ft.Row(
+                                [
+                                    ft.Icon(
+                                        ft.Icons.SHIELD_OUTLINED,
+                                        size=15,
+                                        color=GOB_GREEN,
+                                    ),
+                                    ft.Text(
+                                        "Preparando componentes locales y la interfaz institucional.",
+                                        size=8,
+                                        color=ft.Colors.ON_SURFACE_VARIANT,
+                                    ),
+                                ],
+                                spacing=6,
+                            ),
+                        ],
+                        spacing=10,
+                        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=46, vertical=28),
+                    expand=True,
                 ),
-                progress,
-                status,
             ],
-            spacing=10,
-            tight=True,
-        ),
+            spacing=0,
+            expand=True,
+        )
     )
-    page.show_dialog(dialog)
-    page.update()
-    return dialog, progress, status
+    return progress, status, detail
 
 
 def _update_startup_progress(
     page: ft.Page,
     progress: ft.ProgressBar,
     status: ft.Text,
+    detail: ft.Text,
     *,
     value: float,
     message: str,
+    detail_message: str,
 ) -> None:
     progress.value = value
     status.value = message
+    detail.value = detail_message
+    page.window.progress_bar = value
     page.update()
 
 
-def _close_native_startup_dialog(page: ft.Page) -> None:
-    try:
-        page.pop_dialog()
-        page.update()
-    except Exception:
-        pass
+def _prepare_main_window(page: ft.Page) -> None:
+    """Restaura capacidades normales antes de entregar la página a main_flet."""
+    page.window.resizable = True
+    page.window.maximizable = True
+    page.window.always_on_top = False
+    page.window.progress_bar = None
+    page.window.max_width = None
+    page.window.max_height = None
+    page.window.bgcolor = None
+    page.bgcolor = None
+
+
+async def _show_startup_error(page: ft.Page, ex: Exception) -> None:
+    """Deja un error legible si el arranque falla en un ejecutable sin consola."""
+    page.clean()
+    _configure_startup_window(page)
+    page.window.always_on_top = False
+    page.window.progress_bar = None
+    page.window.prevent_close = False
+    page.window.on_event = None
+
+    async def close_error(_):
+        await page.window.close()
+
+    page.add(
+        ft.Column(
+            [
+                ft.Container(height=6, bgcolor=DANGER),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            _startup_logo(),
+                            ft.Icon(ft.Icons.ERROR_OUTLINE, size=34, color=DANGER),
+                            ft.Text(
+                                "No fue posible iniciar la aplicación",
+                                size=18,
+                                weight=ft.FontWeight.BOLD,
+                                color=DANGER,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                            ft.Text(
+                                "La interfaz no terminó de cargarse. "
+                                "Cierra la aplicación y vuelve a intentarlo.",
+                                size=10,
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                            ft.Container(
+                                content=ft.Text(
+                                    f"{type(ex).__name__}: {ex}",
+                                    size=9,
+                                    selectable=True,
+                                    color=ft.Colors.ON_SURFACE,
+                                ),
+                                padding=12,
+                                bgcolor="#EFE9E1",
+                                border_radius=8,
+                            ),
+                            ft.OutlinedButton(
+                                content="Cerrar aplicación",
+                                icon=ft.Icons.CLOSE,
+                                on_click=close_error,
+                            ),
+                        ],
+                        spacing=10,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=46, vertical=24),
+                    expand=True,
+                ),
+            ],
+            spacing=0,
+            expand=True,
+        )
+    )
+    await page.window.center()
+    page.window.visible = True
+    page.update()
 
 
 async def _desktop_main(page: ft.Page) -> None:
-    """Carga la UI sin bloquear el primer pintado del modal de arranque."""
-    _, progress, status = _show_native_startup_dialog(page)
+    """Muestra primero el splash y carga la UI pesada sin bloquear su pintado."""
+    _configure_startup_window(page)
+    progress, status, detail = _build_startup_surface(page)
 
-    # Ceder el control al loop de Flet garantiza que el diálogo alcance a
-    # pintarse antes de iniciar imports pesados.
-    await asyncio.sleep(0.08)
+    # FLET_APP_HIDDEN evita el flash blanco del visor. La ventana se posiciona,
+    # recibe contenido y sólo entonces se hace visible.
+    await page.window.center()
+    page.window.visible = True
+    page.window.focused = True
+    page.update()
+    await asyncio.sleep(0.10)
 
     try:
         _update_startup_progress(
             page,
             progress,
             status,
-            value=0.32,
-            message="Cargando componentes de la aplicación...",
+            detail,
+            value=0.26,
+            message="Inicializando aplicación…",
+            detail_message="Comprobando recursos de escritorio.",
         )
 
-        # El import de main_flet arrastra la mayor parte del grafo de la app.
-        # Ejecutarlo fuera del hilo del loop mantiene visible/animado el modal.
+        _update_startup_progress(
+            page,
+            progress,
+            status,
+            detail,
+            value=0.42,
+            message="Cargando motor de extracción…",
+            detail_message="Preparando lectores, validadores y exportadores.",
+        )
+
+        # main_flet importa el grafo funcional completo. Ejecutarlo fuera del
+        # hilo del loop mantiene animada y responsiva la ventana de arranque.
         ui = await asyncio.to_thread(importlib.import_module, "main_flet")
 
         _update_startup_progress(
             page,
             progress,
             status,
-            value=0.72,
-            message="Preparando recursos y ventana principal...",
+            detail,
+            value=0.82,
+            message="Preparando interfaz principal…",
+            detail_message="Construyendo el espacio de trabajo.",
         )
         await asyncio.sleep(0)
 
         ui.PROJECT_ROOT = _desktop_resource_root()
         ui.LOGO_PATH = ui.PROJECT_ROOT / "assets" / "logo_gobierno_mexico.png"
-        ui.main(page)
 
         _update_startup_progress(
             page,
             progress,
             status,
-            value=1.0,
-            message="Aplicación lista.",
+            detail,
+            value=0.94,
+            message="Finalizando inicio…",
+            detail_message="La aplicación está casi lista.",
         )
-        await asyncio.sleep(0.05)
-    finally:
-        _close_native_startup_dialog(page)
+
+        # No se envía un frame vacío: el siguiente update sustituye el splash
+        # por la UI principal en la misma transición.
+        page.controls.clear()
+        _prepare_main_window(page)
+        ui.main(page)
+    except Exception as ex:
+        await _show_startup_error(page, ex)
 
 
 def _run_packaged_paddlex_self_test() -> bool:
@@ -204,4 +414,4 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if _run_packaged_paddleocr_runtime_self_test():
         raise SystemExit(0)
-    ft.run(_desktop_main)
+    ft.run(_desktop_main, view=ft.AppView.FLET_APP_HIDDEN)
