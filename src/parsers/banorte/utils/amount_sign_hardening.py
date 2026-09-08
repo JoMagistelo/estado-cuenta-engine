@@ -15,15 +15,18 @@ from models.movimiento import Movimiento
 # inicio (``-53.00``). Esta utilidad sólo normaliza el formato bancario de signo
 # final sobre una COPIA de las palabras de movimientos, sin alterar los words
 # originales usados por datos de cuenta, resumen u otros productos.
+#
+# Se exige una parte decimal para no confundir identificadores/conceptos que
+# casualmente terminen en guion (por ejemplo ``123-``) con importes monetarios.
 _TRAILING_NEGATIVE_AMOUNT_PATTERN = re.compile(
     r"""
     ^
     (?P<body>
         \$?
         (?:
-            (?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?
+            (?:\d{1,3}(?:,\d{3})*|\d+)\.\d{1,2}
             |
-            \d+(?:,\d{1,2})
+            \d+,\d{1,2}
         )
     )
     -
