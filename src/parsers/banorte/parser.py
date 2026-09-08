@@ -8,6 +8,10 @@ from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
+from .utils.amount_sign_hardening import (
+    ensure_signed_amount_operation_types,
+    normalize_trailing_negative_amount_words,
+)
 from .utils.movement_date_hardening import (
     normalize_ambiguous_movement_date_words,
 )
@@ -81,17 +85,32 @@ def parse_banorte(document: DocumentData) -> EstadoCuenta:
     #
     #     22-JUN-2650114599TRANSBPI07617702
     #
-    # Se normaliza únicamente una COPIA de esas palabras ambiguas antes del
-    # pipeline de movimientos. El resto de extractores conserva exactamente
-    # ``spatial_words`` para no modificar el comportamiento ya validado.
+    # También puede imprimir importes negativos con el signo al final:
+    #
+    #     53.00-
+    #
+    # Ambas normalizaciones se aplican únicamente a una COPIA de las palabras
+    # destinadas al extractor de movimientos. El resto de extractores conserva
+    # exactamente ``spatial_words`` para no modificar comportamiento validado.
     #
 
     movement_words = normalize_ambiguous_movement_date_words(
         spatial_words
     )
 
+    movement_words = normalize_trailing_negative_amount_words(
+        movement_words
+    )
+
     movimientos = extract_movimientos_words(
         movement_words
+    )
+
+    # El extractor digital histórico determina CARGO/ABONO con importes > 0.
+    # Para el caso nuevo de un importe negativo válido conservamos la columna
+    # como fuente de verdad y completamos el tipo sin alterar tipos ya resueltos.
+    movimientos = ensure_signed_amount_operation_types(
+        movimientos
     )
 
     # ============================================================
