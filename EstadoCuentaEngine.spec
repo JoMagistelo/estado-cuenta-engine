@@ -17,6 +17,8 @@ BUILD_DIR = PROJECT_ROOT / "build"
 ICON_PATH = BUILD_DIR / "extractor_movimientos.ico"
 VERSION_INFO_PATH = BUILD_DIR / "windows_version_info.txt"
 PADDLEOCR_BUNDLE_ENV = "PADDLEOCR_BUNDLE_ROOT"
+FLET_DESKTOP_BUNDLE_ENV = "FLET_DESKTOP_BUNDLE_ARCHIVE"
+FLET_DESKTOP_ARTIFACT = "flet-windows.zip"
 PADDLEOCR_MODEL_NAMES = (
     "PP-OCRv5_mobile_det",
     "latin_PP-OCRv5_mobile_rec",
@@ -149,6 +151,29 @@ def _paddlex_ocr_metadata():
     return metadata_datas
 
 
+def _bundled_flet_client_datas():
+    """Incluye el cliente Flet oficial para que el portable no descargue al iniciar."""
+    configured = os.getenv(FLET_DESKTOP_BUNDLE_ENV, "").strip()
+    if not configured:
+        return []
+
+    archive = Path(configured).expanduser().resolve()
+    if not archive.is_file():
+        raise RuntimeError(
+            f"{FLET_DESKTOP_BUNDLE_ENV} no apunta a un archivo válido: {archive}"
+        )
+    if archive.name.lower() != FLET_DESKTOP_ARTIFACT:
+        raise RuntimeError(
+            "El bundle Flet de Windows debe llamarse "
+            f"{FLET_DESKTOP_ARTIFACT}: {archive}"
+        )
+
+    # flet_desktop.ensure_client_cached() busca exactamente este archivo dentro
+    # de flet_desktop/app cuando corre congelado con PyInstaller. Si existe, lo
+    # extrae localmente y nunca entra al fallback de descarga por Internet.
+    return [(str(archive), "flet_desktop/app")]
+
+
 def _bundled_paddle_model_datas():
     """Incluye modelos verificados sólo cuando el build portable los solicita."""
     configured = os.getenv(PADDLEOCR_BUNDLE_ENV, "").strip()
@@ -214,6 +239,7 @@ for package in ("paddle", "paddleocr", "paddlex"):
 # runtime. ``collect_all`` no garantiza que esos ``.dist-info`` queden dentro
 # del one-file, por lo que se copian explícitamente.
 extra_datas.extend(_paddlex_ocr_metadata())
+portable_flet_datas = _bundled_flet_client_datas()
 portable_paddle_datas = _bundled_paddle_model_datas()
 
 
@@ -234,6 +260,7 @@ a = Analysis(
             str(app_icon),
             "assets",
         ),
+        *portable_flet_datas,
         *portable_paddle_datas,
         *extra_datas,
     ],
