@@ -120,8 +120,15 @@ def find_footer_start(
                 text in FOOTER_START_WORDS
                 and x0 < 50
             ):
-
-                footer_pages[page] = top
+                # En OCR las palabras de un mismo renglón pueden tener
+                # ``top`` ligeramente distinto. Cortar desde el ``top`` de la
+                # palabra ancla dejaba fragmentos de la leyenda dentro del
+                # último concepto. Se toma el inicio real de toda la línea.
+                footer_pages[page] = min(
+                    float(candidate.get("top", top))
+                    for candidate in candidates
+                    if abs(float(candidate.get("top", top)) - top) <= 3.0
+                )
                 break
 
 

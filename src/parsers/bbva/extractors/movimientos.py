@@ -39,6 +39,45 @@ COLS_PREMIUM = {
 }
 
 
+# Tesseract y PaddleOCR pueden colocar la fecha y los importes de un mismo
+# movimiento en renglones distintos aunque visualmente estén alineados. En las
+# muestras reales la separación máxima observada es cercana a 10 puntos.
+OCR_AMOUNT_ROW_TOLERANCE = 12.0
+
+BBVA_MONTHS = {
+    "ENE",
+    "FEB",
+    "MAR",
+    "ABR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AGO",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DIC",
+}
+
+BBVA_DATE_PATTERN = re.compile(
+    r"(?<![A-Z0-9])([0-3O][0-9O])\s*/\s*([A-Z]{3})(?![A-Z])",
+    re.IGNORECASE,
+)
+
+BBVA_AMOUNT_PATTERN = re.compile(
+    r"(?<!\d)([+-]?)((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})([-−]?)(?!\d)"
+)
+
+MONETARY_COLUMN_NAMES = (
+    "CARGO",
+    "ABONO",
+    "SALDO_OPERACION",
+    "SALDO_LIQUIDACION",
+)
+
+ACCOUNT_HEADER_VALUE_PATTERN = re.compile(r"^[A-Z]?\d{7,12}$", re.IGNORECASE)
+
+
 def get_column_config(
     words: List[Dict[str, Any]]
 ) -> Dict[str, tuple[float, float]]:
@@ -62,14 +101,16 @@ def get_column_config(
 
         x0 = word.get("x0", 0)
 
-        # Layout Premium: "REFERENCIA" tiene x0 ≈ 218.9
-        # Usamos un rango para dar tolerancia.
-        if 215 <= x0 <= 225:
+        # Layout Premium: "REFERENCIA" tiene x0 ≈ 218.9. El OCR puede
+        # desplazar varios puntos el inicio de una palabra, por lo que aquí se
+        # usa una banda más amplia sin invadir el rango del layout normal.
+        if 195 <= x0 < 290:
             return COLS_PREMIUM
 
-        # Layout Normal: "REFERENCIA" tiene x0 ≈ 321.1
-        # Usamos un rango para dar tolerancia.
-        if 318 <= x0 <= 325:
+        # Layout Normal: "REFERENCIA" tiene x0 ≈ 321.1 (326-329 en las
+        # muestras OCR). La etiqueta del encabezado viene en mayúsculas, por
+        # lo que no se confunde con las referencias de cada movimiento.
+        if 290 <= x0 <= 350:
             return COLS_NORMAL
 
     # Si no se encuentra una coincidencia clara, se asume el layout normal
@@ -204,11 +245,51 @@ def column_text(
 
 
 
+def canonical_amount_text(value: str) -> str | None:
+    """Devuelve un importe OCR en una forma que ``float`` pueda interpretar.
+
+    La corrección se limita a texto que contiene una estructura monetaria con
+    exactamente dos decimales. De este modo, referencias, cuentas y otros
+    identificadores numéricos no se convierten accidentalmente en importes.
+    """
+
+    if not value:
+        return None
+
+    normalized = (
+        value
+        .replace("O", "0")
+        .replace("o", "0")
+        .replace(" ", "")
+        .replace("\u2212", "-")
+        .strip()
+    )
+
+    match = BBVA_AMOUNT_PATTERN.search(normalized)
+
+    if not match:
+        return None
+
+    leading_sign, number, trailing_sign = match.groups()
+
+    if leading_sign == "-" or trailing_sign in {"-", "−"}:
+        return f"-{number}"
+
+    if leading_sign == "+":
+        return f"+{number}"
+
+    return number
+
+
 def parse_amount(value:str)->float:
 
     if not value:
         return 0.0
 
+    canonical = canonical_amount_text(value)
+
+    if canonical is not None:
+        value = canonical
 
     value = (
         value
@@ -220,9 +301,34 @@ def parse_amount(value:str)->float:
     try:
         return float(value)
 
-    except:
+    except (TypeError, ValueError):
 
         return 0.0
+
+
+def normalize_bbva_date(value: str) -> str | None:
+    """Normaliza una fecha corta BBVA y elimina ruido puntual del OCR."""
+
+    if not value:
+        return None
+
+    match = BBVA_DATE_PATTERN.search(value.strip().upper())
+
+    if not match:
+        return None
+
+    day_text, month = match.groups()
+    day_text = day_text.replace("O", "0")
+
+    try:
+        day = int(day_text)
+    except ValueError:
+        return None
+
+    if not 1 <= day <= 31 or month not in BBVA_MONTHS:
+        return None
+
+    return f"{day:02d}/{month}"
 
 
 
@@ -234,10 +340,188 @@ def is_start_movement(line, cols):
     )
 
 
-    return (
-        len(fecha)==6
-        and "/" in fecha
-    )
+    return normalize_bbva_date(fecha) is not None
+
+
+def line_page(line: List[Dict[str, Any]]) -> int:
+    """Obtiene la página de una línea espacial."""
+
+    if not line:
+        return 1
+
+    return int(line[0].get("page", 1))
+
+
+def line_top(line: List[Dict[str, Any]]) -> float:
+    """Obtiene una coordenada vertical estable para una línea espacial."""
+
+    if not line:
+        return 0.0
+
+    return sum(float(word.get("top", 0)) for word in line) / len(line)
+
+
+def page_has_account_header(
+    lines: List[List[Dict[str, Any]]],
+    page: int,
+) -> bool:
+    """Reconoce páginas BBVA por el valor de cuenta/cliente del encabezado."""
+
+    for line in lines:
+        if line_page(line) != page or line_top(line) > 180:
+            continue
+
+        for word in line:
+            if float(word.get("x0", 0)) < 500:
+                continue
+
+            text = re.sub(r"[\s-]+", "", word.get("text", "").strip().upper())
+
+            if ACCOUNT_HEADER_VALUE_PATTERN.fullmatch(text):
+                return True
+
+    return False
+
+
+def attach_split_monetary_rows(
+    lines: List[List[Dict[str, Any]]],
+    cols: Dict[str, tuple[float, float]],
+) -> tuple[List[List[Dict[str, Any]]], bool]:
+    """Une importes OCR separados verticalmente con su fecha de movimiento.
+
+    El PDF digital suele entregar fecha e importes en una misma línea. Los
+    motores OCR, en cambio, pueden crear una línea exclusiva para importes unos
+    puntos antes o después de la fecha. Cada importe se asigna a la fecha más
+    cercana de su página y sólo si conserva un patrón monetario estricto.
+
+    Se devuelven líneas nuevas únicamente cuando es necesario; las palabras de
+    entrada nunca se mutan.
+    """
+
+    starts = [
+        {
+            "index": index,
+            "page": line_page(line),
+            "top": line_top(line),
+        }
+        for index, line in enumerate(lines)
+        if is_start_movement(line, cols)
+    ]
+
+    if not starts:
+        return lines, False
+
+    assignments: Dict[tuple[int, str], tuple[float, str, int]] = {}
+    split_row_found = False
+
+    for source_index, line in enumerate(lines):
+        page = line_page(line)
+        source_top = line_top(line)
+
+        for column_name in MONETARY_COLUMN_NAMES:
+            raw_amount = column_text(line, cols[column_name])
+            canonical = canonical_amount_text(raw_amount)
+
+            if canonical is None:
+                continue
+
+            candidates = [
+                start
+                for start in starts
+                if start["page"] == page
+                and abs(start["top"] - source_top) <= OCR_AMOUNT_ROW_TOLERANCE
+            ]
+
+            if not candidates:
+                continue
+
+            closest = min(
+                candidates,
+                key=lambda start: abs(start["top"] - source_top),
+            )
+            distance = abs(closest["top"] - source_top)
+            key = (int(closest["index"]), column_name)
+
+            previous = assignments.get(key)
+            if previous is None or distance < previous[0]:
+                assignments[key] = (distance, canonical, source_index)
+
+            if source_index != closest["index"]:
+                split_row_found = True
+
+    if not assignments:
+        return lines, False
+
+    augmented = [list(line) for line in lines]
+
+    for (start_index, column_name), (_, canonical, _) in assignments.items():
+        first_line_value = canonical_amount_text(
+            column_text(augmented[start_index], cols[column_name])
+        )
+
+        if first_line_value is not None:
+            continue
+
+        xmin, xmax = cols[column_name]
+        start = next(
+            item for item in starts if item["index"] == start_index
+        )
+        top = float(start["top"])
+
+        augmented[start_index].append(
+            {
+                "text": canonical,
+                "x0": xmin,
+                "x1": xmax,
+                "top": top,
+                "bottom": top,
+                "page": int(start["page"]),
+            }
+        )
+        augmented[start_index].sort(key=lambda word: word.get("x0", 0))
+
+    # Cuando el importe quedó arriba de la fecha, PaddleOCR puede haber dejado
+    # también ahí la primera línea del concepto. Sólo se mueve si la línea de
+    # fecha no contiene ningún concepto; esto evita apropiarse de la última
+    # línea descriptiva del movimiento anterior en páginas con ligera torsión.
+    for start in starts:
+        start_index = int(start["index"])
+
+        if column_text(augmented[start_index], cols["CONCEPTO"]):
+            continue
+
+        source_indices = {
+            source_index
+            for (assigned_start, _), (_, _, source_index) in assignments.items()
+            if assigned_start == start_index and source_index < start_index
+        }
+
+        for source_index in sorted(
+            source_indices,
+            key=lambda index: abs(line_top(lines[index]) - float(start["top"])),
+        ):
+            concept_words = [
+                word
+                for word in augmented[source_index]
+                if cols["CONCEPTO"][0]
+                <= (word.get("x0", 0) + word.get("x1", 0)) / 2
+                <= cols["CONCEPTO"][1]
+            ]
+
+            if not concept_words:
+                continue
+
+            concept_word_ids = {id(word) for word in concept_words}
+            augmented[source_index] = [
+                word
+                for word in augmented[source_index]
+                if id(word) not in concept_word_ids
+            ]
+            augmented[start_index].extend(concept_words)
+            augmented[start_index].sort(key=lambda word: word.get("x0", 0))
+            break
+
+    return augmented, split_row_found
 
 
 
@@ -248,19 +532,23 @@ def is_start_movement(line, cols):
 
 def extract_fecha_operacion(line, cols):
 
-    return column_text(
+    raw_value = column_text(
         line,
         cols["FECHA_OPERACION"]
     )
+
+    return normalize_bbva_date(raw_value) or raw_value
 
 
 
 def extract_fecha_liquidacion(line, cols):
 
-    return column_text(
+    raw_value = column_text(
         line,
         cols["FECHA_LIQUIDACION"]
     )
+
+    return normalize_bbva_date(raw_value) or raw_value
 
 
 
@@ -957,6 +1245,35 @@ def extract_movimientos_words(
     lines = group_words_into_lines(
         words
     )
+
+    # En OCR los importes pueden quedar en una línea distinta a la fecha.
+    # Se reconstruye la fila por proximidad vertical y columna monetaria.
+    lines, has_split_monetary_rows = attach_split_monetary_rows(
+        lines,
+        cols,
+    )
+
+    # Algunas emisiones BBVA intercalan una hoja publicitaria entre páginas de
+    # movimientos. Sólo en el caso OCR confirmado por filas monetarias partidas
+    # se omiten páginas que no contienen ninguna fecha de movimiento. Así se
+    # evita contaminar conceptos sin cambiar el flujo digital histórico.
+    if has_split_monetary_rows:
+        movement_pages = {
+            line_page(line)
+            for line in lines
+            if is_start_movement(line, cols)
+        }
+        candidate_pages = {line_page(line) for line in lines}
+        statement_pages = movement_pages | {
+            page
+            for page in candidate_pages
+            if page_has_account_header(lines, page)
+        }
+        lines = [
+            line
+            for line in lines
+            if line_page(line) in statement_pages
+        ]
 
 
     movimientos=[]
