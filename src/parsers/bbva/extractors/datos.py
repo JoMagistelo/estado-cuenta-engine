@@ -1,3 +1,4 @@
+import re
 from typing import List, Dict, Any, Optional
 
 from models.datos_cuenta import DatosCuenta
@@ -168,10 +169,10 @@ BOX_RFC = (
 # ------------------------------------------------------------
 # Coordenadas ajustadas según estado_bbva2.pdf
 BOX_CLABE = (
-    506.0,  # x0
-    596.0,  # x1
+    500.0,  # x0
+    602.0,  # x1
     123.0,  # top
-    134.0,  # bottom
+    143.0,  # bottom
 )
 
 
@@ -191,6 +192,16 @@ BOX_NOMBRE_CLIENTE = (
     101.0,  # top
     112.0,  # bottom
 )
+
+
+OCR_LINE_TOLERANCE = 3.0
+
+FULL_DATE_PATTERN = re.compile(
+    r"^(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])/\d{4}$"
+)
+ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{10}$")
+CLIENT_NUMBER_PATTERN = re.compile(r"^[A-Z]\d{7}$")
+RFC_PATTERN = re.compile(r"^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$")
 
 
 # ============================================================
@@ -258,15 +269,175 @@ def words_in_box(
         if word_inside_box(word, box)
     ]
 
-    result.sort(
+    return words_in_reading_order(result)
+
+
+def group_words_into_lines(
+    words: List[Dict[str, Any]],
+    tolerance: float = OCR_LINE_TOLERANCE,
+) -> List[List[Dict[str, Any]]]:
+    """Agrupa words conservando el orden visual de lectura.
+
+    En texto digital todas las palabras de una línea suelen compartir ``top``.
+    OCR introduce pequeñas variaciones verticales; ordenar únicamente por
+    ``top`` invierte textos como "Libretón Básico Cuenta Digital" y también los
+    fragmentos de la CLABE.
+    """
+
+    ordered = sorted(
+        words,
         key=lambda word: (
             word.get("page", 1),
             word.get("top", 0),
             word.get("x0", 0),
-        )
+        ),
+    )
+    lines: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    current_page: int | None = None
+    current_top: float | None = None
+
+    for word in ordered:
+        page = int(word.get("page", 1))
+        top = float(word.get("top", 0))
+
+        if (
+            current_top is None
+            or (page == current_page and abs(top - current_top) <= tolerance)
+        ):
+            current.append(word)
+            if current_top is None:
+                current_top = top
+                current_page = page
+            continue
+
+        current.sort(key=lambda item: item.get("x0", 0))
+        lines.append(current)
+        current = [word]
+        current_top = top
+        current_page = page
+
+    if current:
+        current.sort(key=lambda item: item.get("x0", 0))
+        lines.append(current)
+
+    return lines
+
+
+def words_in_reading_order(
+    words: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Aplana las palabras ordenadas por línea y luego de izquierda a derecha."""
+
+    return [
+        word
+        for line in group_words_into_lines(words)
+        for word in line
+    ]
+
+
+def normalized_compact_text(value: str) -> str:
+    """Normaliza separadores sin corregir de forma agresiva texto libre."""
+
+    return re.sub(r"[\s-]+", "", value.strip().upper())
+
+
+def find_header_token(
+    words: List[Dict[str, Any]],
+    pattern: re.Pattern[str],
+    *,
+    first_page_only: bool = False,
+) -> Optional[str]:
+    """Busca un identificador en la zona derecha de encabezados BBVA.
+
+    Cuenta y cliente se repiten en las páginas de movimientos; esa repetición
+    permite recuperar un valor omitido por OCR en la primera página.
+    """
+
+    candidates = sorted(
+        words,
+        key=lambda word: (
+            word.get("page", 1),
+            word.get("top", 0),
+            word.get("x0", 0),
+        ),
     )
 
-    return result
+    for word in candidates:
+        page = int(word.get("page", 1))
+        top = float(word.get("top", 0))
+        x0 = float(word.get("x0", 0))
+
+        if first_page_only and page != 1:
+            continue
+
+        if x0 < 450 or top > 160:
+            continue
+
+        value = normalized_compact_text(word.get("text", ""))
+
+        if pattern.fullmatch(value):
+            return value
+
+    return None
+
+
+def find_header_dates(
+    words: List[Dict[str, Any]],
+) -> List[str]:
+    """Obtiene las fechas completas del periodo y corte en orden visual."""
+
+    dates: List[str] = []
+
+    for word in words_in_reading_order(
+        [
+            word
+            for word in words
+            if word.get("page", 1) == 1
+            and float(word.get("x0", 0)) >= 430
+            and float(word.get("top", 0)) <= 100
+        ]
+    ):
+        value = normalized_compact_text(word.get("text", "")).replace("O", "0")
+
+        if FULL_DATE_PATTERN.fullmatch(value):
+            dates.append(value)
+
+    return dates
+
+
+def find_customer_name(
+    words: List[Dict[str, Any]],
+) -> Optional[str]:
+    """Recupera la primera línea del bloque postal, donde BBVA imprime al titular."""
+
+    candidates = [
+        word
+        for word in words
+        if word.get("page", 1) == 1
+        and 20 <= (word.get("x0", 0) + word.get("x1", 0)) / 2 <= 300
+        and 90 <= float(word.get("top", 0)) <= 140
+    ]
+
+    for line in group_words_into_lines(candidates):
+        values = [word.get("text", "").strip() for word in line]
+        values = [value for value in values if value]
+
+        if line and min(float(word.get("top", 0)) for word in line) > 121.5:
+            continue
+
+        if len(values) < 2 or any(any(char.isdigit() for char in value) for value in values):
+            continue
+
+        if values[0].upper().rstrip(".") in {"AND", "AV", "CALLE", "COL"}:
+            continue
+
+        text = " ".join(values).strip()
+
+        if text:
+            return text
+
+    return None
 
 
 def text_from_box(
@@ -368,10 +539,18 @@ def extract_periodo_inicio(
         05/05/2026
     """
 
-    return text_from_box(
+    value = text_from_box(
         words,
         BOX_PERIODO_INICIO,
     )
+
+    normalized = normalized_compact_text(value or "").replace("O", "0")
+
+    if FULL_DATE_PATTERN.fullmatch(normalized):
+        return normalized
+
+    dates = find_header_dates(words)
+    return dates[0] if dates else value
 
 
 def extract_periodo_fin(
@@ -385,10 +564,18 @@ def extract_periodo_fin(
         04/06/2026
     """
 
-    return text_from_box(
+    value = text_from_box(
         words,
         BOX_PERIODO_FIN,
     )
+
+    normalized = normalized_compact_text(value or "").replace("O", "0")
+
+    if FULL_DATE_PATTERN.fullmatch(normalized):
+        return normalized
+
+    dates = find_header_dates(words)
+    return dates[1] if len(dates) >= 2 else value
 
 
 def extract_fecha_corte(
@@ -403,10 +590,18 @@ def extract_fecha_corte(
         04/06/2026
     """
 
-    return text_from_box(
+    value = text_from_box(
         words,
         BOX_FECHA_CORTE,
     )
+
+    normalized = normalized_compact_text(value or "").replace("O", "0")
+
+    if FULL_DATE_PATTERN.fullmatch(normalized):
+        return normalized
+
+    dates = find_header_dates(words)
+    return dates[2] if len(dates) >= 3 else value
 
 
 def extract_numero_cuenta(
@@ -421,9 +616,16 @@ def extract_numero_cuenta(
         1546750943
     """
 
-    return text_from_box(
+    value = normalized_compact_text(
+        text_from_box(words, BOX_NUMERO_CUENTA) or ""
+    )
+
+    if ACCOUNT_NUMBER_PATTERN.fullmatch(value):
+        return value
+
+    return find_header_token(
         words,
-        BOX_NUMERO_CUENTA,
+        ACCOUNT_NUMBER_PATTERN,
     )
 
 
@@ -439,9 +641,16 @@ def extract_numero_cliente(
         A0289423
     """
 
-    return text_from_box(
+    value = normalized_compact_text(
+        text_from_box(words, BOX_NUMERO_CLIENTE) or ""
+    )
+
+    if CLIENT_NUMBER_PATTERN.fullmatch(value):
+        return value
+
+    return find_header_token(
         words,
-        BOX_NUMERO_CLIENTE,
+        CLIENT_NUMBER_PATTERN,
     )
 
 
@@ -457,15 +666,19 @@ def extract_rfc(
         FASS770615SN6
     """
 
-    value = text_from_box(
+    value = normalized_compact_text(text_from_box(
         words,
         BOX_RFC,
+    ) or "")
+
+    if RFC_PATTERN.fullmatch(value):
+        return value
+
+    return find_header_token(
+        words,
+        RFC_PATTERN,
+        first_page_only=True,
     )
-
-    if value is None:
-        return None
-
-    return value.replace(" ", "")
 
 
 def extract_clabe(
@@ -513,10 +726,20 @@ def extract_nombre_cliente(
         SELVA FRANCO SANCHEZ
     """
 
-    return text_from_box(
+    direct = text_from_box(
         words,
         BOX_NOMBRE_CLIENTE,
     )
+
+    fallback = find_customer_name(words)
+
+    if not direct:
+        return fallback
+
+    if fallback and len(fallback.split()) > len(direct.split()):
+        return fallback
+
+    return direct
 
 
 # ============================================================
