@@ -25,11 +25,11 @@ def test_selected_engine_is_the_only_ocr_used_by_standard_processing(monkeypatch
     estado = SimpleNamespace(movimientos=[], resumen_financiero=None)
     calls: list[str] = []
 
-    def _read(path, engine, start_page=0):
+    def _read(path, engine, start_page=0, cancel_event=None, *, artifact_dir=None):
         calls.append(engine)
         return document
 
-    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_engine", _read)
+    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_for_parser", _read)
     monkeypatch.setattr(pipeline, "identify_bank_key", lambda **kwargs: "hsbc")
     monkeypatch.setattr(
         pipeline,
@@ -64,11 +64,11 @@ def test_selected_engine_is_the_only_ocr_used_by_standard_processing(monkeypatch
 def test_selected_engine_startup_failure_is_not_recovered_automatically(monkeypatch):
     calls: list[str] = []
 
-    def _read(path, engine, start_page=0):
+    def _read(path, engine, start_page=0, cancel_event=None, *, artifact_dir=None):
         calls.append(engine)
         raise RuntimeError(f"{engine} unavailable")
 
-    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_engine", _read)
+    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_for_parser", _read)
 
     prepared = pipeline.PreparedStatement(
         file_name="statement.pdf",
