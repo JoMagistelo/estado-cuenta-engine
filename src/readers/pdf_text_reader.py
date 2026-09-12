@@ -4,206 +4,103 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pdfplumber
-
-
-# ============================================================
-# RESULTADO DE LA ETAPA DE TEXTO
-# ============================================================
+from pdfplumber.utils import extract_text
 
 
 @dataclass(slots=True)
 class PDFTextStageData:
-    """
-    Resultado interno de PDFTextReader.read_stage().
-
-    raw_text:
-        Texto extraído de las primeras MAX_PAGES páginas
-        a partir de start_page.
-
-    initial_empty_pages:
-        Número de páginas iniciales sin texto extraíble.
-
-    has_extractable_text:
-        True si existe al menos una página con texto
-        extraíble desde start_page.
-    """
+    """Resultado interno de ``PDFTextReader.read_stage()``."""
 
     raw_text: str
     initial_empty_pages: int
     has_extractable_text: bool
 
 
-# ============================================================
-# READER
-# ============================================================
-
-
 class PDFTextReader:
-    """
-    Extrae texto digital de un PDF.
+    """Extrae texto digital de un PDF.
 
-    MAX_PAGES determina cuántas páginas se conservan en
-    raw_text.
-
-    Adicionalmente read_stage() permite al pipeline conocer:
-
-        - cuántas páginas iniciales están vacías
-        - si existe texto extraíble en el PDF
-
-    sin ejecutar PDFWordReader.
+    La ruta de clasificación usa el texto completo de la página como siempre.
+    ``layer_tag`` existe exclusivamente para los artefactos OCR generados por el
+    engine: permite reconstruir ``raw_text`` sólo desde la capa OCR verificada y
+    evita mezclar texto previo, incompleto o defectuoso del PDF escaneado.
     """
 
     MAX_PAGES = 5
-
-    # ========================================================
-    # LECTURA ORIGINAL
-    # ========================================================
 
     @staticmethod
     def read(
         file_path: str | Path,
         start_page: int = 0,
+        *,
+        layer_tag: str | None = None,
     ) -> str:
-        """
-        Extrae texto de las primeras MAX_PAGES páginas,
-        comenzando desde start_page.
-
-        Conserva el comportamiento original.
-        """
-
         file_path = Path(file_path)
-
         pages: list[str] = []
 
         with pdfplumber.open(file_path) as pdf:
-
             selected_pages = pdf.pages[
-                start_page:
-                start_page + PDFTextReader.MAX_PAGES
+                start_page : start_page + PDFTextReader.MAX_PAGES
             ]
-
             for page in selected_pages:
-
-                text = page.extract_text()
-
+                if layer_tag is None:
+                    text = page.extract_text()
+                else:
+                    layer_chars = [
+                        char
+                        for char in page.chars
+                        if str(char.get("tag") or "") == layer_tag
+                    ]
+                    text = extract_text(layer_chars) if layer_chars else ""
                 if text:
                     pages.append(text)
 
         return "\n".join(pages)
-
-    # ========================================================
-    # LECTURA OPTIMIZADA
-    # ========================================================
 
     @staticmethod
     def read_stage(
         file_path: str | Path,
         start_page: int = 0,
     ) -> PDFTextStageData:
+        """Primera etapa optimizada de clasificación Digital/OCR.
+
+        Obtiene en una sola apertura el texto de las primeras ``MAX_PAGES``, el
+        número de páginas iniciales vacías y si existe texto extraíble. Esta ruta
+        deliberadamente no acepta ``layer_tag`` porque opera sobre el PDF de
+        entrada antes de que exista cualquier artefacto OCR.
         """
-        Primera etapa optimizada del pipeline.
-
-        Obtiene en una sola apertura y una sola pasada del PDF:
-
-            1. raw_text de las primeras MAX_PAGES páginas.
-            2. páginas iniciales vacías.
-            3. existencia de texto extraíble.
-
-        NO extrae palabras espaciales.
-        """
-
         file_path = Path(file_path)
-
         pages: list[str] = []
-
         initial_empty_pages = 0
         found_extractable_text = False
-
-        raw_text_end_page = (
-            start_page + PDFTextReader.MAX_PAGES
-        )
+        raw_text_end_page = start_page + PDFTextReader.MAX_PAGES
 
         with pdfplumber.open(file_path) as pdf:
-
             total_pages = len(pdf.pages)
-
-            # =================================================
-            # PDF SIN PÁGINAS DISPONIBLES DESDE start_page
-            # =================================================
-
             if start_page >= total_pages:
-
                 return PDFTextStageData(
                     raw_text="",
                     initial_empty_pages=0,
                     has_extractable_text=False,
                 )
 
-            # =================================================
-            # RECORRIDO ÚNICO
-            # =================================================
-            #
-            # Las primeras MAX_PAGES alimentan raw_text. Si ese
-            # tramo está vacío, el mismo recorrido continúa hacia
-            # delante hasta encontrar la primera página con texto
-            # o llegar al final. No es necesario volver a abrir ni
-            # volver a inspeccionar páginas ya procesadas.
-            # =================================================
-
-            for physical_index in range(
-                start_page,
-                total_pages,
-            ):
-
+            for physical_index in range(start_page, total_pages):
                 page = pdf.pages[physical_index]
-
                 text = page.extract_text()
-
-                has_text = bool(
-                    text and text.strip()
-                )
-
-                # ---------------------------------------------
-                # PÁGINAS INICIALES VACÍAS
-                # ---------------------------------------------
+                has_text = bool(text and text.strip())
 
                 if not found_extractable_text:
-
                     if has_text:
-
                         found_extractable_text = True
-
                     else:
-
                         initial_empty_pages += 1
 
-                # ---------------------------------------------
-                # RAW TEXT
-                #
-                # Exactamente las primeras MAX_PAGES páginas
-                # desde start_page.
-                # ---------------------------------------------
-
-                if physical_index < raw_text_end_page:
-
-                    if text:
-
-                        pages.append(text)
-
-                # ---------------------------------------------
-                # Una vez que:
-                #
-                #   - encontramos texto
-                #   - ya terminamos las primeras MAX_PAGES
-                #
-                # no necesitamos seguir recorriendo.
-                # ---------------------------------------------
+                if physical_index < raw_text_end_page and text:
+                    pages.append(text)
 
                 if (
                     found_extractable_text
                     and physical_index >= raw_text_end_page - 1
                 ):
-
                     break
 
         return PDFTextStageData(
