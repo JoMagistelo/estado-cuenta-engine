@@ -13,10 +13,9 @@ Estado Cuenta Engine procesa estados de cuenta bancarios y convierte su contenid
 El sistema:
 
 - procesa PDF digital y documentos que requieren OCR;
-- utiliza Tesseract de forma local como OCR primario;
-- dispone de PaddleOCR como segundo motor OCR local opcional cuando el resultado de Tesseract requiere revisión;
-- conserva y compara ambos candidatos OCR cuando PaddleOCR es ejecutado;
-- permite seleccionar en Flet y Streamlit qué candidato OCR revisar y utilizar para la exportación;
+- permite seleccionar Tesseract o PaddleOCR como motor OCR activo para un lote;
+- ejecuta exclusivamente el motor OCR seleccionado durante el procesamiento estándar;
+- no ejecuta automáticamente un segundo OCR por validaciones fallidas, ausencia de movimientos o error del motor seleccionado;
 - identifica institución/emisor;
 - aplica parsers especializados por banco/layout;
 - normaliza datos de cuenta, resumen y movimientos;
@@ -24,6 +23,8 @@ El sistema:
 - exporta resultados a Excel;
 - dispone de interfaces Flet y Streamlit;
 - puede integrarse posteriormente con SIEC mediante una capa API dedicada sin modificar el motor bancario.
+
+La infraestructura de comparación OCR se conserva como capacidad explícita para futuras acciones por archivo, pero no forma parte del flujo productivo automático.
 
 El motor no emite resoluciones administrativas ni decisiones sobre personas; produce información estructurada para el proceso institucional correspondiente.
 
@@ -41,36 +42,32 @@ ReaderManager
  │
  ├─► Digital: palabras espaciales ───────────────► parser / validación
  │
- └─► OCR: TesseractPDFReader
+ └─► OCR: motor seleccionado
+              │
+       ┌──────┴──────┐
+       │             │
+   Tesseract      PaddleOCR
+       │             │
+       └──────┬──────┘
               │
               ▼
-        Parser especializado
+      Parser especializado
               │
               ▼
-       Validadores existentes
+     Validadores existentes
               │
-      ┌───────┴──────────────┐
-      │                      │
- resultado suficiente   requiere revisión
-      │                      │
-      │              PaddleOCR local
-      │                      │
-      │              mismo parser/validator
-      │                      │
-      │              Tesseract + PaddleOCR
-      │                      │
-      │              comparación / selección
-      └──────────────┬───────┘
-                     ▼
-              Modelo EstadoCuenta
-                     │
-                     ▼
-              Mapeo / exportación
+              ▼
+        EstadoCuenta
+              │
+              ▼
+        Mapeo / exportación
 ```
 
-Tesseract continúa siendo el OCR primario. PaddleOCR está deshabilitado por defecto y se intenta únicamente cuando el resultado primario presenta señales objetivas de revisión, como ausencia de movimientos, validaciones fallidas o validaciones principales no disponibles.
+La configuración OCR es determinista: el motor seleccionado al iniciar el lote es el único motor que se ejecuta para cada documento escaneado de ese lote. Los PDFs digitales no participan en OCR.
 
-Cuando existen dos candidatos, el sistema genera una recomendación conservadora pero **no elimina ninguno de los resultados**. Flet y Streamlit permiten alternar Tesseract/PaddleOCR; el candidato seleccionado es el que alimenta la vista y la exportación Excel. Los documentos digitales no participan en esta comparación.
+Si el motor seleccionado falla al iniciar, el archivo se reporta con error; el sistema no cambia silenciosamente al motor alternativo. Si el parsing produce validaciones fallidas o no detecta movimientos, ese resultado se conserva sin iniciar un segundo OCR.
+
+La capacidad de ejecutar un motor secundario se mantiene separada del flujo estándar y queda reservada para una futura acción explícita por archivo. La decisión productiva completa está documentada en [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md).
 
 La lógica bancaria se mantiene separada de lectura, detección, validación, exportación e interfaces para facilitar pruebas y mantenimiento.
 
@@ -127,13 +124,13 @@ Instalar interfaz Flet:
 python -m pip install -e ".[desktop]"
 ```
 
-Instalar PaddleOCR para Streamlit cuando se autorice la revisión dual:
+Instalar PaddleOCR cuando vaya a utilizarse como motor OCR activo o para pruebas autorizadas de la ruta secundaria explícita:
 
 ```powershell
 python -m pip install -e ".[streamlit,paddleocr]"
 ```
 
-Instalar PaddleOCR para pruebas locales con Flet:
+Para Flet:
 
 ```powershell
 python -m pip install -e ".[desktop,paddleocr]"
@@ -180,6 +177,8 @@ La automatización de calidad valida:
 - hash SHA-256 del runtime Tesseract;
 - hash SHA-256 del ejecutable construido.
 
+La regresión OCR debe comprobar además que el procesamiento estándar ejecuta exclusivamente el motor seleccionado y que una falla de validación o arranque no inicia automáticamente el motor alternativo.
+
 Las pruebas con documentos reales son opt-in y deben ejecutarse únicamente en entornos autorizados. Los parsers se consideran lógica crítica y cualquier cambio funcional requiere regresión específica.
 
 ## 8. Protección de datos personales
@@ -192,8 +191,9 @@ Los estados de cuenta contienen información financiera y datos personales. Regl
 - no enviar documentos o resultados a servicios externos sin autorización institucional;
 - mantener temporales y salidas bajo control de acceso y retención definidos;
 - utilizar datos sintéticos o corpus autorizado para pruebas;
-- operar PaddleOCR mediante inferencia local con modelos previamente instalados cuando el segundo OCR esté habilitado;
-- mantener la comparación Tesseract/PaddleOCR en memoria durante la sesión, sin persistir automáticamente copias alternas del contenido OCR.
+- operar Tesseract y PaddleOCR mediante inferencia local;
+- mantener los modelos PaddleOCR previamente instalados y sin descargas automáticas en runtime;
+- no generar candidatos OCR secundarios salvo que una función explícita y autorizada los solicite.
 
 Consultar [`docs/04_seguridad_datos_personales.md`](docs/04_seguridad_datos_personales.md), [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md) y [`SECURITY.md`](SECURITY.md).
 
@@ -234,7 +234,7 @@ Cada versión candidata debe identificar:
 - vulnerabilidades conocidas;
 - componentes de terceros;
 - versión/procedencia/licencia de Tesseract;
-- cuando PaddleOCR esté habilitado: versiones de PaddleOCR/PaddlePaddle y procedencia/licencia/hash de los modelos locales;
+- cuando PaddleOCR forme parte de la instalación: versiones de PaddleOCR/PaddlePaddle y procedencia/licencia/hash de los modelos locales;
 - hash del artefacto entregado.
 
 El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](docs/09_verificacion_tecnica_version.md), [`docs/11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md) y [`docs/14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md).
@@ -255,7 +255,7 @@ El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](
 - [`11_gestion_vulnerabilidades_incidentes.md`](docs/11_gestion_vulnerabilidades_incidentes.md): vulnerabilidades e incidentes.
 - [`12_checklist_liberacion_produccion.md`](docs/12_checklist_liberacion_produccion.md): checklist de liberación.
 - [`13_control_cambios.md`](docs/13_control_cambios.md): criterios de control de cambios.
-- [`14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md): seguridad, modelos, comparación dual, UAT y operación de PaddleOCR.
+- [`14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md): política OCR de producción, trazabilidad, capacidad secundaria explícita y ruta de evolución arquitectónica.
 
 ## 12. Responsabilidades de entrega
 
