@@ -48,7 +48,7 @@ def test_secondary_engine_is_symmetric():
     assert secondary_ocr_engine("paddleocr") == "tesseract"
 
 
-def test_fallback_depends_only_on_primary_financial_validations():
+def test_fallback_policy_remains_available_for_explicit_review():
     assert primary_validations_pass(_primary_ok()) is True
     assert should_attempt_secondary_fallback(_primary_ok()) is False
     assert should_attempt_secondary_fallback(_primary_failed()) is True
@@ -81,7 +81,7 @@ def test_paddle_primary_does_not_run_tesseract_when_validations_pass(monkeypatch
     )
 
     def _must_not_run(*args, **kwargs):
-        raise AssertionError("Tesseract no debe ejecutarse si PaddleOCR validó bien")
+        raise AssertionError("Tesseract no debe ejecutarse en el procesamiento estándar")
 
     monkeypatch.setattr(statement_processor.ReaderManager, "read_ocr", _must_not_run)
 
@@ -94,6 +94,49 @@ def test_paddle_primary_does_not_run_tesseract_when_validations_pass(monkeypatch
     assert document is primary_document
     assert review is None
     assert primary_document.metadata["ocr_fallback_attempted"] is False
+    assert primary_document.metadata["ocr_secondary_engine"] is None
+
+
+def test_paddle_primary_does_not_run_tesseract_when_validation_fails_by_default(monkeypatch):
+    primary_estado = _estado("paddle")
+    primary_document = DocumentData(
+        raw_text="HSBC PADDLE",
+        normalized_text="",
+        spatial_words=[],
+        metadata={
+            "ocr": True,
+            "reader": "paddleocr",
+            "source_path": "statement.pdf",
+            "start_page": 0,
+        },
+    )
+
+    monkeypatch.setattr(
+        statement_processor,
+        "_process_once",
+        lambda document, bank_key: (primary_estado, document),
+    )
+    monkeypatch.setattr(
+        statement_processor,
+        "_validation_results",
+        lambda estado: _primary_failed(),
+    )
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("El motor secundario requiere una acción explícita")
+
+    monkeypatch.setattr(statement_processor.ReaderManager, "read_ocr", _must_not_run)
+
+    estado, document, review = statement_processor.process_single_statement_with_ocr_review(
+        primary_document,
+        "hsbc",
+    )
+
+    assert estado is primary_estado
+    assert document is primary_document
+    assert review is None
+    assert document.metadata["ocr_fallback_attempted"] is False
+    assert document.metadata["ocr_secondary_engine"] is None
 
 
 def test_tesseract_primary_does_not_run_paddle_when_validations_pass(monkeypatch):
@@ -122,7 +165,7 @@ def test_tesseract_primary_does_not_run_paddle_when_validations_pass(monkeypatch
     )
 
     def _must_not_run(*args, **kwargs):
-        raise AssertionError("PaddleOCR no debe ejecutarse si Tesseract validó bien")
+        raise AssertionError("PaddleOCR no debe ejecutarse en el procesamiento estándar")
 
     monkeypatch.setattr(
         statement_processor.ReaderManager,
@@ -139,9 +182,10 @@ def test_tesseract_primary_does_not_run_paddle_when_validations_pass(monkeypatch
     assert document is primary_document
     assert review is None
     assert primary_document.metadata["ocr_fallback_attempted"] is False
+    assert primary_document.metadata["ocr_secondary_engine"] is None
 
 
-def test_paddle_primary_runs_tesseract_only_after_validation_failure(monkeypatch):
+def test_explicit_secondary_review_can_run_tesseract_after_validation_failure(monkeypatch):
     primary_estado = _estado("paddle")
     secondary_estado = _estado("tesseract")
     primary_document = DocumentData(
@@ -187,6 +231,7 @@ def test_paddle_primary_runs_tesseract_only_after_validation_failure(monkeypatch
     estado, document, review = statement_processor.process_single_statement_with_ocr_review(
         primary_document,
         "hsbc",
+        allow_secondary_ocr=True,
     )
 
     assert review is not None
@@ -197,7 +242,7 @@ def test_paddle_primary_runs_tesseract_only_after_validation_failure(monkeypatch
     assert secondary_document.metadata["ocr_fallback_selected"] is True
 
 
-def test_tesseract_primary_runs_paddle_only_after_validation_failure(monkeypatch):
+def test_explicit_secondary_review_can_run_paddle_after_validation_failure(monkeypatch):
     primary_estado = _estado("tesseract")
     secondary_estado = _estado("paddle")
     primary_document = DocumentData(
@@ -243,6 +288,7 @@ def test_tesseract_primary_runs_paddle_only_after_validation_failure(monkeypatch
     estado, document, review = statement_processor.process_single_statement_with_ocr_review(
         primary_document,
         "hsbc",
+        allow_secondary_ocr=True,
     )
 
     assert review is not None
@@ -289,3 +335,6 @@ def test_pipeline_passes_selected_primary_engine_to_ocr_reader(monkeypatch):
     assert captured == ["paddleocr"]
     assert result.ocr_primary_engine == "paddleocr"
     assert result.ocr_engine == "paddleocr"
+    assert result.ocr_secondary_engine is None
+    assert result.fallback_attempted is False
+    assert result.fallback_used is False

@@ -20,16 +20,14 @@ def _document(engine: str) -> DocumentData:
     )
 
 
-def test_requested_paddle_failure_recovers_with_tesseract(monkeypatch):
-    tesseract_document = _document("tesseract")
+def test_selected_engine_is_the_only_ocr_used_by_standard_processing(monkeypatch):
+    document = _document("paddleocr")
     estado = SimpleNamespace(movimientos=[], resumen_financiero=None)
-    calls = []
+    calls: list[str] = []
 
     def _read(path, engine, start_page=0):
         calls.append(engine)
-        if engine == "paddleocr":
-            raise RuntimeError("paddle startup failed")
-        return tesseract_document
+        return document
 
     monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_engine", _read)
     monkeypatch.setattr(pipeline, "identify_bank_key", lambda **kwargs: "hsbc")
@@ -50,17 +48,21 @@ def test_requested_paddle_failure_recovers_with_tesseract(monkeypatch):
         ocr_primary_engine="paddleocr",
     )
 
-    assert calls == ["paddleocr", "tesseract"]
-    assert result.ocr_primary_engine == "tesseract"
-    assert result.ocr_engine == "tesseract"
-    assert tesseract_document.metadata["ocr_requested_primary_engine"] == "paddleocr"
-    assert tesseract_document.metadata["ocr_unavailable_engine"] == "paddleocr"
-    assert tesseract_document.metadata["ocr_startup_recovered"] is True
-    assert tesseract_document.metadata["ocr_startup_error_type"] == "RuntimeError"
+    assert calls == ["paddleocr"]
+    assert result.ocr_requested_primary_engine == "paddleocr"
+    assert result.ocr_primary_engine == "paddleocr"
+    assert result.ocr_engine == "paddleocr"
+    assert result.ocr_secondary_engine is None
+    assert result.fallback_attempted is False
+    assert result.fallback_used is False
+    assert document.metadata["ocr_requested_primary_engine"] == "paddleocr"
+    assert document.metadata["ocr_primary_engine"] == "paddleocr"
+    assert document.metadata["ocr_secondary_engine"] is None
+    assert document.metadata["ocr_fallback_attempted"] is False
 
 
-def test_primary_and_recovery_failure_still_surfaces_error(monkeypatch):
-    calls = []
+def test_selected_engine_startup_failure_is_not_recovered_automatically(monkeypatch):
+    calls: list[str] = []
 
     def _read(path, engine, start_page=0):
         calls.append(engine)
@@ -75,10 +77,10 @@ def test_primary_and_recovery_failure_still_surfaces_error(monkeypatch):
         processing_method="OCR",
     )
 
-    with pytest.raises(RuntimeError, match="tesseract unavailable"):
+    with pytest.raises(RuntimeError, match="paddleocr unavailable"):
         pipeline._process_prepared_statement(
             prepared,
             ocr_primary_engine="paddleocr",
         )
 
-    assert calls == ["paddleocr", "tesseract"]
+    assert calls == ["paddleocr"]

@@ -436,7 +436,6 @@ def main(page: ft.Page):
             expand=True,
         )
 
-
     def rebuild_selector(*, update: bool = True) -> None:
         selector_rows.clear()
         digital_groups_view.controls.clear()
@@ -1469,7 +1468,7 @@ def main(page: ft.Page):
             return
         current = settings['ocr_primary_engine']
         selector = ft.Dropdown(
-            label='Motor OCR principal',
+            label='Motor OCR activo',
             value=current,
             width=300,
             options=[
@@ -1490,12 +1489,12 @@ def main(page: ft.Page):
                 [
                     selector,
                     ft.Text(
-                        'El motor principal sólo define el orden de procesamiento OCR. Si se ejecutan ambos motores, la elección del resultado que se exporta siempre la hace el usuario.',
+                        'El motor seleccionado es el único OCR que se ejecuta durante el procesamiento normal. La selección se toma al iniciar cada lote y no modifica la ruta de los PDFs digitales.',
                         size=9,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Text(
-                        'El segundo motor se ejecuta si el resultado principal tiene cualquier validación con tache, faltan validaciones clave o no se detectan movimientos.',
+                        'El motor secundario no se ejecuta automáticamente ante errores, ausencia de movimientos o validaciones fallidas. Cualquier uso del segundo motor debe iniciarse de forma explícita para un archivo concreto.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
@@ -1511,45 +1510,93 @@ def main(page: ft.Page):
         page.show_dialog(dialog)
 
     def show_help(e=None):
+        layout_rows = [
+            ('BBVA', 'Digital'),
+            ('Banorte', 'Digital · Escaneado (OCR)'),
+            ('Banamex', 'Digital'),
+            ('HSBC', 'Digital · Escaneado (OCR)'),
+            ('Scotiabank', 'Digital'),
+            ('Mifel', 'Estado de cuenta habilitado'),
+            ('CETESDIRECTO', 'Estado de cuenta habilitado'),
+            ('Mercado Pago', 'Estado de cuenta habilitado'),
+        ]
+        table_controls: list[ft.Control] = [
+            ft.Container(
+                ft.Row(
+                    [
+                        ft.Text('Banco / emisor', size=8, weight=ft.FontWeight.BOLD, width=145),
+                        ft.Text('Layouts habilitados', size=8, weight=ft.FontWeight.BOLD, expand=True),
+                    ],
+                    spacing=8,
+                ),
+                padding=ft.Padding.symmetric(horizontal=9, vertical=6),
+                bgcolor=GOB_GOLD_LIGHT,
+                border_radius=ft.BorderRadius.only(top_left=6, top_right=6),
+            )
+        ]
+        for index, (bank, layouts) in enumerate(layout_rows):
+            table_controls.append(
+                ft.Container(
+                    ft.Row(
+                        [
+                            ft.Text(bank, size=8, weight=ft.FontWeight.W_600, width=145),
+                            ft.Text(layouts, size=8, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                        ],
+                        spacing=8,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=9, vertical=5),
+                    bgcolor=ROW_ALT if index % 2 else None,
+                    border=ft.Border.only(
+                        bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)
+                    ),
+                )
+            )
+        layouts_table = ft.Container(
+            ft.Column(table_controls, spacing=0, tight=True),
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=6,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+
         dialog = ft.AlertDialog(
             modal=False,
             title=ft.Row(
                 [
                     ft.Icon(ft.Icons.INFO_OUTLINE, color=GOB_GREEN, size=22),
-                    ft.Text('Ayuda', weight=ft.FontWeight.BOLD, size=15),
+                    ft.Text('Información y ayuda', weight=ft.FontWeight.BOLD, size=15),
                 ],
                 spacing=8,
             ),
-            content=ft.Column(
-                [
-                    ft.Text('Validaciones financieras', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
-                    ft.Text(
-                        'Las columnas Abonos y Cargos muestran de forma explícita el resultado de las dos conciliaciones principales.',
-                        size=9,
-                    ),
-                    ft.Divider(),
-                    ft.Text('Selección OCR', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
-                    ft.Text(
-                        'Cuando existen resultados de Tesseract y PaddleOCR puedes revisar ambos. Ninguno queda elegido para el Excel hasta que pulses “Elegir para Excel”.',
-                        size=9,
-                    ),
-                    ft.Divider(),
-                    ft.Text('Estados durante el procesamiento', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
-                    ft.Text(
-                        'Los PDFs aparecen en cuanto se clasifica su tipo. Coloca el cursor sobre la lista Digital u OCR y usa la rueda del mouse para recorrerla.',
-                        size=9,
-                    ),
-                    ft.Divider(),
-                    ft.Text('Bancos y estados de cuenta habilitados', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
-                    ft.Text(
-                        'BBVA Digital · Banorte Digital/Escaneado · Banamex Digital · HSBC Digital/Escaneado · Scotiabank Digital · Mifel · CETESDIRECTO · MercadoPago',
-                        size=9,
-                    ),
-                ],
-                spacing=7,
-                tight=True,
-                scroll=ft.ScrollMode.AUTO,
-                height=360,
+            content=ft.Container(
+                width=590,
+                content=ft.Column(
+                    [
+                        ft.Text('Validaciones financieras', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        ft.Text(
+                            'Las columnas Abonos y Cargos muestran de forma explícita el resultado de las dos conciliaciones principales.',
+                            size=9,
+                        ),
+                        ft.Divider(),
+                        ft.Text('Motor OCR activo', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        ft.Text(
+                            'Los PDFs escaneados se procesan exclusivamente con el motor seleccionado en Configuración. El programa no ejecuta un segundo OCR de forma automática.',
+                            size=9,
+                        ),
+                        ft.Divider(),
+                        ft.Text('Estados durante el procesamiento', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        ft.Text(
+                            'Los PDFs aparecen en cuanto se clasifica su tipo. Coloca el cursor sobre la lista Digital u OCR y usa la rueda del mouse para recorrerla.',
+                            size=9,
+                        ),
+                        ft.Divider(),
+                        ft.Text('Bancos y layouts habilitados', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        layouts_table,
+                    ],
+                    spacing=7,
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
+                    height=430,
+                ),
             ),
             actions=[ft.TextButton(content='Cerrar', on_click=lambda ev: page.pop_dialog())],
         )
@@ -2221,7 +2268,7 @@ def main(page: ft.Page):
                     ),
                     ft.Container(expand=True),
                     selector_filter,
-                    ],
+                ],
                 spacing=7,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
@@ -2249,7 +2296,7 @@ def main(page: ft.Page):
                 [
                     ft.Text('📤 Exportación', size=13, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        'Incluye resultados terminados. Si un PDF tiene dos motores OCR, debes elegir explícitamente cuál conservar.',
+                        'Incluye los resultados terminados y conserva el resultado activo de cada archivo.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),

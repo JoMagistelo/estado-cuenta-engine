@@ -15,7 +15,7 @@ def _failed_primary_validations():
 def _ok_primary_validations():
     return [_validation('Total depósitos / abonos', True), _validation('Total retiros / cargos', True)]
 
-def test_stop_request_skips_secondary_ocr_after_primary_failure(monkeypatch):
+def test_stop_request_skips_secondary_ocr_during_explicit_review(monkeypatch):
     primary_estado = SimpleNamespace(movimientos=[SimpleNamespace(tipo_operacion='TRANSFERENCIA')], resumen_financiero=object())
     primary_document = DocumentData(raw_text='HSBC', normalized_text='', spatial_words=[], metadata={'ocr': True, 'reader': 'tesseract', 'source_path': 'statement.pdf', 'start_page': 0})
     monkeypatch.setattr(statement_processor, '_process_once', lambda document, bank_key: (primary_estado, document))
@@ -26,7 +26,7 @@ def test_stop_request_skips_secondary_ocr_after_primary_failure(monkeypatch):
     monkeypatch.setattr(statement_processor.ReaderManager, 'read_paddle_ocr', _must_not_run)
     stop_event = threading.Event()
     stop_event.set()
-    estado, document, review = statement_processor.process_single_statement_with_ocr_review(primary_document, 'hsbc', cancel_event=stop_event)
+    estado, document, review = statement_processor.process_single_statement_with_ocr_review(primary_document, 'hsbc', cancel_event=stop_event, allow_secondary_ocr=True)
     assert estado is primary_estado
     assert document is primary_document
     assert review is None

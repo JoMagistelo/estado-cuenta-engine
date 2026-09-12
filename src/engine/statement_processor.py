@@ -234,14 +234,11 @@ def _try_secondary_ocr_review(
     secondary_engine: str | None = None,
     cancel_event: Any | None = None,
 ) -> OCRReview | None:
-    """Ejecuta OCR secundario sólo si falla la conciliación principal.
+    """Ejecuta la ruta comparativa OCR cuando fue solicitada de forma explícita.
 
-    Flujo:
-      1) el motor primario termina y se parsea;
-      2) se calculan depósitos/abonos y retiros/cargos;
-      3) si ambas validaciones pasan, termina aquí;
-      4) si el usuario pidió detener, no se inicia fallback;
-      5) sólo en otro caso se ejecuta el motor secundario disponible.
+    Esta función conserva la capacidad de comparar un segundo motor para flujos
+    controlados y futuras acciones por archivo. El procesamiento productivo
+    estándar no la invoca automáticamente.
     """
     primary_engine = normalize_ocr_engine(primary_candidate.engine)
     if primary_engine not in {'tesseract', 'paddleocr'}:
@@ -425,11 +422,33 @@ def process_single_statement_with_ocr_review(
     document: DocumentData,
     bank_key: str,
     cancel_event: Any | None = None,
+    *,
+    allow_secondary_ocr: bool = False,
 ):
-    """Procesa un documento y aplica fallback simétrico si es OCR."""
+    """Procesa un documento con una política OCR determinista por defecto.
+
+    La ejecución estándar procesa exclusivamente el documento entregado por el
+    motor seleccionado. La comparación con un segundo motor requiere
+    ``allow_secondary_ocr=True`` y queda reservada para flujos explícitos; nunca
+    se activa como consecuencia implícita de una validación fallida.
+    """
     estado, document = _process_once(document, bank_key)
     primary_engine = _reader_name(document)
     if primary_engine not in {'tesseract', 'paddleocr'}:
+        return estado, document, None
+
+    metadata = dict(document.metadata or {})
+    metadata.update(
+        {
+            'ocr_primary_engine': primary_engine,
+            'ocr_secondary_engine': None,
+            'ocr_fallback_attempted': False,
+            'ocr_fallback_selected': False,
+        }
+    )
+    document.metadata = metadata
+
+    if not allow_secondary_ocr:
         return estado, document, None
 
     primary_candidate = _build_candidate(primary_engine, estado, document)
@@ -446,7 +465,7 @@ def process_single_statement_with_ocr_review(
 
 
 def process_single_statement(document: DocumentData, bank_key: str):
-    """Procesa un documento conservando compatibilidad con la API histórica."""
+    """Procesa un documento con el único candidato OCR ya seleccionado."""
     estado, document, _ = process_single_statement_with_ocr_review(
         document=document,
         bank_key=bank_key,
