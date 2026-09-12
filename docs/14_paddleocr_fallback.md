@@ -1,153 +1,310 @@
-# Política OCR de producción
+# Revisión OCR dual: Tesseract y PaddleOCR — documento histórico
 
-## 1. Propósito
+> **Estado documental:** histórico / no vigente para la ejecución productiva actual.  
+> Este documento conserva la decisión, configuración y evidencia técnica de la etapa en la que Estado Cuenta Engine evaluó fallback OCR automático. La política productiva vigente se define en [`17_politica_ocr_produccion.md`](17_politica_ocr_produccion.md). Las secciones que describen activación automática del segundo motor, recomendación automática o selección dual no deben interpretarse como comportamiento vigente del producto.
 
-Este documento establece la política de ejecución OCR de Estado Cuenta Engine para operación productiva y deja registrada la decisión arquitectónica que debe conservarse en futuras evoluciones del motor.
+## Estado Cuenta Engine — SABG / DGEC
 
-El nombre histórico de este archivo se mantiene para preservar referencias documentales existentes. La política descrita a continuación sustituye el comportamiento anterior de fallback OCR automático.
+**Fecha de corte histórica:** 5 de septiembre de 2026
 
-## 2. Decisión de producción
+## 1. Objetivo histórico
 
-El procesamiento estándar de un lote ejecuta **un solo motor OCR por documento escaneado**.
+Estado Cuenta Engine mantuvo **Tesseract como motor OCR primario** e incorporó PaddleOCR como segundo motor local de recuperación y comparación para documentos escaneados cuya extracción primaria requería revisión.
 
-El motor utilizado es el seleccionado en la configuración antes de iniciar el lote:
+La integración fue diseñada para:
 
-- `tesseract`: Tesseract local;
-- `paddleocr`: PaddleOCR local con modelos previamente instalados.
+- conservar el comportamiento cuando Tesseract obtenía un resultado suficiente;
+- generar un segundo candidato sólo ante señales objetivas de extracción no confiable;
+- ejecutar ambos candidatos con el mismo parser bancario y los mismos validadores;
+- permitir comparar Tesseract y PaddleOCR en las interfaces Flet y Streamlit;
+- permitir que el usuario autorizado seleccionara qué candidato revisar y exportar;
+- conservar una recomendación automática conservadora como apoyo;
+- operar de forma local, sin enviar documentos a servicios OCR externos.
 
-La selección se toma como una decisión de ejecución del lote. Los PDFs digitales continúan por su ruta digital y no ejecutan OCR.
+El alcance lingüístico de esa etapa fue **documentación bancaria en español utilizada en México**.
 
-Durante el procesamiento estándar:
+## 2. Flujo funcional histórico
 
-1. se clasifica el documento como Digital u OCR;
-2. si es Digital, se conserva la ruta digital existente;
-3. si es OCR, se ejecuta exclusivamente el motor seleccionado;
-4. el documento resultante se envía al parser y a las validaciones existentes;
-5. el resultado, incluidas validaciones fallidas o ausencia de movimientos, se conserva sin iniciar automáticamente otro OCR.
+```text
+PDF escaneado
+    │
+    ▼
+Tesseract
+    │
+    ▼
+Parser bancario existente
+    │
+    ▼
+Validadores existentes
+    │
+    ├── resultado suficiente ─────────────► conservar Tesseract
+    │
+    └── requiere revisión
+            │
+            ▼
+      PaddleOCR local
+            │
+            ▼
+      mismo parser bancario
+            │
+            ▼
+      mismos validadores
+            │
+            ▼
+     conservar ambos candidatos
+            │
+            ├── recomendación automática
+            │
+            └── selección del usuario
+                    │
+                    ▼
+          vista y exportación Excel
+```
 
-Un fallo de inicialización del motor seleccionado tampoco cambia silenciosamente al motor alternativo. El archivo se reporta con error y conserva una procedencia inequívoca.
+Los documentos **digitales no participaban en esta comparación** y conservaban el flujo histórico.
 
-## 3. Motivación
+## 3. Condiciones históricas de activación del segundo OCR
 
-La decisión prioriza propiedades requeridas para una operación institucional predecible:
+Durante esta etapa, PaddleOCR sólo se intentaba cuando el fallback estaba habilitado para el banco y Tesseract presentaba al menos una señal objetiva de revisión. Se consideraban:
 
-- **determinismo:** un archivo escaneado no duplica trabajo en función de su resultado financiero;
-- **trazabilidad:** el motor reportado es el motor realmente solicitado y ejecutado;
-- **tiempo de procesamiento controlable:** una validación fallida no convierte implícitamente un OCR en dos OCR consecutivos;
-- **operación explícita:** cualquier uso de un segundo motor debe corresponder a una acción deliberada sobre un archivo concreto;
-- **evolución segura:** se conserva la infraestructura de candidatos OCR para una futura función de reprocesado manual, pero queda fuera del flujo automático.
+- ausencia de movimientos extraídos;
+- una o más validaciones financieras fallidas (`correcto=False` / tache en interfaz);
+- ausencia de una validación principal de depósitos/abonos o retiros/cargos;
+- ausencia total de validaciones disponibles.
 
-Esta política no modifica parsers bancarios, reglas de extracción, validadores ni exportadores.
+Estas condiciones **ya no activan un motor secundario en el procesamiento productivo vigente**.
 
-## 4. Contrato de auditoría
+## 4. Comparación y selección históricas
 
-Para un documento OCR procesado por la ruta estándar, el resultado debe reflejar:
+Cuando PaddleOCR lograba producir un segundo candidato, ambos resultados permanecían disponibles **en memoria durante la sesión de procesamiento**.
 
-- `ocr_requested_primary_engine`: motor seleccionado para el lote;
-- `ocr_primary_engine`: el mismo motor efectivamente ejecutado;
-- `ocr_engine`: motor del resultado activo;
-- `ocr_secondary_engine`: `None`;
-- `fallback_attempted`: `False`;
-- `fallback_used`: `False`.
+Las interfaces mostraban para cada motor, como mínimo:
 
-La metadata del `DocumentData` mantiene el mismo principio: no debe indicar ejecución secundaria cuando ésta no ocurrió.
+- cantidad de movimientos;
+- cantidad de validaciones disponibles;
+- cantidad de validaciones fallidas;
+- motor recomendado;
+- motor actualmente seleccionado.
 
-Si el motor seleccionado no puede iniciar, no se fabrica un candidato alternativo ni se modifica la identidad del motor solicitado.
+El usuario autorizado podía alternar entre **Tesseract** y **PaddleOCR**. Al cambiar la selección se actualizaban:
 
-## 5. Motores disponibles y operación sin red
+- datos de la cuenta;
+- resumen financiero;
+- movimientos;
+- validaciones;
+- resultado utilizado para la exportación a Excel.
 
-### Tesseract
+No se duplicaban automáticamente los PDF ni se escribían copias del texto OCR alterno al disco para implementar esta comparación.
 
-Tesseract se ejecuta localmente. En la distribución Windows autorizada, su runtime y `tessdata` forman parte de los componentes controlados del producto o de la instalación institucional aprobada.
+## 5. Recomendación automática histórica
 
-### PaddleOCR
+La recomendación automática se utilizaba como punto de partida, no como sustituto de la revisión funcional.
 
-PaddleOCR se ejecuta localmente y requiere modelos previamente instalados. Estado Cuenta Engine no habilita descargas de modelos durante el procesamiento. La selección de PaddleOCR como motor activo no autoriza tráfico de red ni descarga dinámica de artefactos.
+La política histórica era conservadora:
 
-La disponibilidad de dos motores no implica ejecución dual.
+- si Tesseract no obtenía movimientos y PaddleOCR sí, se recomendaba PaddleOCR;
+- si PaddleOCR perdía movimientos que Tesseract sí obtuvo, se mantenía Tesseract;
+- PaddleOCR no se recomendaba si perdía validadores que Tesseract sí pudo calcular;
+- con cobertura comparable, se favorecía el candidato con menos validaciones fallidas;
+- ante empate o evidencia insuficiente se mantenía Tesseract.
 
-## 6. Capacidad secundaria reservada
+Esta recomendación automática no forma parte del procesamiento estándar definido por la política vigente.
 
-El código conserva de forma deliberada la capacidad de construir y comparar candidatos OCR, pero dicha capacidad es **opt-in** y no forma parte del procesamiento productivo estándar.
+## 6. Seguridad y privacidad
 
-Su finalidad es servir como base para una acción explícita por archivo. Ninguna de las siguientes condiciones debe activar por sí sola el motor secundario:
+La integración fue diseñada para ejecución **local dentro de infraestructura autorizada**.
 
-- conciliación de abonos fallida;
-- conciliación de cargos fallida;
-- validaciones principales ausentes;
-- ausencia de movimientos;
-- baja calidad del resultado primario;
-- error de arranque del motor seleccionado.
+Controles relevantes que continúan siendo aplicables a los motores locales:
 
-La política productiva sólo podrá cambiar mediante una decisión documentada y una regresión específica.
+- no utilizar una API OCR alojada;
+- no enviar PDF, texto extraído o información financiera a servicios externos;
+- no descargar modelos durante el procesamiento;
+- resolver únicamente modelos locales: variables explícitas, raíz administrada, ProgramData/LocalAppData o caché oficial local de PaddleX;
+- deshabilitar la comprobación automática de proveedores de modelos mediante `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1`;
+- mantener telemetría técnica basada en estados y conteos, no importes ni contenido bancario.
 
-## 7. Evolución arquitectónica prevista
+## 7. Componentes controlados
 
-Las siguientes capacidades forman parte de la ruta de evolución acordada. **No describen funcionalidad implementada por la presente política** y deben incorporarse en cambios separados, verificables y reversibles.
+La línea técnica documentada utiliza:
 
-### 7.1 Normalización documental
+- PaddleOCR `>=3.7,<3.8`;
+- PaddlePaddle `3.2.0` fijado para el runtime CPU;
+- modelo de detección `PP-OCRv5_mobile_det`;
+- modelo de reconocimiento `latin_PP-OCRv5_mobile_rec`;
+- `PADDLEOCR_LANG=es` como único idioma admitido por la aplicación;
+- inferencia CPU como configuración inicial;
+- límite del lado mayor de detección para evitar procesamiento innecesario de páginas completas a alta resolución.
 
-Se prevé una etapa previa al OCR para normalizar físicamente el documento cuando sea necesario: orientación, deskew, escala, traslación y, cuando corresponda, corrección de perspectiva. La normalización deberá ser independiente de la lógica bancaria siempre que la geometría física lo permita.
+La versión 3.2.0 del runtime se fijó deliberadamente para mantener una combinación reproducible con PaddleOCR 3.7 en Windows y Python 3.12/3.13. No debe actualizarse de forma independiente sin repetir pruebas funcionales y de rendimiento.
 
-### 7.2 OCR como inyector de texto
+PaddleOCR no proporciona un modelo independiente `es-MX`; el modelo latino oficial incluye español y reconocimiento numérico. La aplicación restringe el contrato funcional al español utilizado en documentación bancaria mexicana.
 
-Tesseract y PaddleOCR evolucionarán de lectores finales de `spatial_words` a motores capaces de generar una capa de texto OCR sobre un PDF normalizado. El artefacto resultante será un PDF seleccionable y auditable.
+## 8. Instalación
 
-### 7.3 `PDFWordReader` como fuente espacial canónica
+PaddleOCR es una dependencia opcional. Para el runtime Python institucional:
 
-El objetivo es que el lector espacial principal sea `PDFWordReader`: PDFs digitales y PDFs OCR con texto inyectado convergerán antes del parser y producirán el mismo contrato de palabras espaciales.
+```powershell
+python -m pip install -e ".[streamlit,paddleocr]"
+```
 
-### 7.4 Registro geométrico por layout
+Para desarrollo local con Flet y PaddleOCR:
 
-Después de detectar banco/layout podrá aplicarse un motor común de registro geométrico con perfiles de layout. La finalidad es transformar variaciones de un mismo layout —desplazamiento, escala o inclinación residual— a coordenadas canónicas sin introducir excepciones OCR dentro de los parsers.
+```powershell
+python -m pip install -e ".[desktop,paddleocr]"
+```
 
-Los layouts genuinamente distintos continuarán siendo layouts distintos.
+La instalación del extra fija PaddlePaddle 3.2.0. Si el ambiente ya contiene otra versión, el instalador debe reconciliarla con la versión declarada por el proyecto antes de ejecutar UAT.
 
-### 7.5 Reprocesado manual con motor secundario
+La automatización de calidad valida el runtime PaddleOCR/PaddlePaddle en Windows con Python 3.12 y Python 3.13.
 
-La interfaz podrá incorporar, por cada archivo OCR, una acción explícita con el texto de ayuda:
+## 9. Gestión institucional de modelos
 
-`Reprocesar usando motor secundario`
+Los modelos deben administrarse como componentes de terceros controlados. Antes de habilitarlos en producción debe registrarse, como mínimo:
 
-Esa acción deberá:
+- nombre exacto del modelo;
+- versión o referencia de origen;
+- fuente oficial de adquisición;
+- licencia aplicable;
+- fecha de adquisición;
+- hash SHA-256;
+- responsable de incorporación;
+- ubicación autorizada;
+- permisos/ACL;
+- revisión de vulnerabilidades o avisos aplicables.
 
-1. afectar exclusivamente al archivo seleccionado;
-2. ejecutar el motor alternativo sin reabrir un fallback automático del lote;
-3. generar su propio PDF con texto inyectado;
-4. enviar ese PDF por la ruta espacial/parsing definida para el producto;
-5. conservar trazabilidad entre resultado principal y reprocesado.
+Ubicación operativa de referencia:
 
-### 7.6 Descarga de PDFs OCR generados
+```text
+C:\ProgramData\EstadoCuentaEngine\PaddleOCR\
+    PP-OCRv5_mobile_det\
+    latin_PP-OCRv5_mobile_rec\
+```
 
-Los archivos OCR podrán exponer un control sutil para descargar el PDF con texto inyectado. Los documentos digitales no requieren ese artefacto. Cuando un archivo sea reprocesado explícitamente con el motor secundario, podrán coexistir los dos artefactos OCR, uno por motor.
+La ubicación definitiva y las ACL corresponden a TIC.
 
-## 8. Límites de esta decisión
+## 10. Configuración técnica de modelos
 
-La adopción de la política de motor único no implementa todavía:
+Las variables de modelo documentadas continúan siendo válidas para resolver componentes locales:
 
-- generación de PDFs con texto inyectado;
-- botones de descarga de PDFs OCR;
-- reprocesado manual desde Flet;
-- normalización geométrica del documento;
-- perfiles de layout;
-- transformación canónica de coordenadas;
-- sustitución de los readers OCR por inyectores;
-- eliminación de parsers OCR históricos.
+```powershell
+$env:PADDLEOCR_TEXT_DETECTION_MODEL_DIR = `
+  "C:\ProgramData\EstadoCuentaEngine\PaddleOCR\PP-OCRv5_mobile_det"
 
-Estas capacidades deben llegar en pull requests independientes para conservar una regresión clara y reducir el riesgo sobre los parsers ya validados.
+$env:PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR = `
+  "C:\ProgramData\EstadoCuentaEngine\PaddleOCR\latin_PP-OCRv5_mobile_rec"
 
-## 9. Verificación mínima
+$env:PADDLEOCR_DEVICE = "cpu"
+$env:PADDLEOCR_LANG = "es"
+$env:PADDLEOCR_DPI = "300"
+$env:PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN = "1600"
+$env:PADDLEOCR_ENABLE_MKLDNN = "0"
+$env:PADDLEOCR_CPU_THREADS = "10"
+```
 
-Toda modificación posterior a esta política debe comprobar, como mínimo:
+Las antiguas variables `PADDLEOCR_FALLBACK_ENABLED` y `PADDLEOCR_FALLBACK_BANKS` pertenecen a la política histórica y **no gobiernan la selección productiva vigente**. El motor activo se define mediante la configuración de la aplicación o `OCR_PRIMARY_ENGINE`.
 
-1. que un lote OCR con Tesseract seleccionado no ejecuta PaddleOCR;
-2. que un lote OCR con PaddleOCR seleccionado no ejecuta Tesseract;
-3. que una validación fallida no ejecuta automáticamente el motor secundario;
-4. que un error de arranque no cambia silenciosamente de motor;
-5. que los PDFs digitales mantienen su ruta existente;
-6. que la capacidad secundaria sólo se utiliza mediante una llamada explícita;
-7. que parsers, validadores y exportadores conservan su comportamiento salvo cambio funcional documentado.
+Las dos variables de directorio siguen teniendo prioridad, pero dejan de depender de la sesión actual de PowerShell cuando los modelos ya están instalados en una ubicación local reconocida. El reader busca, en este orden:
 
-## 10. Criterio de cambio
+1. `PADDLEOCR_TEXT_DETECTION_MODEL_DIR` / `PADDLEOCR_TEXT_RECOGNITION_MODEL_DIR`;
+2. `PADDLEOCR_MODEL_ROOT\<modelo>`;
+3. `%PROGRAMDATA%\EstadoCuentaEngine\PaddleOCR\<modelo>`;
+4. `%LOCALAPPDATA%\EstadoCuentaEngine\PaddleOCR\<modelo>`;
+5. `~\.paddlex\official_models\<modelo>`.
 
-Esta política se considera parte del contrato productivo de Estado Cuenta Engine. Cualquier retorno a procesamiento OCR dual automático requiere una decisión arquitectónica nueva, evidencia de rendimiento y precisión, pruebas de regresión y actualización de la documentación operativa antes de liberarse.
+En todos los casos se pasa un directorio local explícito al runtime; esta resolución **no habilita descargas**. Si una variable individual está configurada con una ruta inválida, se rechaza en lugar de ocultar el error usando otra ubicación.
+
+`PADDLEOCR_LANG` debe permanecer en `es`. Cualquier otro valor es rechazado por el reader.
+
+`PADDLEOCR_CPU_THREADS` se acota internamente entre 1 y 32. `PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN` se acota entre 960 y 2400.
+
+## 11. Selección y rollback vigente
+
+Para utilizar Tesseract como motor OCR del procesamiento estándar:
+
+```powershell
+$env:OCR_PRIMARY_ENGINE = "tesseract"
+```
+
+Para utilizar PaddleOCR:
+
+```powershell
+$env:OCR_PRIMARY_ENGINE = "paddleocr"
+```
+
+La interfaz Flet permite realizar la misma selección antes de iniciar el lote. El motor alternativo no se ejecuta de forma automática.
+
+## 12. Diagnóstico técnico seguro
+
+El proyecto incluye:
+
+```powershell
+python scripts\diagnostico_paddleocr.py "C:\ruta\estado.pdf"
+```
+
+El diagnóstico se considera una herramienta técnica separada de la política productiva del lote. Puede utilizarse para evaluar motores concretos en un entorno autorizado.
+
+También puede evaluarse un candidato concreto:
+
+```powershell
+python scripts\diagnostico_paddleocr.py "C:\ruta\estado.pdf" --motor tesseract
+python scripts\diagnostico_paddleocr.py "C:\ruta\estado.pdf" --motor paddleocr
+```
+
+El diagnóstico no debe imprimir nombres, cuentas, CLABE, conceptos, texto OCR ni importes financieros.
+
+## 13. Recursos y operación
+
+PaddlePaddle incorpora un runtime de inferencia mayor que Tesseract. Antes de producción deben medirse con corpus autorizado:
+
+- memoria residente;
+- CPU por página;
+- tiempo por motor seleccionado;
+- espacio de los modelos;
+- concurrencia segura;
+- comportamiento ante lotes con varios documentos OCR.
+
+La política vigente evita duplicar automáticamente el costo de OCR ejecutando un segundo motor por resultado fallido.
+
+## 14. Ejecutable de escritorio
+
+La incorporación de PaddleOCR/PaddlePaddle y sus modelos al artefacto portable debe verificarse en cada liberación autorizada. Deben controlarse tamaño, licencias, hashes, runtime, disponibilidad local de modelos y pruebas funcionales del artefacto resultante.
+
+## 15. UAT recomendada para la política vigente
+
+Antes de utilizar PaddleOCR como motor productivo:
+
+1. instalar el extra PaddleOCR en ambiente controlado;
+2. confirmar `paddle.__version__ == "3.2.0"`;
+3. registrar e instalar modelos aprobados;
+4. validar que no existan descargas durante procesamiento;
+5. seleccionar PaddleOCR de forma explícita;
+6. procesar corpus autorizado representativo;
+7. validar datos de cuenta, resumen, movimientos y conciliaciones;
+8. repetir el mismo corpus con Tesseract cuando se requiera comparación técnica;
+9. validar nombres, conceptos, acentos, `Ñ`, números, fechas, referencias e importes de documentación mexicana;
+10. medir CPU, memoria y tiempos;
+11. comprobar cambio explícito de motor por configuración;
+12. documentar aceptación funcional y técnica.
+
+## 16. Criterios de aceptación TIC vigentes
+
+- [ ] PaddleOCR/PaddlePaddle inventariados como componentes de terceros;
+- [ ] versiones aprobadas y auditadas;
+- [ ] modelos identificados con procedencia, licencia y hash;
+- [ ] modelos instalados en ubicación protegida;
+- [ ] ejecución local sin transferencia de documentos a servicios externos;
+- [ ] sin descarga de modelos durante procesamiento;
+- [ ] idioma restringido a español;
+- [ ] selección del motor OCR verificada;
+- [ ] ausencia de fallback automático verificada;
+- [ ] uso de recursos aceptado;
+- [ ] cambio explícito de motor probado;
+- [ ] logs y diagnósticos sin información financiera o personal innecesaria.
+
+## 17. Responsabilidades
+
+**Equipo de aplicación:** readers OCR, selección de motor, pruebas, dependencias y documentación técnica.
+
+**TIC:** aprobación e instalación del runtime/modelos, ubicación, ACL, inventario, vulnerabilidades, configuración de servicio, recursos y operación.
+
+**DGEC / área funcional:** UAT con corpus autorizado, comparación controlada de resultados y aceptación funcional de los criterios de uso.
