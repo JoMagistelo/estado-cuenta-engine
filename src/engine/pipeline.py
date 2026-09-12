@@ -7,7 +7,11 @@ from typing import Any
 
 from detectors.bank_detector import identify_bank_key
 from detectors.document_type_detector import DocumentType, detect_document_type
-from engine.ocr_fallback_policy import normalize_ocr_engine, secondary_ocr_engine
+from engine.ocr_fallback_policy import (
+    normalize_enabled_ocr_engines,
+    normalize_ocr_engine,
+    secondary_ocr_engine,
+)
 from engine.statement_processor import process_single_statement_with_ocr_review
 from models.processing_result import ProcessingResult
 from readers.models import DocumentData
@@ -158,16 +162,17 @@ def _read_ocr_with_startup_recovery(
     pdf_path: str,
     requested_engine: str,
     cancel_event: Any | None,
+    enabled_ocr_engines: tuple[str, ...] | list[str] | str | None = None,
 ) -> tuple[DocumentData, str]:
-    """Lee OCR y conserva el documento si el motor solicitado no puede iniciar.
+    """Lee OCR y sólo recupera con un segundo motor si está habilitado."""
+    enabled = normalize_enabled_ocr_engines(enabled_ocr_engines)
+    if not enabled:
+        raise RuntimeError('No hay ningún motor OCR habilitado.')
 
-    Cambiar el motor inicial desde la UI no debe convertir un PDF recuperable en
-    un error total. Si el motor solicitado falla antes de producir candidato, se
-    intenta una sola vez el otro motor. La incidencia queda registrada en
-    metadata para diagnóstico y para impedir que el processor vuelva a intentar
-    inmediatamente el motor que ya falló.
-    """
     requested = normalize_ocr_engine(requested_engine)
+    if requested not in enabled:
+        requested = enabled[0]
+
     try:
         return _read_ocr_engine(pdf_path, requested, cancel_event), requested
     except CancelledError:
@@ -177,6 +182,9 @@ def _read_ocr_with_startup_recovery(
             raise CancelledError() from primary_error
 
         recovery = secondary_ocr_engine(requested)
+        if recovery not in enabled:
+            raise primary_error
+
         document = _read_ocr_engine(pdf_path, recovery, cancel_event)
         metadata = dict(document.metadata or {})
         metadata.update(
@@ -197,25 +205,28 @@ def _process_prepared_statement(
     prepared: PreparedStatement,
     ocr_primary_engine: str = 'tesseract',
     cancel_event: Any | None = None,
+    ocr_enabled_engines: tuple[str, ...] | list[str] | str | None = None,
 ) -> ProcessingResult:
-    """Procesa un documento respetando el motor OCR principal elegido.
-
-    Digital nunca entra a OCR. En OCR se ejecuta primero el motor solicitado. Si
-    éste no logra iniciar, el otro OCR puede recuperar el documento. Después del
-    parsing, el processor sólo invoca un secundario disponible cuando las
-    validaciones del resultado indican que conviene comparar el segundo OCR.
-    """
+    """Procesa un documento respetando motor principal y motores habilitados."""
     if _cancel_requested(cancel_event):
         raise CancelledError()
 
+    enabled_engines = normalize_enabled_ocr_engines(ocr_enabled_engines)
+    if not enabled_engines:
+        raise RuntimeError('No hay ningún motor OCR habilitado.')
+
     document = prepared.document
     requested_primary_engine = normalize_ocr_engine(ocr_primary_engine)
+    if requested_primary_engine not in enabled_engines:
+        requested_primary_engine = enabled_engines[0]
     primary_engine = requested_primary_engine
+
     if prepared.processing_method == 'OCR':
         document, primary_engine = _read_ocr_with_startup_recovery(
             prepared.pdf_path,
             primary_engine,
             cancel_event,
+            enabled_engines,
         )
         if _cancel_requested(cancel_event):
             raise CancelledError()
@@ -241,12 +252,14 @@ def _process_prepared_statement(
         estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
             document=document,
             bank_key=bank_key,
+            enabled_ocr_engines=enabled_engines,
         )
     else:
         estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
             document=document,
             bank_key=bank_key,
             cancel_event=cancel_event,
+            enabled_ocr_engines=enabled_engines,
         )
     if _cancel_requested(cancel_event):
         raise CancelledError()
@@ -303,15 +316,23 @@ def process_bank_statements(
     pdf_paths: list[str],
     file_names: list[str] | None = None,
     ocr_primary_engine: str = 'tesseract',
+    ocr_enabled_engines: tuple[str, ...] | list[str] | str | None = None,
 ) -> list[ProcessingResult]:
     results: list[ProcessingResult] = []
+    enabled_engines = normalize_enabled_ocr_engines(ocr_enabled_engines)
+    if not enabled_engines:
+        raise RuntimeError('No hay ningún motor OCR habilitado.')
     primary_engine = normalize_ocr_engine(ocr_primary_engine)
+    if primary_engine not in enabled_engines:
+        primary_engine = enabled_engines[0]
+
     for index, pdf_path in enumerate(pdf_paths):
         file_name = _get_file_name(pdf_path, file_names, index)
         prepared = _prepare_statement(pdf_path=pdf_path, file_name=file_name)
         result = _process_prepared_statement(
             prepared,
             ocr_primary_engine=primary_engine,
+            ocr_enabled_engines=enabled_engines,
         )
         results.append(result)
     return results
@@ -325,23 +346,25 @@ def process_bank_statements_incremental(
     ocr_workers: int = 1,
     ocr_primary_engine: str = 'tesseract',
     cancel_event: Any | None = None,
+    ocr_enabled_engines: tuple[str, ...] | list[str] | str | None = None,
 ):
     """Procesa lotes concurrentes y emite resultados conforme terminan.
 
-    Al solicitar Stop, el generador deja de esperar a los trabajos en curso en
-    un máximo aproximado de 100 ms, cancela lo que aún no empezó y emite estado
-    ``cancelled`` para todo archivo no terminado. Los resultados ``completed``
-    emitidos antes de Stop se conservan para auditoría/exportación.
-
-    Los trabajos que ya estaban dentro de una llamada nativa de OCR reciben el
-    mismo evento de cancelación y terminan cooperativamente entre páginas; no se
-    espera a que finalicen para devolver el control a la interfaz.
+    Los motores deshabilitados no se ejecutan ni como recuperación de arranque ni
+    como fallback posterior a las validaciones. ``None`` conserva el comportamiento
+    histórico en el que Tesseract y PaddleOCR están disponibles.
     """
     total = len(pdf_paths)
     if total == 0:
         return
 
+    enabled_engines = normalize_enabled_ocr_engines(ocr_enabled_engines)
+    if not enabled_engines:
+        raise RuntimeError('No hay ningún motor OCR habilitado.')
     primary_engine = normalize_ocr_engine(ocr_primary_engine)
+    if primary_engine not in enabled_engines:
+        primary_engine = enabled_engines[0]
+
     classification_workers = max(1, min(classification_workers, total))
     digital_workers = max(1, min(digital_workers, total))
     ocr_workers = max(1, min(ocr_workers, total))
@@ -483,6 +506,7 @@ def process_bank_statements_incremental(
                         prepared,
                         primary_engine,
                         cancel_event,
+                        enabled_engines,
                     )
                     future_map[processing_future] = (
                         'processing',
