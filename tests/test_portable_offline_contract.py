@@ -49,6 +49,9 @@ def test_desktop_launcher_forces_embedded_models_and_offline_runtime():
     assert 'os.environ["HF_HUB_OFFLINE"] = "1"' in source
     assert 'os.environ["TRANSFORMERS_OFFLINE"] = "1"' in source
     assert "--self-test-portable-paddleocr-runtime" in source
+    assert "def _execute_searchable_pdf_runtime_self_test()" in source
+    assert "OCRSearchablePDFWriter.write(source, [expected], projected_pdf, verify=True)" in source
+    assert source.count("_execute_searchable_pdf_runtime_self_test()") == 3
 
 
 def test_streamlit_disables_usage_telemetry():

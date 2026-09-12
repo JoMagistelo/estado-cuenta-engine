@@ -47,6 +47,27 @@ def _cancel_requested(cancel_event: Any | None) -> bool:
     return bool(callable(is_set) and is_set())
 
 
+def _raise_if_cancelled(cancel_event: Any | None) -> None:
+    if _cancel_requested(cancel_event):
+        raise CancelledError()
+
+
+def _normalize_ocr_engine(engine: str) -> str:
+    normalized = str(engine or "").strip().lower()
+    aliases = {
+        "paddle": "paddleocr",
+        "paddle_ocr": "paddleocr",
+        "tess": "tesseract",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"tesseract", "paddleocr"}:
+        raise ValueError(
+            f"Motor OCR no soportado: {engine!r}. "
+            "Use 'tesseract' o 'paddleocr'."
+        )
+    return normalized
+
+
 def _temporary_artifact_path() -> Path:
     descriptor, raw_path = tempfile.mkstemp(
         prefix="estado_cuenta_ocr_",
@@ -210,15 +231,10 @@ class ReaderManager:
         cancel_event: Any | None = None,
     ) -> DocumentData:
         """Ejecuta exactamente un motor OCR y conserva su salida espacial nativa."""
-        if _cancel_requested(cancel_event):
-            raise CancelledError()
+        _raise_if_cancelled(cancel_event)
 
         file_path = Path(file_path)
-        normalized = str(engine or "").strip().lower()
-        if normalized in {"paddle", "paddle_ocr"}:
-            normalized = "paddleocr"
-        elif normalized == "tess":
-            normalized = "tesseract"
+        normalized = _normalize_ocr_engine(engine)
 
         if normalized == "tesseract":
             if cancel_event is None:
@@ -246,11 +262,6 @@ class ReaderManager:
                 cancel_event=cancel_event,
             )
 
-        raise ValueError(
-            f"Motor OCR no soportado: {engine!r}. "
-            "Use 'tesseract' o 'paddleocr'."
-        )
-
     @staticmethod
     def project_ocr_document(
         file_path: str | Path,
@@ -259,6 +270,7 @@ class ReaderManager:
         engine: str,
         start_page: int = 0,
         artifact_dir: str | Path | None = None,
+        cancel_event: Any | None = None,
     ) -> DocumentData:
         """Incrusta, verifica y vuelve a leer la salida OCR desde un PDF.
 
@@ -267,8 +279,9 @@ class ReaderManager:
         se elimina después de reconstruir ``DocumentData``; incluso en ese caso
         el parser sigue recibiendo datos leídos desde el PDF generado.
         """
+        _raise_if_cancelled(cancel_event)
         source_path = Path(file_path).expanduser().resolve()
-        normalized_engine = str(engine or "").strip().lower()
+        normalized_engine = _normalize_ocr_engine(engine)
         preserve_artifact = artifact_dir is not None
         artifact_path = (
             _persistent_artifact_path(artifact_dir, normalized_engine)
@@ -287,14 +300,14 @@ class ReaderManager:
                 output_pdf=artifact_path,
                 verify=True,
             )
+            _raise_if_cancelled(cancel_event)
 
             canonical = ReaderManager.read(
                 artifact_path,
                 start_page=start_page,
                 layer_tag=OCR_LAYER_TAG,
             )
-            if _cancel_requested(None):  # pragma: no cover - claridad contractual
-                raise CancelledError()
+            _raise_if_cancelled(cancel_event)
 
             metadata = dict(ocr_document.metadata or {})
             metadata.update(
@@ -338,18 +351,19 @@ class ReaderManager:
         artifact_dir: str | Path | None = None,
     ) -> DocumentData:
         """OCR -> PDF con texto incrustado -> PDF readers canónicos."""
-        document = ReaderManager.read_ocr_engine(
-            file_path,
-            engine=engine,
-            start_page=start_page,
-            cancel_event=cancel_event,
-        )
-        if _cancel_requested(cancel_event):
-            raise CancelledError()
+        native_kwargs: dict[str, Any] = {
+            "engine": engine,
+            "start_page": start_page,
+        }
+        if cancel_event is not None:
+            native_kwargs["cancel_event"] = cancel_event
+        document = ReaderManager.read_ocr_engine(file_path, **native_kwargs)
+        _raise_if_cancelled(cancel_event)
         return ReaderManager.project_ocr_document(
             file_path,
             document,
             engine=engine,
             start_page=start_page,
             artifact_dir=artifact_dir,
+            cancel_event=cancel_event,
         )

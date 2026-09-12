@@ -133,6 +133,11 @@ def reprocess_with_secondary_ocr(
             validaciones=secondary_validations,
         )
 
+        if secondary_artifact is None or not secondary_artifact.is_file():
+            raise RuntimeError(
+                "El reprocesado terminó sin producir un PDF OCR secundario verificable."
+            )
+
         # El reproceso es una decisión explícita del usuario, por eso el nuevo
         # candidato queda activo y confirmado de inmediato. No se reactiva la
         # antigua política de recomendación/fallback automático.
@@ -147,22 +152,25 @@ def reprocess_with_secondary_ocr(
             trigger_reasons=("reproceso_manual",),
         )
 
+        # Preparar el estado completo antes de tocar el resultado compartido con
+        # Flet. Desde este punto sólo quedan asignaciones en memoria: cualquier
+        # fallo de OCR, proyección, parser, validación o artefacto ocurrió antes y
+        # dejó el candidato primario exactamente como estaba.
+        updated_artifacts = dict(result.ocr_artifacts)
+        updated_artifacts[secondary_engine] = str(secondary_artifact.resolve())
+        updated_validations = list(secondary_validations)
+
         result.ocr_review = review
         result.ocr_secondary_engine = secondary_engine
         result.ocr_engine = secondary_engine
         result.estado_cuenta = secondary_estado
         result.raw_text = secondary_document.raw_text
         result.normalized_text = secondary_document.normalized_text
-        result.validaciones = list(secondary_validations)
+        result.validaciones = updated_validations
         result.ocr_reprocessed = True
         result.fallback_attempted = False
         result.fallback_used = False
-
-        if secondary_artifact is None or not secondary_artifact.is_file():
-            raise RuntimeError(
-                "El reprocesado terminó sin producir un PDF OCR secundario verificable."
-            )
-        result.register_ocr_artifact(secondary_engine, secondary_artifact)
+        result.ocr_artifacts = updated_artifacts
         return result
     except Exception:
         if secondary_artifact is not None:

@@ -299,7 +299,7 @@ def test_explicit_secondary_review_can_run_paddle_after_validation_failure(monke
     assert secondary_document.metadata["ocr_fallback_selected"] is True
 
 
-def test_pipeline_passes_selected_primary_engine_to_ocr_reader(monkeypatch):
+def test_pipeline_passes_selected_primary_engine_to_pdf_projection(monkeypatch, tmp_path):
     captured = []
     document = DocumentData(
         raw_text="HSBC",
@@ -309,11 +309,15 @@ def test_pipeline_passes_selected_primary_engine_to_ocr_reader(monkeypatch):
     )
     estado = SimpleNamespace(movimientos=[], resumen_financiero=None)
 
-    def _read(path, engine, start_page=0):
-        captured.append(engine)
+    artifact = tmp_path / "paddleocr.pdf"
+    artifact.write_bytes(b"verified")
+    document.metadata["ocr_artifact_path"] = str(artifact)
+
+    def _read(path, engine, start_page=0, cancel_event=None, *, artifact_dir=None):
+        captured.append((engine, start_page, cancel_event, artifact_dir))
         return document
 
-    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_engine", _read)
+    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_for_parser", _read)
     monkeypatch.setattr(pipeline, "identify_bank_key", lambda **kwargs: "hsbc")
     monkeypatch.setattr(
         pipeline,
@@ -330,11 +334,13 @@ def test_pipeline_passes_selected_primary_engine_to_ocr_reader(monkeypatch):
     result = pipeline._process_prepared_statement(
         prepared,
         ocr_primary_engine="paddleocr",
+        ocr_artifact_dir=tmp_path,
     )
 
-    assert captured == ["paddleocr"]
+    assert captured == [("paddleocr", 0, None, tmp_path)]
     assert result.ocr_primary_engine == "paddleocr"
     assert result.ocr_engine == "paddleocr"
     assert result.ocr_secondary_engine is None
     assert result.fallback_attempted is False
     assert result.fallback_used is False
+    assert result.ocr_artifacts == {"paddleocr": str(artifact)}

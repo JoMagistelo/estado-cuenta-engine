@@ -97,7 +97,8 @@ class ProcessingResult:
         # reproceso manual se identifica de forma independiente con
         # ``ocr_reprocessed`` y nunca se presenta como fallback automático.
         self.fallback_used = bool(
-            self.ocr_primary_engine
+            not self.ocr_reprocessed
+            and self.ocr_primary_engine
             and candidate.engine != self.ocr_primary_engine
         )
 

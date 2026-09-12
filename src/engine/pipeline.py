@@ -459,13 +459,30 @@ def process_bank_statements_incremental(
                         if prepared.processing_method == "OCR"
                         else digital_executor
                     )
-                    processing_future = executor.submit(
-                        _process_prepared_statement,
+                    processing_args = (
                         prepared,
                         primary_engine,
                         cancel_event,
-                        ocr_artifact_dir,
                     )
+                    if (
+                        ocr_artifact_dir is None
+                        or prepared.processing_method != "OCR"
+                    ):
+                        # Conservar la firma histórica de tres argumentos cuando
+                        # el consumidor no solicita artefactos. Además de evitar
+                        # acoplar integraciones existentes a una opción nueva,
+                        # mantiene intacta la ruta Digital, que nunca necesita
+                        # conocer el directorio temporal de la interfaz.
+                        processing_future = executor.submit(
+                            _process_prepared_statement,
+                            *processing_args,
+                        )
+                    else:
+                        processing_future = executor.submit(
+                            _process_prepared_statement,
+                            *processing_args,
+                            ocr_artifact_dir,
+                        )
                     future_map[processing_future] = (
                         "processing",
                         index,

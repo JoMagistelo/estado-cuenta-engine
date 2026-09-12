@@ -12,6 +12,7 @@ import asyncio
 import importlib
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import flet as ft
@@ -455,6 +456,44 @@ def _execute_paddleocr_runtime_self_test(config: dict) -> None:
     )
 
 
+def _execute_searchable_pdf_runtime_self_test() -> None:
+    """Comprueba dentro del binario la proyección PDF que consume el parser."""
+    from pypdf import PdfWriter
+    from readers.ocr_searchable_pdf import OCR_LAYER_TAG, OCRSearchablePDFWriter
+    from readers.pdf_word_reader import PDFWordReader
+
+    expected = {
+        "text": "PRUEBA-Ñ",
+        "x0": 24.0,
+        "x1": 96.0,
+        "top": 30.0,
+        "bottom": 42.0,
+        "page": 1,
+    }
+    with tempfile.TemporaryDirectory(prefix="estado_cuenta_pdf_selftest_") as raw_dir:
+        directory = Path(raw_dir)
+        source = directory / "source.pdf"
+        projected_pdf = directory / "projected.pdf"
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=300.0, height=400.0)
+        with source.open("wb") as file_handle:
+            writer.write(file_handle)
+
+        OCRSearchablePDFWriter.write(source, [expected], projected_pdf, verify=True)
+        words = PDFWordReader.read(projected_pdf, layer_tag=OCR_LAYER_TAG)
+
+    if len(words) != 1 or words[0].get("text") != expected["text"]:
+        raise RuntimeError(
+            "El ejecutable no pudo recuperar la capa OCR etiquetada del PDF generado."
+        )
+    for field in ("x0", "x1", "top", "bottom"):
+        if abs(float(words[0][field]) - float(expected[field])) > 0.02:
+            raise RuntimeError(
+                "El ejecutable alteró la geometría durante el round-trip del PDF OCR."
+            )
+
+
 def _run_packaged_paddleocr_runtime_self_test() -> bool:
     """Inicializa modelos locales y ejecuta predict() dentro del EXE real."""
     if "--self-test-paddleocr-runtime" not in sys.argv:
@@ -466,6 +505,7 @@ def _run_packaged_paddleocr_runtime_self_test() -> bool:
 
     config = PaddleOCRPDFReader._load_config()
     _execute_paddleocr_runtime_self_test(config)
+    _execute_searchable_pdf_runtime_self_test()
     return True
 
 
@@ -494,6 +534,7 @@ def _run_packaged_portable_paddleocr_runtime_self_test() -> bool:
             ) from exc
 
     _execute_paddleocr_runtime_self_test(config)
+    _execute_searchable_pdf_runtime_self_test()
     return True
 
 

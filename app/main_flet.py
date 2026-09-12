@@ -396,6 +396,7 @@ def main(page: ft.Page):
                 tooltip='Reprocesar usando motor secundario',
                 disabled=(
                     state['running']
+                    or bool(state['reprocess_cancel_events'])
                     or item.get('status') != 'completed'
                     or already_reprocessed
                 ),
@@ -713,14 +714,20 @@ def main(page: ft.Page):
         busy = bool(state['reprocess_cancel_events'])
         upload_button.disabled = state['running'] or busy
         config_button.disabled = state['running'] or busy
+        export_button.disabled = not results or busy
         try:
             upload_button.update()
             config_button.update()
+            export_button.update()
         except Exception:
             pass
 
     def start_secondary_reprocess(index: int) -> None:
-        if state['running'] or not 0 <= index < len(processing_items):
+        if (
+            state['running']
+            or state['reprocess_cancel_events']
+            or not 0 <= index < len(processing_items)
+        ):
             return
         item = processing_items[index]
         result = item.get('result')
@@ -2485,6 +2492,16 @@ def main(page: ft.Page):
 
     async def export_excel(e):
         if not results:
+            return
+        if state['reprocess_cancel_events']:
+            status_text.value = (
+                'Espera a que termine el reprocesado OCR antes de generar el Excel.'
+            )
+            status_text.color = DANGER
+            try:
+                status_text.update()
+            except Exception:
+                page.update()
             return
         pending = pending_ocr_selection_files(list(results))
         if pending:
