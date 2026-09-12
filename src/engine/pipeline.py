@@ -7,7 +7,7 @@ from typing import Any
 
 from detectors.bank_detector import identify_bank_key
 from detectors.document_type_detector import DocumentType, detect_document_type
-from engine.ocr_fallback_policy import normalize_ocr_engine, secondary_ocr_engine
+from engine.ocr_fallback_policy import normalize_ocr_engine
 from engine.statement_processor import process_single_statement_with_ocr_review
 from models.processing_result import ProcessingResult
 from readers.models import DocumentData
@@ -154,56 +154,18 @@ def _read_ocr_engine(
     )
 
 
-def _read_ocr_with_startup_recovery(
-    pdf_path: str,
-    requested_engine: str,
-    cancel_event: Any | None,
-) -> tuple[DocumentData, str]:
-    """Lee OCR y conserva el documento si el motor solicitado no puede iniciar.
-
-    Cambiar el motor inicial desde la UI no debe convertir un PDF recuperable en
-    un error total. Si el motor solicitado falla antes de producir candidato, se
-    intenta una sola vez el otro motor. La incidencia queda registrada en
-    metadata para diagnóstico y para impedir que el processor vuelva a intentar
-    inmediatamente el motor que ya falló.
-    """
-    requested = normalize_ocr_engine(requested_engine)
-    try:
-        return _read_ocr_engine(pdf_path, requested, cancel_event), requested
-    except CancelledError:
-        raise
-    except Exception as primary_error:
-        if _cancel_requested(cancel_event):
-            raise CancelledError() from primary_error
-
-        recovery = secondary_ocr_engine(requested)
-        document = _read_ocr_engine(pdf_path, recovery, cancel_event)
-        metadata = dict(document.metadata or {})
-        metadata.update(
-            {
-                'ocr_requested_primary_engine': requested,
-                'ocr_primary_engine': recovery,
-                'ocr_startup_recovered': True,
-                'ocr_unavailable_engine': requested,
-                'ocr_startup_error_type': type(primary_error).__name__,
-                'ocr_startup_error_message': str(primary_error)[:500],
-            }
-        )
-        document.metadata = metadata
-        return document, recovery
-
-
 def _process_prepared_statement(
     prepared: PreparedStatement,
     ocr_primary_engine: str = 'tesseract',
     cancel_event: Any | None = None,
 ) -> ProcessingResult:
-    """Procesa un documento respetando el motor OCR principal elegido.
+    """Procesa un documento con el motor OCR seleccionado para el lote.
 
-    Digital nunca entra a OCR. En OCR se ejecuta primero el motor solicitado. Si
-    éste no logra iniciar, el otro OCR puede recuperar el documento. Después del
-    parsing, el processor sólo invoca un secundario disponible cuando las
-    validaciones del resultado indican que conviene comparar el segundo OCR.
+    Los PDFs digitales nunca entran a OCR. Para documentos escaneados se ejecuta
+    exactamente un motor: el configurado al iniciar el lote. Un error de arranque,
+    una ausencia de movimientos o una validación fallida no disparan un segundo
+    OCR de forma automática; esas condiciones se conservan como resultado o error
+    auditable para una eventual acción explícita por archivo.
     """
     if _cancel_requested(cancel_event):
         raise CancelledError()
@@ -212,11 +174,22 @@ def _process_prepared_statement(
     requested_primary_engine = normalize_ocr_engine(ocr_primary_engine)
     primary_engine = requested_primary_engine
     if prepared.processing_method == 'OCR':
-        document, primary_engine = _read_ocr_with_startup_recovery(
+        document = _read_ocr_engine(
             prepared.pdf_path,
             primary_engine,
             cancel_event,
         )
+        metadata = dict(document.metadata or {})
+        metadata.update(
+            {
+                'ocr_requested_primary_engine': requested_primary_engine,
+                'ocr_primary_engine': primary_engine,
+                'ocr_secondary_engine': None,
+                'ocr_fallback_attempted': False,
+                'ocr_fallback_selected': False,
+            }
+        )
+        document.metadata = metadata
         if _cancel_requested(cancel_event):
             raise CancelledError()
 
