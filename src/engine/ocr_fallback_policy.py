@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from validators.resultado_validacion import ResultadoValidacion
@@ -41,6 +42,31 @@ def normalize_ocr_engine(value: str | None, default: str = "tesseract") -> str:
 def secondary_ocr_engine(primary_engine: str | None) -> str:
     primary = normalize_ocr_engine(primary_engine)
     return "paddleocr" if primary == "tesseract" else "tesseract"
+
+
+def normalize_enabled_ocr_engines(
+    values: str | Iterable[str] | None,
+) -> tuple[str, ...]:
+    """Normaliza los motores permitidos preservando orden y compatibilidad.
+
+    ``None`` conserva el comportamiento histórico (ambos motores habilitados).
+    Una cadena admite valores separados por coma para poder configurarse también
+    con ``OCR_ENABLED_ENGINES=tesseract,paddleocr``.
+    """
+    if values is None:
+        return OCR_ENGINES
+
+    if isinstance(values, str):
+        candidates = values.split(",")
+    else:
+        candidates = values
+
+    normalized: list[str] = []
+    for candidate in candidates:
+        engine = normalize_ocr_engine(str(candidate), default="")
+        if engine and engine not in normalized:
+            normalized.append(engine)
+    return tuple(normalized)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
