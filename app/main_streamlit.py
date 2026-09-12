@@ -1117,7 +1117,7 @@ def render_export_section() -> None:
     with col_text:
         st.markdown('### 📤 Exportación')
         st.caption(
-            'El archivo incluye únicamente resultados terminados. En PDFs con dos motores OCR, la elección para Excel debe ser explícita.'
+            'El archivo incluye únicamente resultados terminados y conserva el resultado activo de cada archivo.'
         )
         if pending:
             st.warning(
@@ -1206,7 +1206,7 @@ def render_header() -> None:
                 disabled=st.session_state.worker_running,
             ):
                 engine = st.selectbox(
-                    'Motor OCR principal',
+                    'Motor OCR activo',
                     options=['tesseract', 'paddleocr'],
                     index=(
                         0 if st.session_state.ocr_primary_engine == 'tesseract' else 1
@@ -1214,7 +1214,7 @@ def render_header() -> None:
                     format_func=engine_label,
                 )
                 st.caption(
-                    'El motor principal sólo define el orden de procesamiento. Cuando se ejecutan ambos motores, tú eliges cuál resultado conservar para el Excel.'
+                    'El motor seleccionado es el único OCR que se ejecuta durante el procesamiento normal del lote. El motor secundario no se inicia automáticamente.'
                 )
                 if st.button('Guardar configuración', key='save_config'):
                     st.session_state.ocr_primary_engine = normalize_ocr_engine(engine)
@@ -1224,7 +1224,7 @@ def render_header() -> None:
                     '**Validaciones**  \nLas columnas Abonos y Cargos muestran las conciliaciones principales sin abreviaturas.'
                 )
                 st.markdown(
-                    '**OCR dual**  \nSi existen resultados de Tesseract y PaddleOCR puedes revisar ambos y debes elegir explícitamente cuál conservar para Excel.'
+                    '**Motor OCR activo**  \nLos PDFs escaneados se procesan exclusivamente con el motor seleccionado en Configuración; no existe fallback automático al segundo motor.'
                 )
                 st.markdown(
                     '**Estados vivos**  \nLos PDFs se muestran mientras se clasifican y procesan. Los terminados pueden revisarse sin esperar al lote completo.'
