@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from engine.ocr_fallback_policy import (
     fallback_trigger_reasons,
+    normalize_enabled_ocr_engines,
     normalize_ocr_engine,
     secondary_ocr_engine,
     should_attempt_secondary_fallback,
@@ -233,16 +234,9 @@ def _try_secondary_ocr_review(
     bank_key: str,
     secondary_engine: str | None = None,
     cancel_event: Any | None = None,
+    enabled_ocr_engines: tuple[str, ...] | list[str] | str | None = None,
 ) -> OCRReview | None:
-    """Ejecuta OCR secundario sólo si falla la conciliación principal.
-
-    Flujo:
-      1) el motor primario termina y se parsea;
-      2) se calculan depósitos/abonos y retiros/cargos;
-      3) si ambas validaciones pasan, termina aquí;
-      4) si el usuario pidió detener, no se inicia fallback;
-      5) sólo en otro caso se ejecuta el motor secundario disponible.
-    """
+    """Ejecuta OCR secundario sólo si está habilitado y falla el primario."""
     primary_engine = normalize_ocr_engine(primary_candidate.engine)
     if primary_engine not in {'tesseract', 'paddleocr'}:
         return None
@@ -283,6 +277,24 @@ def _try_secondary_ocr_review(
     )
     if secondary == primary_engine:
         secondary = secondary_ocr_engine(primary_engine)
+
+    enabled = normalize_enabled_ocr_engines(enabled_ocr_engines)
+    if secondary not in enabled:
+        metadata = dict(primary_candidate.document.metadata or {})
+        profile = validation_profile(primary_candidate.validaciones)
+        metadata.update(
+            {
+                'ocr_primary_engine': primary_engine,
+                'ocr_secondary_engine': None,
+                'ocr_fallback_attempted': False,
+                'ocr_fallback_selected': False,
+                'ocr_fallback_skipped_disabled': True,
+                'primary_validation_total': profile.total,
+                'primary_validation_failed': profile.failed,
+            }
+        )
+        primary_candidate.document.metadata = metadata
+        return None
 
     reasons = fallback_trigger_reasons(
         primary_candidate.validaciones,
@@ -425,8 +437,9 @@ def process_single_statement_with_ocr_review(
     document: DocumentData,
     bank_key: str,
     cancel_event: Any | None = None,
+    enabled_ocr_engines: tuple[str, ...] | list[str] | str | None = None,
 ):
-    """Procesa un documento y aplica fallback simétrico si es OCR."""
+    """Procesa un documento y aplica fallback sólo entre motores habilitados."""
     estado, document = _process_once(document, bank_key)
     primary_engine = _reader_name(document)
     if primary_engine not in {'tesseract', 'paddleocr'}:
@@ -437,6 +450,7 @@ def process_single_statement_with_ocr_review(
         primary_candidate,
         bank_key,
         cancel_event=cancel_event,
+        enabled_ocr_engines=enabled_ocr_engines,
     )
     if review is None:
         return estado, document, None
