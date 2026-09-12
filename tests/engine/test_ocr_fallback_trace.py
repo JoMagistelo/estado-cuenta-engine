@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from engine import pipeline, statement_processor
 from engine.ocr_fallback_policy import (
     fallback_trigger_reasons,
@@ -51,6 +53,7 @@ def _document(engine: str) -> DocumentData:
 
 
 def test_any_failed_validation_requests_secondary_ocr():
+    """La política comparativa conserva sus señales para una llamada explícita."""
     validations = [*_primary_ok(), _validation("Saldo final", False)]
 
     reasons = fallback_trigger_reasons(validations, has_movements=True)
@@ -59,7 +62,8 @@ def test_any_failed_validation_requests_secondary_ocr():
     assert should_attempt_secondary_fallback(validations, has_movements=True) is True
 
 
-def test_tesseract_non_primary_tache_runs_paddle_and_keeps_both_candidates(monkeypatch):
+def test_explicit_ocr_review_runs_secondary_and_keeps_both_candidates(monkeypatch):
+    """El segundo OCR sólo se ejecuta cuando el consumidor lo solicita."""
     tesseract_document = _document("tesseract")
     paddle_document = _document("paddleocr")
     tesseract_estado = _estado("tesseract")
@@ -92,6 +96,7 @@ def test_tesseract_non_primary_tache_runs_paddle_and_keeps_both_candidates(monke
         statement_processor.process_single_statement_with_ocr_review(
             tesseract_document,
             "hsbc",
+            allow_secondary_ocr=True,
         )
     )
 
@@ -124,24 +129,15 @@ def test_reader_manager_routes_selected_paddle_engine_to_paddle_reader(monkeypat
     assert result.metadata["reader"] == "paddleocr"
 
 
-def test_pipeline_preserves_requested_engine_for_ui_trace(monkeypatch):
-    tesseract_document = _document("tesseract")
-    estado = SimpleNamespace(movimientos=[], resumen_financiero=None)
+def test_pipeline_does_not_switch_engine_when_selected_ocr_is_unavailable(monkeypatch):
+    """Un error del motor seleccionado se propaga sin recuperación silenciosa."""
     calls: list[str] = []
 
     def _read(path, engine, start_page=0):
         calls.append(engine)
-        if engine == "paddleocr":
-            raise RuntimeError("paddle unavailable")
-        return tesseract_document
+        raise RuntimeError("paddle unavailable")
 
     monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_engine", _read)
-    monkeypatch.setattr(pipeline, "identify_bank_key", lambda **kwargs: "hsbc")
-    monkeypatch.setattr(
-        pipeline,
-        "process_single_statement_with_ocr_review",
-        lambda document, bank_key: (estado, document, None),
-    )
 
     prepared = pipeline.PreparedStatement(
         file_name="statement.pdf",
@@ -149,12 +145,11 @@ def test_pipeline_preserves_requested_engine_for_ui_trace(monkeypatch):
         document=None,
         processing_method="OCR",
     )
-    result = pipeline._process_prepared_statement(
-        prepared,
-        ocr_primary_engine="paddleocr",
-    )
 
-    assert calls == ["paddleocr", "tesseract"]
-    assert result.ocr_requested_primary_engine == "paddleocr"
-    assert result.ocr_primary_engine == "tesseract"
-    assert result.ocr_engine == "tesseract"
+    with pytest.raises(RuntimeError, match="paddle unavailable"):
+        pipeline._process_prepared_statement(
+            prepared,
+            ocr_primary_engine="paddleocr",
+        )
+
+    assert calls == ["paddleocr"]
