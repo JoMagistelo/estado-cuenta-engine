@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from models.estado_cuenta import EstadoCuenta
 from models.ocr_review import OCRReview
@@ -9,7 +10,13 @@ from validators.resultado_validacion import ResultadoValidacion
 
 @dataclass
 class ProcessingResult:
-    """Resultado completo del procesamiento de un estado de cuenta."""
+    """Resultado completo del procesamiento de un estado de cuenta.
+
+    ``ocr_artifacts`` contiene exclusivamente PDFs con capa OCR ya verificada.
+    El diccionario se indexa por motor para que un reproceso manual pueda
+    conservar el artefacto primario y el secundario sin duplicar el documento
+    digital ni mezclar rutas temporales con la lógica bancaria.
+    """
 
     file_name: str
     bank_key: str
@@ -26,6 +33,9 @@ class ProcessingResult:
     ocr_secondary_engine: str | None = None
     fallback_attempted: bool = False
     fallback_used: bool = False
+    source_pdf_path: str | None = None
+    ocr_artifacts: dict[str, str] = field(default_factory=dict)
+    ocr_reprocessed: bool = False
 
     def available_ocr_engines(self) -> tuple[str, ...]:
         if self.ocr_review is None:
@@ -34,7 +44,7 @@ class ProcessingResult:
 
     @property
     def selected_ocr_engine(self) -> str | None:
-        """Motor de la vista activa; puede ser sólo una sugerencia automática."""
+        """Motor de la vista activa."""
         if self.ocr_review is not None:
             return self.ocr_review.selected_engine
         return self.ocr_engine
@@ -61,6 +71,18 @@ class ProcessingResult:
             return True
         return self.ocr_review.selection_confirmed
 
+    def register_ocr_artifact(self, engine: str, pdf_path: str | Path) -> None:
+        normalized = str(engine or "").strip().lower()
+        if normalized not in {"tesseract", "paddleocr"}:
+            raise ValueError(f"Motor OCR no soportado para artefacto: {engine!r}.")
+        self.ocr_artifacts[normalized] = str(Path(pdf_path).expanduser().resolve())
+
+    def ocr_artifact_path(self, engine: str | None = None) -> str | None:
+        normalized = str(engine or self.ocr_engine or "").strip().lower()
+        if not normalized:
+            return None
+        return self.ocr_artifacts.get(normalized)
+
     def _activate_ocr_candidate(self, engine: str, *, confirm: bool) -> None:
         if self.ocr_review is None:
             raise ValueError("Este resultado no contiene alternativas OCR.")
@@ -71,8 +93,12 @@ class ProcessingResult:
         self.normalized_text = candidate.document.normalized_text
         self.validaciones = list(candidate.validaciones)
         self.ocr_engine = candidate.engine
+        # ``fallback_used`` se conserva sólo por compatibilidad histórica. Un
+        # reproceso manual se identifica de forma independiente con
+        # ``ocr_reprocessed`` y nunca se presenta como fallback automático.
         self.fallback_used = bool(
-            self.ocr_primary_engine
+            not self.ocr_reprocessed
+            and self.ocr_primary_engine
             and candidate.engine != self.ocr_primary_engine
         )
 
