@@ -37,7 +37,7 @@ def _cancel_requested(cancel_event: Any | None) -> bool:
     """Comprueba cancelación cooperativa sin acoplar el engine a threading."""
     if cancel_event is None:
         return False
-    is_set = getattr(cancel_event, 'is_set', None)
+    is_set = getattr(cancel_event, "is_set", None)
     return bool(callable(is_set) and is_set())
 
 
@@ -47,13 +47,13 @@ def _rebase_spatial_words(spatial_words: list[dict], start_page: int) -> list[di
     rebased_words: list[dict] = []
     for word in spatial_words:
         try:
-            page = int(word.get('page', 1) or 1)
+            page = int(word.get("page", 1) or 1)
         except (TypeError, ValueError):
             continue
         if page <= start_page:
             continue
         rebased_word = dict(word)
-        rebased_word['page'] = page - start_page
+        rebased_word["page"] = page - start_page
         rebased_words.append(rebased_word)
     return rebased_words
 
@@ -71,7 +71,7 @@ def _prepare_statement(pdf_path: str, file_name: str) -> PreparedStatement:
             file_name=file_name,
             pdf_path=pdf_path,
             document=None,
-            processing_method='OCR',
+            processing_method="OCR",
         )
 
     document_type = detect_document_type(document)
@@ -90,7 +90,7 @@ def _prepare_statement(pdf_path: str, file_name: str) -> PreparedStatement:
             file_name=file_name,
             pdf_path=pdf_path,
             document=document,
-            processing_method='Digital',
+            processing_method="Digital",
         )
 
     spatial_words = ReaderManager.read_spatial_words(pdf_path, start_page=0)
@@ -109,23 +109,23 @@ def _prepare_statement(pdf_path: str, file_name: str) -> PreparedStatement:
             file_name=file_name,
             pdf_path=pdf_path,
             document=document,
-            processing_method='Digital',
+            processing_method="Digital",
         )
 
     return PreparedStatement(
         file_name=file_name,
         pdf_path=pdf_path,
         document=None,
-        processing_method='OCR',
+        processing_method="OCR",
     )
 
 
 def _result_validations(estado_cuenta, ocr_review) -> list:
     if ocr_review is not None:
         return list(ocr_review.get_candidate(ocr_review.selected_engine).validaciones)
-    if getattr(estado_cuenta, 'movimientos', None) and getattr(
+    if getattr(estado_cuenta, "movimientos", None) and getattr(
         estado_cuenta,
-        'resumen_financiero',
+        "resumen_financiero",
         None,
     ):
         return validar_movimientos(
@@ -139,33 +139,35 @@ def _read_ocr_engine(
     pdf_path: str,
     engine: str,
     cancel_event: Any | None,
+    artifact_dir: str | Path | None,
 ) -> DocumentData:
-    if cancel_event is None:
-        return ReaderManager.read_ocr_engine(
-            pdf_path,
-            engine=engine,
-            start_page=0,
-        )
-    return ReaderManager.read_ocr_engine(
-        pdf_path,
-        engine=engine,
-        start_page=0,
-        cancel_event=cancel_event,
-    )
+    """Ejecuta un OCR y reconstruye DocumentData desde el PDF incrustado."""
+    kwargs: dict[str, Any] = {
+        "engine": engine,
+        "start_page": 0,
+        "artifact_dir": artifact_dir,
+    }
+    if cancel_event is not None:
+        kwargs["cancel_event"] = cancel_event
+    return ReaderManager.read_ocr_for_parser(pdf_path, **kwargs)
 
 
 def _process_prepared_statement(
     prepared: PreparedStatement,
-    ocr_primary_engine: str = 'tesseract',
+    ocr_primary_engine: str = "tesseract",
     cancel_event: Any | None = None,
+    ocr_artifact_dir: str | Path | None = None,
 ) -> ProcessingResult:
-    """Procesa un documento con el motor OCR seleccionado para el lote.
+    """Procesa un documento con un único OCR y un reader espacial canónico.
 
-    Los PDFs digitales nunca entran a OCR. Para documentos escaneados se ejecuta
-    exactamente un motor: el configurado al iniciar el lote. Un error de arranque,
-    una ausencia de movimientos o una validación fallida no disparan un segundo
-    OCR de forma automática; esas condiciones se conservan como resultado o error
-    auditable para una eventual acción explícita por archivo.
+    Para un PDF escaneado la secuencia productiva es deliberadamente explícita:
+
+    ``motor OCR -> PDF con capa invisible verificada -> PDFWordReader -> parser``.
+
+    El motor configurado sigue siendo el único que se ejecuta. La creación de la
+    capa PDF no es un segundo OCR y no toma decisiones a partir de validaciones.
+    Si la geometría no sobrevive a la incrustación, el archivo falla antes de
+    entrar al parser en lugar de consumir coordenadas degradadas.
     """
     if _cancel_requested(cancel_event):
         raise CancelledError()
@@ -173,20 +175,21 @@ def _process_prepared_statement(
     document = prepared.document
     requested_primary_engine = normalize_ocr_engine(ocr_primary_engine)
     primary_engine = requested_primary_engine
-    if prepared.processing_method == 'OCR':
+    if prepared.processing_method == "OCR":
         document = _read_ocr_engine(
             prepared.pdf_path,
             primary_engine,
             cancel_event,
+            ocr_artifact_dir,
         )
         metadata = dict(document.metadata or {})
         metadata.update(
             {
-                'ocr_requested_primary_engine': requested_primary_engine,
-                'ocr_primary_engine': primary_engine,
-                'ocr_secondary_engine': None,
-                'ocr_fallback_attempted': False,
-                'ocr_fallback_selected': False,
+                "ocr_requested_primary_engine": requested_primary_engine,
+                "ocr_primary_engine": primary_engine,
+                "ocr_secondary_engine": None,
+                "ocr_fallback_attempted": False,
+                "ocr_fallback_selected": False,
             }
         )
         document.metadata = metadata
@@ -231,13 +234,17 @@ def _process_prepared_statement(
     secondary_engine = None
     fallback_attempted = False
     fallback_used = False
+    ocr_artifacts: dict[str, str] = {}
 
-    if prepared.processing_method == 'OCR':
-        primary_used = str(metadata.get('ocr_primary_engine') or primary_engine)
-        secondary_engine = metadata.get('ocr_secondary_engine')
-        fallback_attempted = bool(metadata.get('ocr_fallback_attempted', False))
-        fallback_used = bool(metadata.get('ocr_fallback_selected', False))
-        selected_engine = str(metadata.get('reader') or primary_engine).lower()
+    if prepared.processing_method == "OCR":
+        primary_used = str(metadata.get("ocr_primary_engine") or primary_engine)
+        secondary_engine = metadata.get("ocr_secondary_engine")
+        fallback_attempted = bool(metadata.get("ocr_fallback_attempted", False))
+        fallback_used = bool(metadata.get("ocr_fallback_selected", False))
+        selected_engine = str(metadata.get("reader") or primary_engine).lower()
+        artifact_path = metadata.get("ocr_artifact_path")
+        if artifact_path and selected_engine:
+            ocr_artifacts[selected_engine] = str(artifact_path)
         if ocr_review is not None:
             selected_engine = ocr_review.selected_engine
             fallback_attempted = True
@@ -248,9 +255,7 @@ def _process_prepared_statement(
                     for engine in ocr_review.available_engines()
                     if engine != primary_used
                 ]
-                secondary_engine = (
-                    secondary_candidates[0] if secondary_candidates else None
-                )
+                secondary_engine = secondary_candidates[0] if secondary_candidates else None
 
     return ProcessingResult(
         file_name=prepared.file_name,
@@ -263,19 +268,22 @@ def _process_prepared_statement(
         ocr_review=ocr_review,
         ocr_engine=selected_engine,
         ocr_requested_primary_engine=(
-            requested_primary_engine if prepared.processing_method == 'OCR' else None
+            requested_primary_engine if prepared.processing_method == "OCR" else None
         ),
         ocr_primary_engine=primary_used,
         ocr_secondary_engine=secondary_engine,
         fallback_attempted=fallback_attempted,
         fallback_used=fallback_used,
+        source_pdf_path=str(Path(prepared.pdf_path).expanduser().resolve()),
+        ocr_artifacts=ocr_artifacts,
     )
 
 
 def process_bank_statements(
     pdf_paths: list[str],
     file_names: list[str] | None = None,
-    ocr_primary_engine: str = 'tesseract',
+    ocr_primary_engine: str = "tesseract",
+    ocr_artifact_dir: str | Path | None = None,
 ) -> list[ProcessingResult]:
     results: list[ProcessingResult] = []
     primary_engine = normalize_ocr_engine(ocr_primary_engine)
@@ -285,6 +293,7 @@ def process_bank_statements(
         result = _process_prepared_statement(
             prepared,
             ocr_primary_engine=primary_engine,
+            ocr_artifact_dir=ocr_artifact_dir,
         )
         results.append(result)
     return results
@@ -296,8 +305,9 @@ def process_bank_statements_incremental(
     classification_workers: int = 2,
     digital_workers: int = 4,
     ocr_workers: int = 1,
-    ocr_primary_engine: str = 'tesseract',
+    ocr_primary_engine: str = "tesseract",
     cancel_event: Any | None = None,
+    ocr_artifact_dir: str | Path | None = None,
 ):
     """Procesa lotes concurrentes y emite resultados conforme terminan.
 
@@ -306,9 +316,9 @@ def process_bank_statements_incremental(
     ``cancelled`` para todo archivo no terminado. Los resultados ``completed``
     emitidos antes de Stop se conservan para auditoría/exportación.
 
-    Los trabajos que ya estaban dentro de una llamada nativa de OCR reciben el
-    mismo evento de cancelación y terminan cooperativamente entre páginas; no se
-    espera a que finalicen para devolver el control a la interfaz.
+    ``ocr_artifact_dir`` es opcional. Cuando la interfaz proporciona un
+    directorio de sesión, los PDFs OCR verificados permanecen allí para descarga;
+    sin él se eliminan después de reconstruir el ``DocumentData`` canónico.
     """
     total = len(pdf_paths)
     if total == 0:
@@ -321,15 +331,15 @@ def process_bank_statements_incremental(
 
     classification_executor = ThreadPoolExecutor(
         max_workers=classification_workers,
-        thread_name_prefix='statement-classifier',
+        thread_name_prefix="statement-classifier",
     )
     digital_executor = ThreadPoolExecutor(
         max_workers=digital_workers,
-        thread_name_prefix='statement-digital',
+        thread_name_prefix="statement-digital",
     )
     ocr_executor = ThreadPoolExecutor(
         max_workers=ocr_workers,
-        thread_name_prefix='statement-ocr',
+        thread_name_prefix="statement-ocr",
     )
 
     future_map: dict[Any, tuple[str, int, str, PreparedStatement | None]] = {}
@@ -343,7 +353,7 @@ def process_bank_statements_incremental(
             if _cancel_requested(cancel_event):
                 cancelled_indices.add(index)
                 yield ProcessingEvent(
-                    kind='cancelled',
+                    kind="cancelled",
                     index=index,
                     file_name=file_name,
                     processing_method=None,
@@ -354,7 +364,7 @@ def process_bank_statements_incremental(
                 pdf_path,
                 file_name,
             )
-            future_map[future] = ('classification', index, file_name, None)
+            future_map[future] = ("classification", index, file_name, None)
 
         while future_map:
             if _cancel_requested(cancel_event):
@@ -366,7 +376,7 @@ def process_bank_statements_incremental(
                         continue
                     cancelled_indices.add(index)
                     yield ProcessingEvent(
-                        kind='cancelled',
+                        kind="cancelled",
                         index=index,
                         file_name=file_name,
                         processing_method=(
@@ -394,25 +404,23 @@ def process_bank_statements_incremental(
                     if index not in cancelled_indices:
                         cancelled_indices.add(index)
                         yield ProcessingEvent(
-                            kind='cancelled',
+                            kind="cancelled",
                             index=index,
                             file_name=file_name,
                             processing_method=(
-                                prepared.processing_method
-                                if prepared is not None
-                                else None
+                                prepared.processing_method if prepared is not None else None
                             ),
                         )
                     continue
 
-                if future_type == 'classification':
+                if future_type == "classification":
                     try:
                         prepared = future.result()
                     except CancelledError:
                         if index not in cancelled_indices:
                             cancelled_indices.add(index)
                             yield ProcessingEvent(
-                                kind='cancelled',
+                                kind="cancelled",
                                 index=index,
                                 file_name=file_name,
                                 processing_method=None,
@@ -421,7 +429,7 @@ def process_bank_statements_incremental(
                     except Exception as ex:
                         finished_indices.add(index)
                         yield ProcessingEvent(
-                            kind='error',
+                            kind="error",
                             index=index,
                             file_name=file_name,
                             processing_method=None,
@@ -433,7 +441,7 @@ def process_bank_statements_incremental(
                         if index not in cancelled_indices:
                             cancelled_indices.add(index)
                             yield ProcessingEvent(
-                                kind='cancelled',
+                                kind="cancelled",
                                 index=index,
                                 file_name=file_name,
                                 processing_method=prepared.processing_method,
@@ -441,14 +449,14 @@ def process_bank_statements_incremental(
                         continue
 
                     yield ProcessingEvent(
-                        kind='started',
+                        kind="started",
                         index=index,
                         file_name=file_name,
                         processing_method=prepared.processing_method,
                     )
                     executor = (
                         ocr_executor
-                        if prepared.processing_method == 'OCR'
+                        if prepared.processing_method == "OCR"
                         else digital_executor
                     )
                     processing_future = executor.submit(
@@ -456,9 +464,10 @@ def process_bank_statements_incremental(
                         prepared,
                         primary_engine,
                         cancel_event,
+                        ocr_artifact_dir,
                     )
                     future_map[processing_future] = (
-                        'processing',
+                        "processing",
                         index,
                         file_name,
                         prepared,
@@ -471,26 +480,22 @@ def process_bank_statements_incremental(
                     if index not in cancelled_indices:
                         cancelled_indices.add(index)
                         yield ProcessingEvent(
-                            kind='cancelled',
+                            kind="cancelled",
                             index=index,
                             file_name=file_name,
                             processing_method=(
-                                prepared.processing_method
-                                if prepared is not None
-                                else None
+                                prepared.processing_method if prepared is not None else None
                             ),
                         )
                     continue
                 except Exception as ex:
                     finished_indices.add(index)
                     yield ProcessingEvent(
-                        kind='error',
+                        kind="error",
                         index=index,
                         file_name=file_name,
                         processing_method=(
-                            prepared.processing_method
-                            if prepared is not None
-                            else None
+                            prepared.processing_method if prepared is not None else None
                         ),
                         error=ex,
                     )
@@ -500,7 +505,7 @@ def process_bank_statements_incremental(
                     if index not in cancelled_indices:
                         cancelled_indices.add(index)
                         yield ProcessingEvent(
-                            kind='cancelled',
+                            kind="cancelled",
                             index=index,
                             file_name=file_name,
                             processing_method=prepared.processing_method,
@@ -509,7 +514,7 @@ def process_bank_statements_incremental(
 
                 finished_indices.add(index)
                 yield ProcessingEvent(
-                    kind='completed',
+                    kind="completed",
                     index=index,
                     file_name=file_name,
                     processing_method=prepared.processing_method,
