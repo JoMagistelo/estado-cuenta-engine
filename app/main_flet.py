@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
+from concurrent.futures import CancelledError
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
@@ -15,7 +18,8 @@ import flet as ft
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
-from engine.ocr_fallback_policy import normalize_ocr_engine
+from engine.ocr_fallback_policy import normalize_ocr_engine, secondary_ocr_engine
+from engine.ocr_reprocessing import reprocess_with_secondary_ocr
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
@@ -27,6 +31,7 @@ SELECTOR_ENGINE_WIDTH = 150
 SELECTOR_STATUS_WIDTH = 54
 SELECTOR_TIME_WIDTH = 64
 SELECTOR_VALIDATION_WIDTH = 58
+SELECTOR_ACTIONS_WIDTH = 112
 
 GOB_GREEN = '#1F4D3A'
 GOB_GREEN_DARK = '#163A2C'
@@ -141,6 +146,9 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.LIGHT
     page.scroll = ft.ScrollMode.AUTO
 
+    artifact_session = tempfile.TemporaryDirectory(prefix='estado_cuenta_engine_ocr_')
+    artifact_dir = Path(artifact_session.name)
+
     results: list[Any] = []
     processing_items: list[dict[str, Any]] = []
     event_queue: Queue = Queue()
@@ -166,6 +174,11 @@ def main(page: ft.Page):
         'completion_notified': False,
         'close_dialog_open': False,
         'close_after_stop': False,
+        'reprocess_cancel_events': {},
+        # Conservar la referencia evita que TemporaryDirectory se limpie antes
+        # de que el usuario descargue los artefactos OCR de la sesión.
+        'artifact_session': artifact_session,
+        'artifact_dir': artifact_dir,
     }
 
     status_text = ft.Text('', size=11, color=ft.Colors.ON_SURFACE_VARIANT)
@@ -261,26 +274,19 @@ def main(page: ft.Page):
             if result is None:
                 requested = item.get('requested_ocr_engine') or settings['ocr_primary_engine']
                 return engine_label(requested)
-
-            requested = getattr(result, 'ocr_requested_primary_engine', None)
-            primary = getattr(result, 'ocr_primary_engine', None)
-            secondary = getattr(result, 'ocr_secondary_engine', None)
-            if requested and primary and requested != primary:
-                return f'{engine_label(requested)} ↯ {engine_label(primary)}'
-
-            if getattr(result, 'fallback_attempted', False) and secondary:
-                available = set(result.available_ocr_engines())
-                marker = '✓' if secondary in available else '⚠'
-                return f'{engine_label(primary)} → {engine_label(secondary)} {marker}'
-
-            return engine_label(getattr(result, 'ocr_engine', None) or primary)
+            if getattr(result, 'ocr_reprocessed', False):
+                return f"{engine_label(getattr(result, 'ocr_engine', None))} · reprocesado"
+            return engine_label(
+                getattr(result, 'ocr_engine', None)
+                or getattr(result, 'ocr_primary_engine', None)
+            )
         return 'Detectando'
 
     def bank_key_for_item(item: dict[str, Any]) -> str:
         result = item.get('result')
         if result is None:
             status = item.get('status')
-            if status == 'processing':
+            if status in {'processing', 'reprocessing'}:
                 return 'PROCESANDO'
             if status == 'error':
                 return 'ERROR'
@@ -293,6 +299,7 @@ def main(page: ft.Page):
         return {
             'classifying': 'Detectando tipo',
             'processing': 'Procesando',
+            'reprocessing': 'Reprocesando',
             'completed': 'Terminado',
             'error': 'Error',
             'cancelled': 'Cancelado',
@@ -300,7 +307,7 @@ def main(page: ft.Page):
 
     def status_control(item: dict[str, Any]) -> ft.Control:
         status = item.get('status')
-        if status in {'classifying', 'processing'}:
+        if status in {'classifying', 'processing', 'reprocessing'}:
             return ft.ProgressRing(width=13, height=13)
         if status == 'completed':
             return ft.Icon(ft.Icons.CHECK_CIRCLE, size=15, color=ft.Colors.GREEN)
@@ -321,9 +328,81 @@ def main(page: ft.Page):
                 bank_key_for_item(item),
                 status_text_for_item(item),
                 str(item.get('error') or ''),
+                str(item.get('reprocess_error') or ''),
             ]
         ).lower()
         return query in haystack
+
+    def ordered_artifact_engines(result) -> list[str]:
+        artifacts = getattr(result, 'ocr_artifacts', {}) or {}
+        ordered: list[str] = []
+        for engine in (
+            getattr(result, 'ocr_primary_engine', None),
+            getattr(result, 'ocr_secondary_engine', None),
+            'tesseract',
+            'paddleocr',
+        ):
+            normalized = normalize_ocr_engine(engine, default='')
+            if normalized and normalized in artifacts and normalized not in ordered:
+                ordered.append(normalized)
+        return ordered
+
+    def ocr_action_controls(index: int, item: dict[str, Any]) -> ft.Control:
+        result = item.get('result')
+        if item.get('processing_method') != 'OCR' or result is None:
+            return ft.Row([], spacing=0, tight=True)
+
+        controls: list[ft.Control] = []
+        artifacts = getattr(result, 'ocr_artifacts', {}) or {}
+        for engine in ordered_artifact_engines(result):
+            artifact_path = artifacts.get(engine)
+            if not artifact_path:
+                continue
+            controls.append(
+                ft.IconButton(
+                    icon=ft.Icons.DOWNLOAD_OUTLINED,
+                    icon_size=16,
+                    width=30,
+                    height=30,
+                    padding=3,
+                    tooltip=f'Descargar PDF con texto incrustado · {engine_label(engine)}',
+                    on_click=(
+                        lambda e, i=index, eng=engine: page.run_task(
+                            download_ocr_artifact,
+                            i,
+                            eng,
+                        )
+                    ),
+                )
+            )
+
+        primary = normalize_ocr_engine(
+            getattr(result, 'ocr_primary_engine', None)
+            or getattr(result, 'ocr_engine', None),
+            default='',
+        )
+        secondary = secondary_ocr_engine(primary) if primary else None
+        already_reprocessed = bool(
+            getattr(result, 'ocr_reprocessed', False)
+            or (secondary and secondary in artifacts)
+        )
+        controls.append(
+            ft.IconButton(
+                icon=ft.Icons.REFRESH,
+                icon_size=16,
+                width=30,
+                height=30,
+                padding=3,
+                tooltip='Reprocesar usando motor secundario',
+                disabled=(
+                    state['running']
+                    or item.get('status') != 'completed'
+                    or already_reprocessed
+                ),
+                on_click=lambda e, i=index: start_secondary_reprocess(i),
+            )
+        )
+        return ft.Row(controls, spacing=1, tight=True)
 
     def selector_row_content(index: int, item: dict[str, Any]) -> ft.Row:
         result = item.get('result')
@@ -366,6 +445,11 @@ def main(page: ft.Page):
                     ft.Text(cargos, size=10),
                     width=SELECTOR_VALIDATION_WIDTH,
                     alignment=ft.Alignment.CENTER,
+                ),
+                ft.Container(
+                    ocr_action_controls(index, item),
+                    width=SELECTOR_ACTIONS_WIDTH,
+                    alignment=ft.Alignment.CENTER_RIGHT,
                 ),
             ],
             spacing=4,
@@ -411,6 +495,7 @@ def main(page: ft.Page):
                     heading('Tiempo', SELECTOR_TIME_WIDTH),
                     heading('Abonos', SELECTOR_VALIDATION_WIDTH),
                     heading('Cargos', SELECTOR_VALIDATION_WIDTH),
+                    heading('OCR', SELECTOR_ACTIONS_WIDTH),
                 ],
                 spacing=4,
             ),
@@ -574,6 +659,143 @@ def main(page: ft.Page):
         rebuild_selector()
         render_result(result)
 
+    def _safe_pdf_name(file_name: str, engine: str) -> str:
+        stem = Path(file_name).stem or 'estado_de_cuenta'
+        invalid = '<>:"/\\|?*'
+        safe_stem = ''.join('_' if char in invalid else char for char in stem).strip(' .')
+        return f'{safe_stem or "estado_de_cuenta"}_OCR_{engine_label(engine)}.pdf'
+
+    async def download_ocr_artifact(index: int, engine: str) -> None:
+        if not 0 <= index < len(processing_items):
+            return
+        result = processing_items[index].get('result')
+        if result is None:
+            return
+        artifact_value = getattr(result, 'ocr_artifact_path')(engine)
+        if not artifact_value:
+            status_text.value = '❌ El PDF OCR solicitado ya no está disponible.'
+            status_text.color = ft.Colors.RED
+            status_text.update()
+            return
+        source = Path(artifact_value)
+        if not source.is_file():
+            status_text.value = '❌ El PDF OCR solicitado ya no está disponible.'
+            status_text.color = ft.Colors.RED
+            status_text.update()
+            return
+
+        destination = await ft.FilePicker().save_file(
+            dialog_title=f'Guardar PDF OCR · {engine_label(engine)}',
+            file_name=_safe_pdf_name(result.file_name, engine),
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=['pdf'],
+        )
+        if not destination:
+            return
+        if not destination.lower().endswith('.pdf'):
+            destination += '.pdf'
+
+        try:
+            target = Path(destination).expanduser().resolve()
+            if target != source.resolve():
+                shutil.copy2(source, target)
+            status_text.value = f'✅ PDF OCR de {engine_label(engine)} guardado correctamente.'
+            status_text.color = GOB_GREEN
+        except Exception as ex:
+            status_text.value = f'❌ No fue posible guardar el PDF OCR: {ex}'
+            status_text.color = ft.Colors.RED
+        try:
+            status_text.update()
+        except Exception:
+            page.update()
+
+    def refresh_manual_controls() -> None:
+        busy = bool(state['reprocess_cancel_events'])
+        upload_button.disabled = state['running'] or busy
+        config_button.disabled = state['running'] or busy
+        try:
+            upload_button.update()
+            config_button.update()
+        except Exception:
+            pass
+
+    def start_secondary_reprocess(index: int) -> None:
+        if state['running'] or not 0 <= index < len(processing_items):
+            return
+        item = processing_items[index]
+        result = item.get('result')
+        if item.get('status') != 'completed' or result is None:
+            return
+        if getattr(result, 'processing_method', None) != 'OCR':
+            return
+        if getattr(result, 'ocr_reprocessed', False):
+            return
+
+        primary = normalize_ocr_engine(
+            getattr(result, 'ocr_primary_engine', None)
+            or getattr(result, 'ocr_engine', None)
+        )
+        secondary = secondary_ocr_engine(primary)
+        cancel_event = threading.Event()
+        state['reprocess_cancel_events'][index] = cancel_event
+        item.update(
+            status='reprocessing',
+            reprocess_error=None,
+            reprocess_started_at=time.perf_counter(),
+        )
+        status_text.value = (
+            f'Reprocesando {result.file_name} con {engine_label(secondary)}…'
+        )
+        status_text.color = ft.Colors.ON_SURFACE
+        rebuild_selector()
+        refresh_manual_controls()
+        try:
+            status_text.update()
+        except Exception:
+            page.update()
+
+        batch_id = state['batch_id']
+
+        def worker():
+            started = time.perf_counter()
+            try:
+                updated = reprocess_with_secondary_ocr(
+                    result,
+                    artifact_dir=artifact_dir,
+                    cancel_event=cancel_event,
+                )
+                event_queue.put(
+                    (
+                        'reprocess_completed',
+                        batch_id,
+                        index,
+                        updated,
+                        time.perf_counter() - started,
+                    )
+                )
+            except CancelledError:
+                event_queue.put(
+                    (
+                        'reprocess_cancelled',
+                        batch_id,
+                        index,
+                        time.perf_counter() - started,
+                    )
+                )
+            except Exception as ex:
+                event_queue.put(
+                    (
+                        'reprocess_error',
+                        batch_id,
+                        index,
+                        ex,
+                        traceback.format_exc(),
+                        time.perf_counter() - started,
+                    )
+                )
+
+        page.run_thread(worker)
+
     selector_filter.on_change = lambda e: rebuild_selector()
 
     def update_status(*, direct_update: bool = True):
@@ -581,13 +803,17 @@ def main(page: ft.Page):
         completed = sum(item.get('status') == 'completed' for item in processing_items)
         errors = sum(item.get('status') == 'error' for item in processing_items)
         cancelled = sum(item.get('status') == 'cancelled' for item in processing_items)
-        active_or_pending = total - completed - errors - cancelled
+        reprocessing = sum(item.get('status') == 'reprocessing' for item in processing_items)
+        active_or_pending = total - completed - errors - cancelled - reprocessing
         finished = completed + errors + cancelled
         scanned_active = sum(
             item.get('status') == 'processing' and item.get('processing_method') == 'OCR'
             for item in processing_items
         )
-        if state['stop_requested'] and active_or_pending > 0:
+        if reprocessing and not state['running']:
+            status_text.value = f'Reprocesando {reprocessing} archivo(s) con motor secundario'
+            status_text.color = ft.Colors.ON_SURFACE
+        elif state['stop_requested'] and active_or_pending > 0:
             status_text.value = f'Deteniendo · {completed} resultado(s) conservado(s)'
             if scanned_active:
                 status_text.value += ' · finalizando OCR ya iniciado'
@@ -971,6 +1197,7 @@ def main(page: ft.Page):
         active = result.selected_ocr_engine
         confirmed = result.confirmed_ocr_engine
         recommended = result.recommended_ocr_engine
+        manual_reprocess = 'reproceso_manual' in tuple(getattr(review, 'trigger_reasons', ()) or ())
         columns: list[ft.Control] = []
         for engine in engines:
             candidate = review.get_candidate(engine)
@@ -1041,22 +1268,33 @@ def main(page: ft.Page):
             if confirmed is None
             else f'✓ Para exportación se conservará {engine_label(confirmed)}.'
         )
+        title = 'Reprocesado OCR por archivo' if manual_reprocess else 'Comparación OCR'
+        side_text = (
+            f'Resultado activo: {engine_label(active)}'
+            if manual_reprocess
+            else f'Sugerencia automática: {engine_label(recommended)}'
+        )
+        explanation = (
+            'El motor secundario se ejecutó únicamente para este PDF. El resultado secundario quedó activo y confirmado; puedes volver al primario si lo prefieres.'
+            if manual_reprocess
+            else 'Puedes revisar ambos motores. La sugerencia automática no se guarda por defecto: la elección para Excel siempre es manual.'
+        )
         return ft.Container(
             ft.Column(
                 [
                     ft.Row(
                         [
-                            ft.Text('Comparación OCR', size=10, weight=ft.FontWeight.BOLD),
+                            ft.Text(title, size=10, weight=ft.FontWeight.BOLD),
                             ft.Container(expand=True),
                             ft.Text(
-                                f'Sugerencia automática: {engine_label(recommended)}',
+                                side_text,
                                 size=8,
                                 color=ft.Colors.ON_SURFACE_VARIANT,
                             ),
                         ]
                     ),
                     ft.Text(
-                        'Puedes revisar ambos motores. La sugerencia automática no se guarda por defecto: la elección para Excel siempre es manual.',
+                        explanation,
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
@@ -1464,7 +1702,7 @@ def main(page: ft.Page):
             pass
 
     def show_settings(e=None):
-        if state['running']:
+        if state['running'] or state['reprocess_cancel_events']:
             return
         current = settings['ocr_primary_engine']
         selector = ft.Dropdown(
@@ -1494,7 +1732,7 @@ def main(page: ft.Page):
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Text(
-                        'El motor secundario no se ejecuta automáticamente ante errores, ausencia de movimientos o validaciones fallidas. Cualquier uso del segundo motor debe iniciarse de forma explícita para un archivo concreto.',
+                        'El motor secundario sólo se ejecuta cuando eliges “Reprocesar usando motor secundario” para un PDF OCR ya terminado.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
@@ -1579,7 +1817,13 @@ def main(page: ft.Page):
                         ft.Divider(),
                         ft.Text('Motor OCR activo', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                         ft.Text(
-                            'Los PDFs escaneados se procesan exclusivamente con el motor seleccionado en Configuración. El programa no ejecuta un segundo OCR de forma automática.',
+                            'Los PDFs escaneados se procesan inicialmente sólo con el motor seleccionado en Configuración. El programa no ejecuta un segundo OCR de forma automática.',
+                            size=9,
+                        ),
+                        ft.Divider(),
+                        ft.Text('PDF OCR y reprocesado', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        ft.Text(
+                            'En cada PDF OCR terminado aparece un icono de descarga para guardar el documento con texto incrustado y un botón de reproceso manual. Si se ejecuta el motor secundario con éxito, se conservan ambos PDFs OCR y el nuevo resultado queda activo.',
                             size=9,
                         ),
                         ft.Divider(),
@@ -1595,7 +1839,7 @@ def main(page: ft.Page):
                     spacing=7,
                     tight=True,
                     scroll=ft.ScrollMode.AUTO,
-                    height=430,
+                    height=470,
                 ),
             ),
             actions=[ft.TextButton(content='Cerrar', on_click=lambda ev: page.pop_dialog())],
@@ -1619,6 +1863,20 @@ def main(page: ft.Page):
         except Exception:
             pass
 
+    def clear_ocr_artifacts() -> None:
+        try:
+            for path in artifact_dir.iterdir():
+                if path.is_file():
+                    path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def cleanup_artifact_session() -> None:
+        try:
+            artifact_session.cleanup()
+        except Exception:
+            pass
+
     def play_completion_sound() -> None:
         if state['completion_notified'] or state['stop_requested']:
             return
@@ -1630,8 +1888,6 @@ def main(page: ft.Page):
 
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
         except Exception:
-            # El sonido es únicamente feedback visual/sonoro y nunca debe
-            # interferir con el resultado ni con el ejecutable portable.
             pass
 
     def request_stop(_=None, *, close_after: bool = False):
@@ -1817,12 +2073,14 @@ def main(page: ft.Page):
 
     async def close_window_after_finish():
         page.window.prevent_close = False
+        cleanup_artifact_session()
         await page.window.close()
 
     def show_close_guard():
         if state['close_dialog_open']:
             return
         state['close_dialog_open'] = True
+        manual_active = bool(state['reprocess_cancel_events']) and not state['running']
 
         def keep_working(_):
             state['close_dialog_open'] = False
@@ -1832,13 +2090,28 @@ def main(page: ft.Page):
         def stop_and_close(_):
             state['close_dialog_open'] = False
             page.pop_dialog()
-            request_stop(close_after=True)
+            if state['running']:
+                request_stop(close_after=True)
+                return
+            state['close_after_stop'] = True
+            for cancel_event in list(state['reprocess_cancel_events'].values()):
+                cancel_event.set()
+            status_text.value = 'Cancelando reprocesado OCR antes de cerrar…'
+            status_text.color = DANGER
+            try:
+                status_text.update()
+            except Exception:
+                pass
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text('Procesamiento en curso'),
+            title=ft.Text('Reprocesado OCR en curso' if manual_active else 'Procesamiento en curso'),
             content=ft.Text(
-                'Para proteger los resultados ya obtenidos, la aplicación no se cerrará mientras el lote está trabajando.',
+                (
+                    'Se está reprocesando un PDF con el motor secundario. Puedes esperar a que termine o cancelar la operación antes de cerrar.'
+                    if manual_active
+                    else 'Para proteger los resultados ya obtenidos, la aplicación no se cerrará mientras el lote está trabajando.'
+                ),
                 size=10,
             ),
             actions=[
@@ -1851,10 +2124,11 @@ def main(page: ft.Page):
     async def on_window_event(e):
         if e.type != ft.WindowEventType.CLOSE:
             return
-        if state['running']:
+        if state['running'] or state['reprocess_cancel_events']:
             show_close_guard()
             return
         page.window.prevent_close = False
+        cleanup_artifact_session()
         await page.window.close()
 
     page.window.on_event = on_window_event
@@ -1872,6 +2146,7 @@ def main(page: ft.Page):
                 names,
                 ocr_primary_engine=primary_engine,
                 cancel_event=cancel_event,
+                ocr_artifact_dir=artifact_dir,
             ):
                 event_queue.put(('event', batch_id, event))
         except Exception as ex:
@@ -1943,6 +2218,62 @@ def main(page: ft.Page):
             )
             rebuild_selector()
 
+    def handle_reprocess_message(message: tuple) -> None:
+        kind, _batch_id, index = message[:3]
+        if not isinstance(index, int) or not 0 <= index < len(processing_items):
+            return
+        item = processing_items[index]
+        state['reprocess_cancel_events'].pop(index, None)
+
+        if kind == 'reprocess_completed':
+            updated, elapsed = message[3], message[4]
+            item.update(
+                status='completed',
+                result=updated,
+                reprocess_elapsed_seconds=elapsed,
+                reprocess_error=None,
+            )
+            status_text.value = (
+                f'✅ {updated.file_name} reprocesado con '
+                f'{engine_label(updated.ocr_engine)}.'
+            )
+            status_text.color = GOB_GREEN
+            if state.get('selected_index') == index:
+                render_result(updated)
+        elif kind == 'reprocess_cancelled':
+            elapsed = message[3]
+            item.update(
+                status='completed',
+                reprocess_elapsed_seconds=elapsed,
+                reprocess_error=None,
+            )
+            status_text.value = '⏹ Reprocesado OCR cancelado; se conserva el resultado primario.'
+            status_text.color = DANGER
+        elif kind == 'reprocess_error':
+            ex, tb, elapsed = message[3], message[4], message[5]
+            item.update(
+                status='completed',
+                reprocess_elapsed_seconds=elapsed,
+                reprocess_error=str(ex),
+                reprocess_traceback=tb,
+            )
+            status_text.value = f'❌ No fue posible reprocesar el PDF: {ex}'
+            status_text.color = ft.Colors.RED
+
+        rebuild_selector()
+        refresh_manual_controls()
+        try:
+            status_text.update()
+        except Exception:
+            page.update()
+
+        if (
+            state['close_after_stop']
+            and not state['running']
+            and not state['reprocess_cancel_events']
+        ):
+            page.run_task(close_window_after_finish)
+
     def finish_controls():
         was_running = state['running']
         if state['stop_requested']:
@@ -1954,8 +2285,8 @@ def main(page: ft.Page):
             state['elapsed_seconds'] = time.perf_counter() - state['started_at']
         timer_text.value = format_elapsed(state['elapsed_seconds'])
         loading_ring.visible = False
-        upload_button.disabled = False
-        config_button.disabled = False
+        upload_button.disabled = bool(state['reprocess_cancel_events'])
+        config_button.disabled = bool(state['reprocess_cancel_events'])
         help_button.disabled = False
         stop_button.visible = False
         stop_button.disabled = False
@@ -1975,7 +2306,10 @@ def main(page: ft.Page):
                 pass
         if was_running:
             play_completion_sound()
-        if state['close_after_stop']:
+        if (
+            state['close_after_stop']
+            and not state['reprocess_cancel_events']
+        ):
             page.run_task(close_window_after_finish)
 
     async def poller():
@@ -2022,6 +2356,12 @@ def main(page: ft.Page):
                     elif kind == 'finished':
                         finish_controls()
                         update_status()
+                    elif kind in {
+                        'reprocess_completed',
+                        'reprocess_cancelled',
+                        'reprocess_error',
+                    }:
+                        handle_reprocess_message(message)
             except Empty:
                 pass
             except Exception as ex:
@@ -2064,6 +2404,7 @@ def main(page: ft.Page):
         state['completion_notified'] = False
         state['close_after_stop'] = False
         clear_loading_dialog_refs()
+        clear_ocr_artifacts()
         results.clear()
         processing_items.clear()
         try:
@@ -2079,6 +2420,7 @@ def main(page: ft.Page):
                     'status': 'classifying',
                     'result': None,
                     'error': None,
+                    'reprocess_error': None,
                     'requested_ocr_engine': settings['ocr_primary_engine'],
                     'processing_started_at': None,
                     'elapsed_seconds': None,
@@ -2113,6 +2455,8 @@ def main(page: ft.Page):
         )
 
     async def pick_files(e):
+        if state['reprocess_cancel_events']:
+            return
         try:
             selected = await ft.FilePicker().pick_files(
                 dialog_title='Selecciona estados de cuenta PDF',
@@ -2296,7 +2640,7 @@ def main(page: ft.Page):
                 [
                     ft.Text('📤 Exportación', size=13, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        'Incluye los resultados terminados y conserva el resultado activo de cada archivo.',
+                        'Incluye los resultados terminados y conserva el resultado OCR confirmado de cada archivo.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
