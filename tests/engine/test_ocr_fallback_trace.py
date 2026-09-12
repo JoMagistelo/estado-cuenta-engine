@@ -55,9 +55,7 @@ def _document(engine: str) -> DocumentData:
 def test_any_failed_validation_requests_secondary_ocr():
     """La política comparativa conserva sus señales para una llamada explícita."""
     validations = [*_primary_ok(), _validation("Saldo final", False)]
-
     reasons = fallback_trigger_reasons(validations, has_movements=True)
-
     assert "validacion_fallida" in reasons
     assert should_attempt_secondary_fallback(validations, has_movements=True) is True
 
@@ -133,11 +131,11 @@ def test_pipeline_does_not_switch_engine_when_selected_ocr_is_unavailable(monkey
     """Un error del motor seleccionado se propaga sin recuperación silenciosa."""
     calls: list[str] = []
 
-    def _read(path, engine, start_page=0):
+    def _read(path, engine, start_page=0, cancel_event=None, *, artifact_dir=None):
         calls.append(engine)
         raise RuntimeError("paddle unavailable")
 
-    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_engine", _read)
+    monkeypatch.setattr(pipeline.ReaderManager, "read_ocr_for_parser", _read)
 
     prepared = pipeline.PreparedStatement(
         file_name="statement.pdf",
