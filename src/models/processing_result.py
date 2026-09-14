@@ -16,11 +16,14 @@ class ProcessingResult:
     El diccionario se indexa por motor para que un reproceso manual pueda
     conservar el artefacto primario y el secundario sin duplicar el documento
     digital ni mezclar rutas temporales con la lógica bancaria.
+
+    ``estado_cuenta`` puede ser ``None`` cuando un PDF escaneado terminó OCR y
+    conserva un PDF pesquisable, pero no existe un parser bancario aplicable.
     """
 
     file_name: str
     bank_key: str
-    estado_cuenta: EstadoCuenta
+    estado_cuenta: EstadoCuenta | None
     raw_text: str
     normalized_text: str
     validaciones: list[ResultadoValidacion] = field(default_factory=list)
