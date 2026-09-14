@@ -41,3 +41,15 @@ def test_incremental_pipeline_events_are_offset_for_appended_files():
 
 def test_excel_export_keeps_using_all_accumulated_results():
     assert "snapshot = list(results)" in SOURCE
+
+
+def test_finish_restores_export_for_preserved_results():
+    finish_block = SOURCE.split("def finish_controls():", 1)[1].split(
+        "async def poller():", 1
+    )[0]
+
+    assert (
+        "export_button.disabled = not results or bool(state['reprocess_cancel_events'])"
+        in finish_block
+    )
+    assert "export_button," in finish_block
