@@ -7,7 +7,9 @@ from typing import Any
 
 _BEHAVIOR = {
     "saldo_anterior": {"SALDO", "ANTERIOR"},
-    "depositos_abonos": {"DEPOSITOS", "ABONOS"},
+    # "Depósitos" es una de las palabras que Tesseract confunde con más
+    # frecuencia; "Abonos" identifica inequívocamente esta fila del bloque.
+    "depositos_abonos": {"ABONOS"},
     "retiros_cargos": {"RETIROS", "CARGOS"},
     "saldo_final": {"SALDO", "FINAL"},
     "saldo_promedio_minimo_mensual": {"SALDO", "PROMEDIO", "MINIMO", "MENSUAL"},
@@ -80,6 +82,10 @@ def _values(
         if not x_min <= x < x_max:
             continue
         raw = str(word.get("text", "")).strip().replace("$", "").strip()
+        # Bordes de celda OCR suelen adherirse al importe: "864.34)" o
+        # "264,026.94]". Sólo se retira puntuación de los extremos.
+        accounting_negative = raw.startswith("(") and raw.endswith(")")
+        raw = raw.strip("[]{}|!;:()")
         if not (_AMOUNT.fullmatch(raw) or _COUNT.fullmatch(raw)):
             continue
         field = min(labels, key=lambda name: abs(_cy(word) - labels[name][0]))
@@ -89,7 +95,7 @@ def _values(
         if not (_COUNT if field in counts else _AMOUNT).fullmatch(raw):
             continue
         amount = float(raw.rstrip("-").replace(",", ""))
-        if raw.endswith("-"):
+        if raw.endswith("-") or accounting_negative:
             amount = -amount
         # Se toma el importe más a la derecha, no la columna de conteo.
         if field not in selected or x > selected[field][0]:

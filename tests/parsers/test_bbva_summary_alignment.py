@@ -195,3 +195,17 @@ def test_bbva_summary_prefers_complete_table_on_second_page() -> None:
     result = extract_resumen_financiero_words(partial + _financial_table(page=2))
     assert result.depositos_abonos == pytest.approx(264026.94)
     assert result.saldo_final == pytest.approx(864.34)
+
+
+def test_bbva_summary_discards_ocr_cell_borders_without_shifting_rows() -> None:
+    words = _financial_table(page=2, x_shift=90, y_shift=80)
+    for word in words:
+        if word["text"] == "264,026.94":
+            word["text"] = "264,026.94]"
+        elif word["text"] == "864.34":
+            word["text"] = "864.34)"
+    summary = extract_resumen_financiero_words(words)
+    assert summary.saldo_anterior == pytest.approx(10874.54)
+    assert summary.depositos_abonos == pytest.approx(264026.94)
+    assert summary.retiros_cargos == pytest.approx(274037.14)
+    assert summary.saldo_final == pytest.approx(864.34)
