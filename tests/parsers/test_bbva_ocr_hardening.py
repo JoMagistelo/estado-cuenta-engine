@@ -206,6 +206,37 @@ def test_ocr_perforated_operation_dates_keep_their_movements() -> None:
     assert perforated_with_ring_noise.referencia == "424502705632070"
 
 
+def test_ocr_perforation_repairs_shifted_and_split_date_geometry() -> None:
+    words = [
+        word("REFERENCIA", 321.0, 379.0, 70.0),
+        word("14/JUN", 20.0, 54.0, 96.0),
+        word("15/JUN", 65.0, 99.0, 96.0),
+        word("PAGO", 110.0, 140.0, 96.0),
+        word("100.00", 390.0, 421.0, 96.0),
+        # La marca circular desplaza JUN a la banda de liquidación y deja cada
+        # parte de la misma fila visual en una línea OCR diferente.
+        word("JUN", 54.0, 72.0, 119.5),
+        word("12/JUN", 73.0, 107.0, 124.0),
+        word("SUPERCENTER", 110.0, 180.0, 129.0),
+        word("RIO", 185.0, 205.0, 129.0),
+        word("DE", 210.0, 225.0, 129.0),
+        word("LOS", 230.0, 250.0, 129.0),
+        word("869.00", 390.0, 421.0, 128.5),
+        word("Referencia", 321.0, 364.0, 140.0),
+        word("******6302", 368.0, 420.0, 140.0),
+    ]
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 2
+    repaired = movements[1]
+    assert repaired.fecha_operacion == "JUN"
+    assert repaired.fecha_liquidacion == "12/JUN"
+    assert repaired.concepto == "SUPERCENTER RIO DE LOS"
+    assert repaired.cargo == pytest.approx(869.00)
+    assert repaired.referencia == "******6302"
+
+
 def test_month_fragment_alone_does_not_split_a_normal_movement() -> None:
     words = [
         word("REFERENCIA", 321.0, 379.0, 70.0),
