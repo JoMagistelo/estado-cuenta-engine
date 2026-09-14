@@ -113,61 +113,6 @@ def _nearby_words(
     return selected
 
 
-def _digits(value: Any) -> str:
-    return re.sub(r"\D", "", normalize_text(value))
-
-
-def _right_side_digit_candidates(
-    words: Sequence[SpatialWord],
-    anchor: SpatialWord,
-    *,
-    min_length: int,
-    max_length: int,
-    y_tolerance: float = 9.0,
-    max_distance: float = 230.0,
-) -> List[str]:
-    """Busca números impresos a la derecha de una etiqueta OCR.
-
-    Tesseract puede separar ``Cuenta``/``CLABE`` del valor o colocarlos en
-    renglones distintos por pocos puntos. Este helper usa geometría, no una
-    posición absoluta de la página.
-    """
-
-    anchor_right = safe_float(anchor.get("x1"))
-    anchor_y = word_center_y(anchor)
-    nearby = [
-        word
-        for word in _page_one_words(words)
-        if abs(word_center_y(word) - anchor_y) <= y_tolerance
-        and safe_float(word.get("x0")) >= anchor_right - 2.0
-        and safe_float(word.get("x0")) <= anchor_right + max_distance
-    ]
-    nearby.sort(key=lambda word: safe_float(word.get("x0")))
-
-    result: List[str] = []
-    for word in nearby:
-        value = _digits(word.get("text", ""))
-        if min_length <= len(value) <= max_length:
-            result.append(value)
-
-    # OCR también puede partir una cifra en varios tokens consecutivos.
-    joined = ""
-    for word in nearby:
-        value = _digits(word.get("text", ""))
-        if not value:
-            if joined:
-                break
-            continue
-        joined += value
-        if min_length <= len(joined) <= max_length:
-            result.append(joined)
-        if len(joined) > max_length:
-            break
-
-    # Deduplicación estable.
-    return list(dict.fromkeys(result))
-
-
 # ============================================================
 # EXTRACTORES INDIVIDUALES
 # ============================================================
@@ -240,35 +185,10 @@ def extract_fecha_corte(words: List[SpatialWord]) -> Optional[str]:
 
 
 def extract_numero_cuenta(words: List[SpatialWord]) -> Optional[str]:
-    # Ruta histórica: etiqueta y valor quedan en el mismo SpatialLine.
     for line in _page_one_lines(words):
         match = ACCOUNT_RE.search(compact_text(line.text))
         if match:
             return match.group(1)
-
-    # OCR: la etiqueta puede quedar separada varios puntos del valor.
-    for anchor in _page_one_words(words):
-        signature = compact_text(anchor.get("text", ""))
-        if signature != "CUENTA":
-            continue
-
-        candidates = _right_side_digit_candidates(
-            words,
-            anchor,
-            min_length=8,
-            max_length=14,
-        )
-        if candidates:
-            # Se prefiere el candidato más largo; evita tomar folios cortos.
-            return max(candidates, key=len)
-
-    # En este layout Scotiabank el número de cuenta impreso coincide con los
-    # 11 dígitos de cuenta contenidos en la CLABE. Se usa sólo como último
-    # fallback cuando OCR perdió la cifra junto a ``Cuenta``.
-    clabe = extract_clabe(words)
-    if clabe and len(clabe) == 18 and clabe.startswith("044"):
-        return clabe[6:17]
-
     return None
 
 
@@ -288,31 +208,20 @@ def extract_clabe(words: List[SpatialWord]) -> Optional[str]:
         if match:
             return match.group(1)
 
-    page_words = _page_one_words(words)
-
     # Fallback espacial para OCR que separa la CLABE en varios tokens.
+    page_words = _page_one_words(words)
     for anchor in page_words:
         if compact_text(anchor.get("text", "")) != "CLABE":
             continue
 
-        candidates = _right_side_digit_candidates(
-            words,
-            anchor,
-            min_length=18,
-            max_length=18,
-            y_tolerance=10.0,
-            max_distance=260.0,
-        )
-        for digits in candidates:
-            if len(digits) == 18:
-                return digits
-
-    # Último fallback: una CLABE Scotiabank completa es una señal estructurada
-    # inequívoca por su longitud y prefijo 044, aunque OCR haya perdido la
-    # palabra ``CLABE``.
-    for word in page_words:
-        digits = _digits(word.get("text", ""))
-        if len(digits) == 18 and digits.startswith("044"):
+        values = [
+            re.sub(r"\D", "", normalize_text(word.get("text", "")))
+            for word in page_words
+            if abs(word_center_y(word) - word_center_y(anchor)) <= 8.0
+            and safe_float(word.get("x0")) >= safe_float(anchor.get("x1")) - 2.0
+        ]
+        digits = "".join(value for value in values if value)
+        if len(digits) == 18:
             return digits
 
     return None
@@ -332,28 +241,30 @@ def extract_rfc(words: List[SpatialWord]) -> Optional[str]:
 
 def _account_line_y(lines: Sequence[SpatialLine]) -> Optional[float]:
     for line in lines:
-        compact = compact_text(line.text)
-        if ACCOUNT_RE.search(compact):
-            return line.center_y
-        if "CUENTA" in compact and re.search(r"\d{8,14}", compact):
+        if ACCOUNT_RE.search(compact_text(line.text)):
             return line.center_y
     return None
 
 
-def _candidate_name_from_words(words: Sequence[SpatialWord]) -> Optional[str]:
+def _candidate_name_from_line(line: SpatialLine) -> Optional[str]:
     values: List[str] = []
 
-    for word in sorted(words, key=lambda item: safe_float(item.get("x0"))):
-        value = normalize_text(word.get("text", "")).strip("|_—–:;")
+    for word in line.words:
+        center_x = word_center_x(word)
+        if not (55.0 <= center_x <= 300.0):
+            continue
+
+        value = normalize_text(word.get("text", "")).strip("|_—–")
         normalized = normalize_upper(value).strip(".")
 
         if len(normalized) <= 1:
             continue
         if not re.fullmatch(r"[A-ZÁÉÍÓÚÜÑ.&'-]+", normalize_upper(value)):
             continue
+
         values.append(value)
 
-    if len(values) < 2 or len(values) > 7:
+    if len(values) < 2 or len(values) > 6:
         return None
 
     normalized_tokens = {normalize_upper(value).strip(".") for value in values}
@@ -365,72 +276,26 @@ def _candidate_name_from_words(words: Sequence[SpatialWord]) -> Optional[str]:
     return " ".join(values)
 
 
-def _candidate_name_from_line(line: SpatialLine) -> Optional[str]:
-    return _candidate_name_from_words(
-        [
-            word
-            for word in line.words
-            if 40.0 <= word_center_x(word) <= 340.0
-        ]
-    )
-
-
-def _explicit_name_after_label(words: Sequence[SpatialWord]) -> Optional[str]:
-    page_words = _page_one_words(words)
-
-    for anchor in page_words:
-        signature = compact_text(anchor.get("text", ""))
-        if signature not in {"CLIENTE", "NOMBRE", "NOMBRECLIENTE"}:
-            continue
-
-        nearby = [
-            word
-            for word in page_words
-            if abs(word_center_y(word) - word_center_y(anchor)) <= 10.0
-            and safe_float(word.get("x0")) >= safe_float(anchor.get("x1")) - 2.0
-            and safe_float(word.get("x0")) <= safe_float(anchor.get("x1")) + 300.0
-        ]
-        value = _candidate_name_from_words(nearby)
-        if value:
-            return value
-
-    return None
-
-
 def extract_nombre_cliente(words: List[SpatialWord]) -> Optional[str]:
-    explicit = _explicit_name_after_label(words)
-    if explicit:
-        return explicit
-
     lines = _page_one_lines(words)
     account_y = _account_line_y(lines)
-
-    summary_y: Optional[float] = None
-    for line in lines:
-        if "RESUMENDESALDOS" in compact_text(line.text):
-            summary_y = line.center_y
-            break
 
     candidates: List[tuple[float, str]] = []
 
     for line in lines:
-        # El OCR puede desplazar verticalmente el encabezado. En lugar de una
-        # banda fija 45-135, se usa como límite el bloque del resumen y, cuando
-        # existe, la fila de cuenta.
-        if line.center_y < 30.0:
-            continue
-        if summary_y is not None and line.center_y >= summary_y - 8.0:
-            continue
-        if account_y is not None and line.center_y > account_y + 7.0:
+        if not (45.0 <= line.center_y <= 135.0):
             continue
 
         value = _candidate_name_from_line(line)
         if value is None:
             continue
 
+        if account_y is not None and line.center_y > account_y + 5.0:
+            continue
+
         distance = abs(line.center_y - account_y) if account_y is not None else 0.0
         word_count = len(value.split())
-        score = word_count * 12.0 - distance * 0.35
+        score = word_count * 10.0 - distance
         candidates.append((score, value))
 
     if not candidates:
@@ -446,11 +311,12 @@ def extract_nombre_cliente(words: List[SpatialWord]) -> Optional[str]:
 
 
 def extract_datos_cuenta_words(words: List[SpatialWord]) -> DatosCuenta:
-    """Extrae los datos generales Scotiabank desde words digitales u OCR.
+    """
+    Extrae datos generales de Scotiabank mediante anclas semánticas.
 
-    Los fallbacks OCR se apoyan en etiquetas, cercanía vertical y validación de
-    formato. No cambian el flujo de identificación del banco ni dependen del
-    nombre del archivo para inventar valores.
+    No usa tops absolutos: los valores se localizan por etiqueta, cercanía
+    vertical y validación de formato, por lo que funciona con words de PDF
+    digital y con las coordenadas generadas por Tesseract.
     """
 
     return DatosCuenta(
