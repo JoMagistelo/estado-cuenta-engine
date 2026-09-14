@@ -24,7 +24,7 @@ PADDLEOCR_MODEL_NAMES = (
     "latin_PP-OCRv5_mobile_rec",
 )
 
-APP_VERSION = (3, 0, 0, 0)
+APP_VERSION = (4, 0, 0, 0)
 
 
 def _build_icon() -> Path:

@@ -24,7 +24,7 @@ from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
 
-APP_VERSION = '3.0'
+APP_VERSION = '4.0.0'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 SELECTOR_ENGINE_WIDTH = 150
@@ -1777,9 +1777,9 @@ def main(page: ft.Page):
     def show_help(e=None):
         layout_rows = [
             ('BBVA', 'Digital'),
-            ('Banorte', 'Digital · Escaneado (OCR)'),
+            ('Banorte', 'Digital · Escaneado'),
             ('Banamex', 'Digital'),
-            ('HSBC', 'Digital · Escaneado (OCR)'),
+            ('HSBC', 'Digital · Escaneado'),
             ('Scotiabank', 'Digital'),
             ('Mifel', 'Estado de cuenta habilitado'),
             ('CETESDIRECTO', 'Estado de cuenta habilitado'),
@@ -1790,7 +1790,7 @@ def main(page: ft.Page):
                 ft.Row(
                     [
                         ft.Text('Banco / emisor', size=8, weight=ft.FontWeight.BOLD, width=145),
-                        ft.Text('Layouts habilitados', size=8, weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Text('Tipos admitidos', size=8, weight=ft.FontWeight.BOLD, expand=True),
                     ],
                     spacing=8,
                 ),
@@ -1838,29 +1838,29 @@ def main(page: ft.Page):
                     [
                         ft.Text('Validaciones financieras', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                         ft.Text(
-                            'Las columnas Abonos y Cargos muestran de forma explícita el resultado de las dos conciliaciones principales.',
+                            'Las columnas Abonos y Cargos indican si los totales encontrados en los movimientos coinciden con los totales impresos en el estado de cuenta.',
                             size=9,
                         ),
                         ft.Divider(),
-                        ft.Text('Motor OCR activo', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        ft.Text('Lectura de PDFs escaneados', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                         ft.Text(
-                            'Los PDFs escaneados se procesan inicialmente sólo con el motor seleccionado en Configuración. El programa no ejecuta un segundo OCR de forma automática.',
+                            'Cuando un PDF es escaneado, la aplicación reconoce el texto que aparece en sus páginas para poder procesarlo. Durante el procesamiento normal usa un solo método de lectura; el método alternativo sólo se ejecuta si eliges reprocesar ese archivo.',
                             size=9,
                         ),
                         ft.Divider(),
-                        ft.Text('PDF OCR y reprocesado', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        ft.Text('PDF escaneado con texto seleccionable', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                         ft.Text(
-                            'En cada PDF OCR terminado aparece un icono de descarga para guardar el documento con texto incrustado y un botón de reproceso manual. Si se ejecuta el motor secundario con éxito, se conservan ambos PDFs OCR y el nuevo resultado queda activo.',
+                            'Al terminar un PDF escaneado aparece un icono de descarga para guardar una copia con una capa de texto añadida. Esa copia conserva la imagen del documento y permite seleccionar, copiar y buscar texto. Si lo necesitas, también puedes reprocesar el archivo con el método alternativo y comparar el resultado.',
                             size=9,
                         ),
                         ft.Divider(),
                         ft.Text('Estados durante el procesamiento', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                         ft.Text(
-                            'Los PDFs aparecen en cuanto se clasifica su tipo. Coloca el cursor sobre la lista Digital u OCR y usa la rueda del mouse para recorrerla.',
+                            'Los PDFs aparecen en cuanto se identifica su tipo. Coloca el cursor sobre la lista de PDFs digitales o PDFs escaneados y usa la rueda del mouse para recorrerla.',
                             size=9,
                         ),
                         ft.Divider(),
-                        ft.Text('Bancos y layouts habilitados', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
+                        ft.Text('Bancos y tipos de estado de cuenta habilitados', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                         layouts_table,
                     ],
                     spacing=7,
