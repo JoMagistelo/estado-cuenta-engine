@@ -64,10 +64,17 @@ BBVA_MONTHS = {
     "DIC",
 }
 
+# Tesseract confunde con frecuencia la diagonal con I, 1, J o barra inversa
+# y puede sustituir la O del mes por cero: 27INOV, 13IOCT, 14JJUL, 11/0CT.
+# La coincidencia sigue exigiendo dos componentes y un mes BBVA válido después
+# de normalizarlo, por lo que no convierte identificadores numéricos en fechas.
 BBVA_DATE_PATTERN = re.compile(
-    r"(?<![A-Z0-9])([0-3O][0-9O])\s*/\s*([A-Z]{3})(?![A-Z])",
+    r"(?<![A-Z0-9])([0-4OQ]{2,3})\s*[/\\|I1J]\s*"
+    r"([A-Z0-9]{3})(?![A-Z0-9])",
     re.IGNORECASE,
 )
+
+RECOVERED_MOVEMENT_START_KEY = "_bbva_recovered_movement_start"
 
 # Cuando una perforación tapa el día y la diagonal, el OCR suele conservar
 # únicamente el mes (por ejemplo, "JUN") o añadir delante el contorno del
@@ -334,7 +341,20 @@ def normalize_bbva_date(value: str) -> str | None:
         return None
 
     day_text, month = match.groups()
-    day_text = day_text.replace("O", "0")
+    day_text = (
+        day_text
+        .replace("O", "0")
+        .replace("Q", "0")
+    )
+    month = (
+        month
+        .replace("0", "O")
+        .replace("1", "I")
+    )
+
+    # En "O06/OCT" el primer carácter es ruido duplicado del cero.
+    if len(day_text) == 3 and day_text.startswith("0"):
+        day_text = day_text[1:]
 
     try:
         day = int(day_text)
@@ -373,6 +393,15 @@ def is_start_movement(line, cols):
     )
 
     if normalize_bbva_date(fecha_operacion) is not None:
+        return True
+
+    # La reconstrucción espacial puede marcar una fila cuya fecha de operación
+    # quedó completamente destruida, pero cuya liquidación, concepto e importe
+    # demuestran que sí es un movimiento independiente.
+    if any(
+        bool(word.get(RECOVERED_MOVEMENT_START_KEY))
+        for word in line
+    ):
         return True
 
     # Fallback exclusivo para fechas perforadas: exige el mes residual en la
@@ -532,16 +561,53 @@ def closest_concept_line_index(
     return min(candidates, key=lambda candidate: candidate[0])[1]
 
 
+def has_transaction_evidence_near_line(
+    lines: List[List[Dict[str, Any]]],
+    target_index: int,
+    cols: Dict[str, tuple[float, float]],
+) -> bool:
+    """Confirma movimiento sin depender de que existan columnas de saldo."""
+
+    target = lines[target_index]
+    target_page = line_page(target)
+    target_top = line_top(target)
+
+    for line in lines:
+        if line_page(line) != target_page:
+            continue
+
+        distance = abs(line_top(line) - target_top)
+        if distance > OCR_AMOUNT_ROW_TOLERANCE:
+            continue
+
+        # Cargo o abono son evidencia suficiente. Saldo operación/liquidación
+        # son opcionales en BBVA y nunca deben decidir si la fila existe.
+        for column_name in ("CARGO", "ABONO"):
+            if canonical_amount_text(
+                column_text(line, cols[column_name])
+            ) is not None:
+                return True
+
+        reference_label = column_text(
+            line,
+            cols["REFERENCIA_LABEL"],
+        ).lower()
+        if "referencia" in reference_label:
+            return True
+
+    return False
+
+
 def repair_perforated_date_rows(
     lines: List[List[Dict[str, Any]]],
     cols: Dict[str, tuple[float, float]],
 ) -> List[List[Dict[str, Any]]]:
-    """Recompone filas cuya fecha fue desplazada o partida por el oyuelo.
+    """Recompone filas cuyo inicio no fue reconocido por el OCR.
 
-    La reparación exige simultáneamente una liquidación completa, un mes
-    residual cercano y un concepto cercano. Sólo entonces crea las palabras
-    canónicas necesarias dentro de las columnas históricas. Las listas y
-    palabras de entrada no se mutan.
+    Exige una liquidación completa, un concepto y evidencia transaccional
+    cercana (cargo, abono o referencia). El mes residual ayuda cuando existe,
+    pero ya no es obligatorio: el oyuelo puede destruir la fecha de operación
+    completa. Las columnas de saldo son deliberadamente opcionales.
     """
 
     augmented = [list(line) for line in lines]
@@ -566,8 +632,6 @@ def repair_perforated_date_rows(
             target_index,
             cols,
         )
-        if month is None:
-            continue
 
         concept_index = closest_concept_line_index(
             lines,
@@ -575,6 +639,13 @@ def repair_perforated_date_rows(
             cols,
         )
         if concept_index is None:
+            continue
+
+        if not has_transaction_evidence_near_line(
+            lines,
+            target_index,
+            cols,
+        ):
             continue
 
         target_line = augmented[target_index]
@@ -601,12 +672,17 @@ def repair_perforated_date_rows(
             target_line.extend(concept_words)
 
         # El mes puede haber quedado en la banda de liquidación o en una línea
-        # distinta. Se añade una copia canónica en FECHA_OPERACION.
+        # distinta. Si sobrevivió, se conserva como fecha parcial sin inventar
+        # el día; si desapareció por completo, el valor OCR original queda vacío
+        # o corrupto pero el movimiento ya no se pierde.
         current_operation = column_text(
             target_line,
             cols["FECHA_OPERACION"],
         )
-        if extract_damaged_operation_month(current_operation) is None:
+        if (
+            month is not None
+            and extract_damaged_operation_month(current_operation) is None
+        ):
             xmin, xmax = cols["FECHA_OPERACION"]
             top = line_top(original_line)
             target_line.append(
@@ -619,6 +695,20 @@ def repair_perforated_date_rows(
                     "page": line_page(original_line),
                 }
             )
+
+        # Marca interna: permite iniciar el bloque aunque FECHA_OPERACION haya
+        # sido destruida. No forma parte del texto exportado.
+        target_line.append(
+            {
+                "text": "",
+                "x0": cols["FECHA_OPERACION"][0],
+                "x1": cols["FECHA_OPERACION"][0],
+                "top": line_top(original_line),
+                "bottom": line_top(original_line),
+                "page": line_page(original_line),
+                RECOVERED_MOVEMENT_START_KEY: True,
+            }
+        )
 
         # También se corrige una caja de liquidación desplazada fuera de su
         # columna, sin tocar la palabra OCR original.
