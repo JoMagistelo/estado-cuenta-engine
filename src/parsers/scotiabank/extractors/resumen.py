@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import statistics
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -9,7 +10,6 @@ from models.resumen_financiero import ResumenFinanciero
 from .movimientos import (
     SpatialLine,
     compact_text,
-    extract_movimientos_words,
     extract_statement_period,
     group_words_into_lines,
     is_money_text,
@@ -45,6 +45,49 @@ class SummaryValues:
     saldo_global: float
 
 
+@dataclass(frozen=True, slots=True)
+class SummaryTableGeometry:
+    """Geometría de la tabla impresa ``Resumen de Saldos``."""
+
+    width: float
+    title_y: Optional[float]
+    label_right: float
+    amount_left: float
+    amount_right: float
+    top: float
+    bottom: float
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryPageContext:
+    """Página física donde realmente se encuentra el resumen bancario."""
+
+    page: Optional[int]
+    words: List[SpatialWord]
+    lines: List[SpatialLine]
+    geometry: SummaryTableGeometry
+
+
+# Las primeras siete filas del cuadro son regulares y conservan el mismo orden.
+# Esta secuencia se usa únicamente para localizar una fila cuyo rótulo haya sido
+# omitido por OCR. Nunca se usa para calcular o reconstruir un importe.
+_CORE_ROW_RULES: Tuple[Tuple[str, Tuple[str, ...], Tuple[str, ...]], ...] = (
+    ("saldo_anterior", ("SALDO", "INICIAL"), ("FINAL",)),
+    ("depositos_abonos", ("DEPOSIT",), ()),
+    ("intereses_a_favor", ("INTERES", "RECIB"), ()),
+    ("retiros_cargos", ("RETIRO",), ()),
+    ("manejo_cuenta", ("COMISION", "COBR"), ()),
+    ("impuestos", ("IMPUEST",), ()),
+    ("saldo_final", ("SALDO", "FINAL", "CUENTA"), ("INVERSION",)),
+)
+
+_SUPPLEMENTAL_ROW_RULES: Tuple[Tuple[Tuple[str, ...], Tuple[str, ...]], ...] = (
+    (("SDO", "PROM", "CTA"), ("MIN", "REQUERIDO")),
+    (("SDO", "PROM", "MIN", "REQUERIDO"), ()),
+    (("SALDO", "FINAL", "CUENTA", "INVERSION"), ()),
+)
+
+
 # ============================================================
 # UTILIDADES ESPACIALES
 # ============================================================
@@ -57,28 +100,165 @@ def _page_words(
     return [word for word in words if safe_page(word) == page]
 
 
-def _page_lines(
-    words: Sequence[SpatialWord],
-    page: int,
-) -> List[SpatialLine]:
-    return [line for line in group_words_into_lines(words) if line.page == page]
-
-
 def _document_width(words: Sequence[SpatialWord]) -> float:
     max_x = max((safe_float(word.get("x1")) for word in words), default=592.0)
     return max(612.0, max_x + 18.0)
 
 
-def _matches_markers(
+def _label_signature(value: Any) -> str:
+    """Normaliza rótulos para tolerar errores OCR leves sin tocar importes."""
+
+    compact = compact_text(value)
+    return compact.translate(str.maketrans({"0": "O", "1": "I", "5": "S"}))
+
+
+def _summary_label_text(
     line: SpatialLine,
-    markers: Sequence[str],
+    geometry: SummaryTableGeometry,
+) -> str:
+    parts = [
+        normalize_text(word.get("text", ""))
+        for word in line.words
+        if word_center_x(word) <= geometry.label_right
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def _matches_stems(
+    value: Any,
+    stems: Sequence[str],
     excludes: Sequence[str] = (),
 ) -> bool:
-    compact = compact_text(line.text)
+    signature = _label_signature(value)
     return (
-        all(marker in compact for marker in markers)
-        and not any(marker in compact for marker in excludes)
+        all(stem in signature for stem in stems)
+        and not any(stem in signature for stem in excludes)
     )
+
+
+def _summary_title_line(
+    lines: Sequence[SpatialLine],
+    width: float,
+) -> Optional[SpatialLine]:
+    # El título vive en la mitad izquierda. Restringir X impide confundirlo con
+    # textos de la gráfica de comportamiento situada a la derecha.
+    label_right = width * 0.32
+
+    for line in lines:
+        text = " ".join(
+            normalize_text(word.get("text", ""))
+            for word in line.words
+            if word_center_x(word) <= label_right
+        )
+        signature = _label_signature(text)
+        if "RESUMEN" in signature and "SALDO" in signature:
+            return line
+
+    return None
+
+
+def _summary_geometry(
+    words: Sequence[SpatialWord],
+    lines: Sequence[SpatialLine],
+) -> SummaryTableGeometry:
+    # El ancho se calcula sólo con la página candidata. Una portada o publicidad
+    # con dimensiones distintas no puede desplazar las columnas del resumen.
+    width = _document_width(words)
+    title = _summary_title_line(lines, width)
+    title_y = title.center_y if title is not None else None
+
+    # Coordenadas relativas al ancho para soportar PDF digital y OCR con escala
+    # distinta. En los layouts observados, los rótulos terminan antes de 30% y
+    # la columna de importes ocupa aproximadamente 30%-41% de la página.
+    label_right = width * 0.305
+    amount_left = width * 0.305
+    amount_right = width * 0.415
+
+    if title_y is None:
+        top = 0.0
+        bottom = float("inf")
+    else:
+        top = title_y + max(4.0, width * 0.006)
+        bottom = title_y + width * 0.35
+
+    return SummaryTableGeometry(
+        width=width,
+        title_y=title_y,
+        label_right=label_right,
+        amount_left=amount_left,
+        amount_right=amount_right,
+        top=top,
+        bottom=bottom,
+    )
+
+
+def _row_lines(
+    lines: Sequence[SpatialLine],
+    geometry: SummaryTableGeometry,
+) -> List[SpatialLine]:
+    return [
+        line
+        for line in lines
+        if geometry.top <= line.center_y <= geometry.bottom
+    ]
+
+
+def _find_labeled_row_y(
+    lines: Sequence[SpatialLine],
+    geometry: SummaryTableGeometry,
+    stems: Sequence[str],
+    excludes: Sequence[str] = (),
+) -> Optional[float]:
+    for line in _row_lines(lines, geometry):
+        label = _summary_label_text(line, geometry)
+        if _matches_stems(label, stems, excludes):
+            return line.center_y
+    return None
+
+
+def _money_text_value(value: Any) -> Optional[float]:
+    """Interpreta únicamente texto monetario explícito de la tabla.
+
+    Tesseract puede perder el punto decimal después del separador de miles
+    (``$47,90456`` -> ``$47,904.56``). Esa forma es recuperable porque conserva
+    tres dígitos de miles y dos de centavos. Casos ambiguos como ``$15,1604``
+    se rechazan: completar un dígito ausente sería estimar un importe.
+    """
+
+    text = normalize_text(value)
+    if not text or not re.search(r"\d", text):
+        return None
+
+    normalized = (
+        text
+        .replace("\u2212", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace(" ", "")
+    )
+    numeric = re.sub(r"[^0-9.,]", "", normalized)
+
+    if numeric.count(",") == 1 and "." not in numeric:
+        left, right = numeric.split(",", 1)
+        if 1 <= len(left) <= 3 and len(right) == 5:
+            digits = f"{left}{right}"
+            amount = float(f"{digits[:-2]}.{digits[-2:]}")
+            negative = (
+                normalized.startswith("-")
+                or normalized.endswith("-")
+                or ("(" in normalized and ")" in normalized)
+            )
+            return round(-amount if negative else amount, 2)
+
+        if 1 <= len(left) <= 3 and len(right) in {3, 4}:
+            # ``12,345`` podría ser entero con separador de miles; ``15,1604``
+            # además puede representar un token mutilado. Ninguno permite saber
+            # con certeza los centavos impresos.
+            return None
+
+    if not is_money_text(text):
+        return None
+    return parse_money(text)
 
 
 def _money_candidates(
@@ -88,59 +268,265 @@ def _money_candidates(
     x_max: float,
     y_tolerance: float,
 ) -> List[Tuple[float, float, float]]:
-    result: List[Tuple[float, float, float]] = []
+    """Obtiene importes impresos cerca de una fila, sin derivar valores.
 
-    for word in words:
-        center_x = word_center_x(word)
-        center_y = word_center_y(word)
+    Además del token individual se prueban secuencias cortas de tokens de la
+    misma línea. Esto cubre OCR que separa ``$``/signo/número, pero el importe
+    sigue procediendo literalmente de las words de la tabla.
+    """
 
-        if not (x_min <= center_x <= x_max):
-            continue
-        if abs(center_y - anchor_y) > y_tolerance:
-            continue
+    nearby = [
+        word
+        for word in words
+        if x_min <= word_center_x(word) <= x_max
+        and abs(word_center_y(word) - anchor_y) <= y_tolerance
+    ]
+    nearby.sort(key=lambda word: (word_center_y(word), safe_float(word.get("x0"))))
 
-        text = normalize_text(word.get("text", ""))
-        if not is_money_text(text):
-            continue
+    raw_candidates: List[Tuple[float, float, float]] = []
 
-        value = parse_money(text)
+    for word in nearby:
+        value = _money_text_value(word.get("text", ""))
         if value is None:
             continue
+        raw_candidates.append(
+            (abs(word_center_y(word) - anchor_y), word_center_x(word), value)
+        )
 
-        result.append((abs(center_y - anchor_y), center_x, value))
+    # Agrupa sólo tokens realmente alineados y próximos horizontalmente.
+    max_y_delta = max(2.5, min(5.0, y_tolerance * 0.55))
+    max_gap = max(5.0, (x_max - x_min) * 0.13)
 
-    result.sort(key=lambda item: (item[0], item[1]))
+    for start in range(len(nearby)):
+        sequence = [nearby[start]]
+        for end in range(start + 1, min(len(nearby), start + 4)):
+            previous = sequence[-1]
+            current = nearby[end]
+            if abs(word_center_y(current) - word_center_y(previous)) > max_y_delta:
+                break
+            gap = safe_float(current.get("x0")) - safe_float(previous.get("x1"))
+            if gap > max_gap:
+                break
+            sequence.append(current)
+            joined = "".join(normalize_text(item.get("text", "")) for item in sequence)
+            value = _money_text_value(joined)
+            if value is None:
+                continue
+            center_y = sum(word_center_y(item) for item in sequence) / len(sequence)
+            center_x = (
+                safe_float(sequence[0].get("x0"))
+                + safe_float(sequence[-1].get("x1"))
+            ) / 2.0
+            raw_candidates.append((abs(center_y - anchor_y), center_x, value))
+
+    # Deduplicación estable; prioriza la coincidencia vertical más cercana.
+    seen: set[Tuple[float, float]] = set()
+    result: List[Tuple[float, float, float]] = []
+    for item in sorted(raw_candidates, key=lambda candidate: (candidate[0], candidate[1])):
+        key = (round(item[1], 2), round(item[2], 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
     return result
 
 
-def _money_from_labeled_row(
-    words: Sequence[SpatialWord],
+def _core_row_anchors(
     lines: Sequence[SpatialLine],
-    markers: Sequence[str],
-    excludes: Sequence[str] = (),
-    y_tolerance: float = 10.0,
-) -> Optional[float]:
+    geometry: SummaryTableGeometry,
+) -> Dict[int, float]:
+    anchors: Dict[int, float] = {}
+
+    for index, (_, stems, excludes) in enumerate(_CORE_ROW_RULES):
+        y = _find_labeled_row_y(lines, geometry, stems, excludes)
+        if y is not None:
+            anchors[index] = y
+
+    return anchors
+
+
+def _core_row_grid(
+    lines: Sequence[SpatialLine],
+    geometry: SummaryTableGeometry,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Estima sólo la posición Y de las filas regulares del resumen.
+
+    La geometría puede estimarse porque las filas conservan su orden; los
+    importes jamás se calculan. Si OCR pierde el rótulo ``Depósitos`` pero sí
+    conserva su monto en la columna de importes, esta cuadrícula permite ubicar
+    ese monto sin recurrir a movimientos ni a ecuaciones financieras.
     """
-    Lee la columna de importes del Resumen de Saldos.
 
-    En el layout observado esa columna ocupa aproximadamente 29%-41%
-    del ancho. La restricción evita confundir los importes de la gráfica
-    que Scotiabank imprime a la derecha del resumen.
+    anchors = _core_row_anchors(lines, geometry)
+    default_step = geometry.width * 0.029
+
+    slopes: List[float] = []
+    indexes = sorted(anchors)
+    for left_pos, left_index in enumerate(indexes):
+        for right_index in indexes[left_pos + 1 :]:
+            distance = right_index - left_index
+            if distance <= 0:
+                continue
+            slope = (anchors[right_index] - anchors[left_index]) / distance
+            if geometry.width * 0.015 <= slope <= geometry.width * 0.05:
+                slopes.append(slope)
+
+    if slopes:
+        step = statistics.median(slopes)
+    else:
+        step = default_step
+
+    if anchors:
+        first_y = statistics.median(
+            anchors[index] - (index * step)
+            for index in indexes
+        )
+    elif geometry.title_y is not None:
+        first_y = geometry.title_y + geometry.width * 0.025
+    else:
+        return None, None
+
+    return first_y, step
+
+
+def _supplemental_anchor_count(
+    lines: Sequence[SpatialLine],
+    geometry: SummaryTableGeometry,
+) -> int:
+    count = 0
+    for stems, excludes in _SUPPLEMENTAL_ROW_RULES:
+        if _find_labeled_row_y(lines, geometry, stems, excludes) is not None:
+            count += 1
+    return count
+
+
+def _statement_header_anchor_count(lines: Sequence[SpatialLine]) -> int:
+    signature = " ".join(_label_signature(line.text) for line in lines)
+    return sum(
+        marker in signature
+        for marker in (
+            "FECHADECORTE",
+            "PERIODO",
+            "CLABE",
+        )
+    )
+
+
+def _summary_page_context(words: Sequence[SpatialWord]) -> SummaryPageContext:
+    """Localiza la página real del resumen sin asumir que sea la primera.
+
+    Scotiabank puede anteponer páginas publicitarias, de seguridad o avisos. La
+    selección exige evidencia estructural del ``Resumen de Saldos``: título,
+    filas financieras y, como apoyo, anclas del encabezado del estado de cuenta.
+    Una portada que mencione palabras como "saldo" o incluso "resumen" no es
+    suficiente por sí sola.
+
+    La función sólo decide *dónde* leer. No calcula ningún importe.
     """
 
-    width = _document_width(words)
-    page_one = _page_words(words, 1)
+    if not words:
+        geometry = _summary_geometry([], [])
+        return SummaryPageContext(None, [], [], geometry)
 
-    for line in lines:
-        if not _matches_markers(line, markers, excludes):
+    all_lines = group_words_into_lines(words)
+    pages = sorted({safe_page(word) for word in words if safe_page(word) > 0})
+
+    candidates: List[
+        Tuple[int, int, int, List[SpatialWord], List[SpatialLine], SummaryTableGeometry]
+    ] = []
+
+    for page in pages:
+        page_words = _page_words(words, page)
+        page_lines = [line for line in all_lines if line.page == page]
+        geometry = _summary_geometry(page_words, page_lines)
+
+        has_title = geometry.title_y is not None
+        core_count = len(_core_row_anchors(page_lines, geometry))
+        supplemental_count = _supplemental_anchor_count(page_lines, geometry)
+        header_count = _statement_header_anchor_count(page_lines)
+
+        qualifies = (
+            (has_title and core_count >= 2)
+            or (has_title and core_count >= 1 and (supplemental_count >= 1 or header_count >= 2))
+            or core_count >= 4
+            or (core_count >= 3 and supplemental_count >= 1)
+        )
+        if not qualifies:
             continue
 
+        score = (
+            (20 if has_title else 0)
+            + (core_count * 4)
+            + (supplemental_count * 2)
+            + header_count
+        )
+        # Se conserva la página más temprana únicamente como desempate. La
+        # evidencia estructural pesa antes que la posición física del PDF.
+        candidates.append(
+            (
+                score,
+                -page,
+                page,
+                page_words,
+                page_lines,
+                geometry,
+            )
+        )
+
+    if candidates:
+        _, _, page, page_words, page_lines, geometry = max(
+            candidates,
+            key=lambda item: (item[0], item[1]),
+        )
+        return SummaryPageContext(page, page_words, page_lines, geometry)
+
+    # Compatibilidad conservadora para documentos realmente monopágina: no hay
+    # otra portada que descartar. En documentos multipágina, si no existe
+    # evidencia suficiente, es preferible devolver ausencia que leer publicidad.
+    if len(pages) == 1:
+        page = pages[0]
+        page_words = _page_words(words, page)
+        page_lines = [line for line in all_lines if line.page == page]
+        geometry = _summary_geometry(page_words, page_lines)
+        return SummaryPageContext(page, page_words, page_lines, geometry)
+
+    geometry = _summary_geometry([], [])
+    return SummaryPageContext(None, [], [], geometry)
+
+
+def _money_from_summary_row(
+    words: Sequence[SpatialWord],
+    lines: Sequence[SpatialLine],
+    geometry: SummaryTableGeometry,
+    stems: Sequence[str],
+    excludes: Sequence[str] = (),
+    *,
+    core_index: Optional[int] = None,
+    y_tolerance: Optional[float] = None,
+) -> Optional[float]:
+    direct_y = _find_labeled_row_y(lines, geometry, stems, excludes)
+    first_y, step = _core_row_grid(lines, geometry)
+
+    tolerance = y_tolerance
+    if tolerance is None:
+        reference_step = step or geometry.width * 0.029
+        tolerance = max(5.0, min(11.0, reference_step * 0.48))
+
+    candidate_ys: List[float] = []
+    if direct_y is not None:
+        candidate_ys.append(direct_y)
+    if core_index is not None and first_y is not None and step is not None:
+        predicted_y = first_y + (core_index * step)
+        if not candidate_ys or abs(predicted_y - candidate_ys[0]) > 1.0:
+            candidate_ys.append(predicted_y)
+
+    for anchor_y in candidate_ys:
         candidates = _money_candidates(
-            page_one,
-            line.center_y,
-            width * 0.285,
-            width * 0.405,
-            y_tolerance,
+            words,
+            anchor_y,
+            geometry.amount_left,
+            geometry.amount_right,
+            tolerance,
         )
         if candidates:
             return candidates[0][2]
@@ -148,59 +534,8 @@ def _money_from_labeled_row(
     return None
 
 
-def _money_anywhere_on_labeled_line(
-    words: Sequence[SpatialWord],
-    lines: Sequence[SpatialLine],
-    markers: Sequence[str],
-) -> Optional[float]:
-    for line in lines:
-        if not _matches_markers(line, markers):
-            continue
-
-        page_words = _page_words(words, line.page)
-        candidates = _money_candidates(
-            page_words,
-            line.center_y,
-            0.0,
-            _document_width(words),
-            7.0,
-        )
-        if candidates:
-            # Las etiquetas pueden contener porcentajes, pero esos tokens
-            # no pasan is_money_text/parse_money como importes monetarios.
-            return candidates[-1][2]
-
-    return None
-
-
-def _top_balance_pair(
-    words: Sequence[SpatialWord],
-    lines: Sequence[SpatialLine],
-) -> Tuple[Optional[float], Optional[float]]:
-    width = _document_width(words)
-    page_one = _page_words(words, 1)
-
-    for line in lines:
-        compact = compact_text(line.text)
-        if "SALDOINICIAL" not in compact or "SALDOFINAL" not in compact:
-            continue
-
-        candidates = _money_candidates(
-            page_one,
-            line.center_y,
-            width * 0.62,
-            width,
-            8.0,
-        )
-        values = [candidate[2] for candidate in sorted(candidates, key=lambda item: item[1])]
-        if len(values) >= 2:
-            return values[0], values[-1]
-
-    return None, None
-
-
 def _period_days(
-    words: Sequence[SpatialWord],
+    summary_words: Sequence[SpatialWord],
     lines: Sequence[SpatialLine],
 ) -> int:
     for line in lines:
@@ -214,199 +549,171 @@ def _period_days(
             if 1 <= value <= 366:
                 return value
 
-    start, end = extract_statement_period(words)
+    if not summary_words:
+        return 0
+
+    # ``extract_statement_period`` es compartido con movimientos y conserva la
+    # convención histórica de leer la página lógica 1. Le entregamos únicamente
+    # la página del resumen, remapeada en copias, para no reintroducir una
+    # dependencia respecto de la página física del PDF.
+    logical_page_words = [dict(word, page=1) for word in summary_words]
+    start, end = extract_statement_period(logical_page_words)
     if start is not None and end is not None and end >= start:
         return (end - start).days + 1
 
     return 0
 
 
-def _annual_rate(lines: Sequence[SpatialLine]) -> float:
-    preferred_markers = (
-        "INTERESESRECIBIDOS",
-        "TASADEINTERESORDINARIA",
-    )
-
-    for marker in preferred_markers:
-        for line in lines:
-            if marker not in compact_text(line.text):
+def _annual_rate(
+    lines: Sequence[SpatialLine],
+    geometry: SummaryTableGeometry,
+) -> float:
+    # Prioridad: tasa impresa en la fila de intereses del Resumen de Saldos.
+    for line in lines:
+        label = _summary_label_text(line, geometry)
+        if not _matches_stems(label, ("INTERES", "RECIB")):
+            continue
+        for word in line.words:
+            text = normalize_text(word.get("text", ""))
+            if "%" not in text:
                 continue
+            value = parse_money(text.replace("%", ""))
+            if value is not None:
+                return value
 
-            for word in line.words:
-                text = normalize_text(word.get("text", ""))
-                if "%" not in text:
-                    continue
-                value = parse_money(text.replace("%", ""))
-                if value is not None:
-                    return value
+    # Algunos layouts imprimen la tasa sólo en la tabla de sobregiro de la misma
+    # página del resumen. Sigue siendo una fuente textual explícita; no se deriva.
+    for line in lines:
+        signature = _label_signature(line.text)
+        if not all(stem in signature for stem in ("TASA", "INTERES", "ORDINARIA")):
+            continue
+        for word in line.words:
+            text = normalize_text(word.get("text", ""))
+            if "%" not in text:
+                continue
+            value = parse_money(text.replace("%", ""))
+            if value is not None:
+                return value
 
     return 0.0
 
 
-def _movement_totals(
-    words: List[SpatialWord],
-) -> Tuple[float, float, Optional[float]]:
-    movements = extract_movimientos_words(words)
-
-    if not movements:
-        return 0.0, 0.0, None
-
-    deposits = round(sum(movement.abono or 0.0 for movement in movements), 2)
-    withdrawals = round(sum(movement.cargo or 0.0 for movement in movements), 2)
-    last_balance = movements[-1].saldo_operacion or None
-    return deposits, withdrawals, last_balance
-
-
-def _non_negative(value: Optional[float], default: float = 0.0) -> float:
+def _amount_or_zero(value: Optional[float], default: float = 0.0) -> float:
     return round(value if value is not None else default, 2)
 
 
 # ============================================================
-# CONSTRUCCIÓN Y RECONCILIACIÓN DEL RESUMEN
+# CONSTRUCCIÓN DEL RESUMEN DESDE SU FUENTE IMPRESA
 # ============================================================
 
 
 def _build_summary_values(words: List[SpatialWord]) -> SummaryValues:
-    lines_page_one = _page_lines(words, 1)
-    all_lines = group_words_into_lines(words)
+    """Extrae el resumen desde la página que contiene su tabla impresa.
 
-    primary_initial = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("SALDOINICIAL",),
-        ("SALDOFINAL",),
-    )
-    primary_deposits = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("DEPOSITOS",),
-    )
-    primary_withdrawals = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("RETIROS",),
-    )
-    primary_final = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("SALDOFINAL", "CUENTA"),
-        ("INVERSIONES",),
-    )
+    La página física se localiza por evidencia semántica y estructural, por lo
+    que pueden existir portadas, publicidad o avisos antes del estado de cuenta.
+    Los movimientos no participan como fuente alternativa y ningún saldo o total
+    se reconstruye mediante ecuaciones. Si el OCR omite un importe, el campo
+    queda en su valor por defecto para revelar la ausencia, no para estimarla.
+    """
 
-    top_initial, top_final = _top_balance_pair(words, lines_page_one)
-    movement_deposits, movement_withdrawals, last_movement_balance = (
-        _movement_totals(words)
-    )
+    context = _summary_page_context(words)
+    summary_words = context.words
+    summary_lines = context.lines
+    geometry = context.geometry
 
-    deposits = (
-        primary_deposits
-        if primary_deposits is not None
-        else movement_deposits
+    initial_balance = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("SALDO", "INICIAL"),
+        ("FINAL",),
+        core_index=0,
     )
-    withdrawals = (
-        primary_withdrawals
-        if primary_withdrawals is not None
-        else movement_withdrawals
+    deposits = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("DEPOSIT",),
+        core_index=1,
     )
-    final_balance = (
-        primary_final
-        if primary_final is not None
-        else top_final
-        if top_final is not None
-        else last_movement_balance
+    interest = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("INTERES", "RECIB"),
+        core_index=2,
     )
-    initial_balance = (
-        primary_initial
-        if primary_initial is not None
-        else top_initial
+    withdrawals = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("RETIRO",),
+        core_index=3,
     )
-
-    deposits = _non_negative(deposits)
-    withdrawals = _non_negative(withdrawals)
-    final_balance = _non_negative(final_balance)
-
-    calculated_initial = round(
-        final_balance - deposits + withdrawals,
-        2,
+    commissions = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("COMISION", "COBR"),
+        core_index=4,
+    )
+    final_balance = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("SALDO", "FINAL", "CUENTA"),
+        ("INVERSION",),
+        core_index=6,
     )
 
-    if initial_balance is None:
-        initial_balance = calculated_initial
-    else:
-        equation_difference = abs(
-            round(initial_balance + deposits - withdrawals - final_balance, 2)
-        )
-        if equation_difference > 0.01:
-            # Corrige casos como $2,03218 o un dígito OCR equivocado usando
-            # la ecuación financiera que sí se puede verificar.
-            initial_balance = calculated_initial
-
-    average_balance = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("SDOPROM", "CTA"),
+    average_balance = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("SDO", "PROM", "CTA"),
         ("MIN", "REQUERIDO"),
         y_tolerance=12.0,
     )
-    minimum_average = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("SDOPROM", "MIN", "REQUERIDO"),
-        y_tolerance=9.0,
+    minimum_average = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("SDO", "PROM", "MIN", "REQUERIDO"),
+        y_tolerance=10.0,
     )
-    interest = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("INTERESESRECIBIDOS",),
-        y_tolerance=9.0,
-    )
-    explicit_isr = _money_from_labeled_row(
-        words,
-        lines_page_one,
+    explicit_isr = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
         ("ISR",),
-        y_tolerance=9.0,
+        y_tolerance=10.0,
     )
-    commissions = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("COMISIONESCOBRADAS",),
-        y_tolerance=9.0,
+    global_balance = _money_from_summary_row(
+        summary_words,
+        summary_lines,
+        geometry,
+        ("SALDO", "FINAL", "CUENTA", "INVERSION"),
+        y_tolerance=10.0,
     )
-
-    if commissions is None:
-        commissions = _money_anywhere_on_labeled_line(
-            words,
-            all_lines,
-            ("TOTALDECOMISIONESCOBRADAS",),
-        )
-
-    global_balance = _money_from_labeled_row(
-        words,
-        lines_page_one,
-        ("SALDOFINAL", "CUENTA", "INVERSIONES"),
-        y_tolerance=9.0,
-    )
-
-    if global_balance is None:
-        global_balance = final_balance
 
     return SummaryValues(
-        saldo_promedio=_non_negative(average_balance),
-        dias_periodo=_period_days(words, lines_page_one),
-        tasa_bruta_anual=_annual_rate(lines_page_one),
+        saldo_promedio=_amount_or_zero(average_balance),
+        dias_periodo=_period_days(summary_words, summary_lines),
+        tasa_bruta_anual=_annual_rate(summary_lines, geometry),
         saldo_promedio_gravable=0.0,
-        intereses_a_favor=_non_negative(interest),
-        isr_retenido=_non_negative(explicit_isr),
+        intereses_a_favor=_amount_or_zero(interest),
+        isr_retenido=_amount_or_zero(explicit_isr),
         cheques_pagados=0,
-        manejo_cuenta=_non_negative(commissions),
+        manejo_cuenta=_amount_or_zero(commissions),
         cargos_objetados=0.0,
         abonos_objetados=0.0,
-        saldo_anterior=_non_negative(initial_balance),
-        depositos_abonos=deposits,
-        retiros_cargos=withdrawals,
-        saldo_final=final_balance,
-        saldo_promedio_minimo_mensual=_non_negative(minimum_average),
-        saldo_global=_non_negative(global_balance, final_balance),
+        saldo_anterior=_amount_or_zero(initial_balance),
+        depositos_abonos=_amount_or_zero(deposits),
+        retiros_cargos=_amount_or_zero(withdrawals),
+        saldo_final=_amount_or_zero(final_balance),
+        saldo_promedio_minimo_mensual=_amount_or_zero(minimum_average),
+        saldo_global=_amount_or_zero(global_balance),
     )
 
 
@@ -487,14 +794,12 @@ def extract_saldo_global(words: List[SpatialWord]) -> float:
 def extract_resumen_financiero_words(
     words: List[SpatialWord],
 ) -> ResumenFinanciero:
-    """
-    Extrae y reconcilia el resumen financiero Scotiabank.
+    """Extrae el resumen financiero Scotiabank desde sus words impresas.
 
-    Primero utiliza las filas etiquetadas del Resumen de Saldos. Cuando
-    Tesseract omite los importes de esas filas, recupera depósitos y retiros
-    desde los movimientos y valida el saldo inicial con la ecuación:
-
-        saldo inicial + depósitos - retiros = saldo final
+    La fuente de verdad es la tabla ``Resumen de Saldos`` donde aparezca dentro
+    del estado de cuenta, aunque existan páginas preliminares. No se suman
+    cargos/abonos de movimientos y no se recalculan saldos para completar datos
+    que el motor de lectura no haya entregado.
     """
 
     values = _build_summary_values(words)
