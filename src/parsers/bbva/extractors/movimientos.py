@@ -69,7 +69,7 @@ BBVA_MONTHS = {
 # La coincidencia sigue exigiendo dos componentes y un mes BBVA válido después
 # de normalizarlo, por lo que no convierte identificadores numéricos en fechas.
 BBVA_DATE_PATTERN = re.compile(
-    r"(?<![A-Z0-9])([0-4OQ]{2,3})\s*[/\\|I1J]\s*"
+    r"(?<![A-Z0-9])([0OQ]?[0-3OQ][0-9OQ])\s*[/\\|I1J]\s*"
     r"([A-Z0-9]{3})(?![A-Z0-9])",
     re.IGNORECASE,
 )
