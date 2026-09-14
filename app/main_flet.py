@@ -161,6 +161,9 @@ def main(page: ft.Page):
     state: dict[str, Any] = {
         'running': False,
         'batch_id': 0,
+        'batch_start_index': 0,
+        'batch_size': 0,
+        'append_mode': False,
         'started_at': None,
         'elapsed_seconds': 0.0,
         'selected_index': None,
@@ -712,11 +715,15 @@ def main(page: ft.Page):
 
     def refresh_manual_controls() -> None:
         busy = bool(state['reprocess_cancel_events'])
+        has_results = bool(results)
         upload_button.disabled = state['running'] or busy
+        add_more_button.visible = has_results
+        add_more_button.disabled = state['running'] or busy or not has_results
         config_button.disabled = state['running'] or busy
-        export_button.disabled = not results or busy
+        export_button.disabled = not has_results or busy
         try:
             upload_button.update()
+            add_more_button.update()
             config_button.update()
             export_button.update()
         except Exception:
@@ -849,21 +856,34 @@ def main(page: ft.Page):
 
         dialog_status = state.get('loading_dialog_status_text')
         dialog_progress = state.get('loading_dialog_progress_bar')
+        batch_start = int(state.get('batch_start_index') or 0)
+        batch_size = int(state.get('batch_size') or 0)
+        batch_items = (
+            processing_items[batch_start:batch_start + batch_size]
+            if batch_size
+            else processing_items
+        )
+        batch_total = len(batch_items)
+        batch_completed = sum(item.get('status') == 'completed' for item in batch_items)
+        batch_errors = sum(item.get('status') == 'error' for item in batch_items)
+        batch_cancelled = sum(item.get('status') == 'cancelled' for item in batch_items)
+        batch_finished = batch_completed + batch_errors + batch_cancelled
+        batch_active = batch_total - batch_finished
         if dialog_status is not None:
-            if state['stop_requested'] and active_or_pending:
+            if state['stop_requested'] and batch_active:
                 dialog_status.value = 'Deteniendo el lote de forma segura…'
-            elif active_or_pending:
-                dialog_status.value = f'{finished} de {total} archivos finalizados'
-            elif errors:
-                dialog_status.value = f'Lote finalizado · {errors} archivo(s) con error'
+            elif batch_active:
+                dialog_status.value = f'{batch_finished} de {batch_total} archivos finalizados'
+            elif batch_errors:
+                dialog_status.value = f'Lote finalizado · {batch_errors} archivo(s) con error'
             else:
-                dialog_status.value = f'{completed} de {total} archivos finalizados'
+                dialog_status.value = f'{batch_completed} de {batch_total} archivos finalizados'
             try:
                 dialog_status.update()
             except Exception:
                 pass
         if dialog_progress is not None:
-            dialog_progress.value = (finished / total) if total else 0.0
+            dialog_progress.value = (batch_finished / batch_total) if batch_total else 0.0
             try:
                 dialog_progress.update()
             except Exception:
@@ -1927,7 +1947,7 @@ def main(page: ft.Page):
             color=GOB_GREEN_DARK,
         )
         dialog_status = ft.Text(
-            f'0 de {len(processing_items)} archivos finalizados',
+            f"0 de {state.get('batch_size', len(processing_items))} archivos finalizados",
             size=9,
             weight=ft.FontWeight.W_600,
             color=GOB_GREEN_DARK,
@@ -2144,6 +2164,7 @@ def main(page: ft.Page):
         paths: list[str],
         names: list[str],
         batch_id: int,
+        index_offset: int,
         primary_engine: str,
         cancel_event: threading.Event,
     ):
@@ -2155,7 +2176,7 @@ def main(page: ft.Page):
                 cancel_event=cancel_event,
                 ocr_artifact_dir=artifact_dir,
             ):
-                event_queue.put(('event', batch_id, event))
+                event_queue.put(('event', batch_id, index_offset, event))
         except Exception as ex:
             event_queue.put(('worker_error', batch_id, ex, traceback.format_exc()))
         finally:
@@ -2166,9 +2187,12 @@ def main(page: ft.Page):
         if isinstance(started_at, (int, float)):
             item['elapsed_seconds'] = max(time.perf_counter() - started_at, 0.0)
 
-    def handle_event(event):
-        index = getattr(event, 'index', None)
-        if not isinstance(index, int) or not 0 <= index < len(processing_items):
+    def handle_event(event, *, index_offset: int = 0):
+        event_index = getattr(event, 'index', None)
+        if not isinstance(event_index, int):
+            return
+        index = index_offset + event_index
+        if not 0 <= index < len(processing_items):
             return
         item = processing_items[index]
         if event.kind == 'started':
@@ -2201,11 +2225,7 @@ def main(page: ft.Page):
             )
             if event.result is not None:
                 results.append(event.result)
-                export_button.disabled = False
-                try:
-                    export_button.update()
-                except Exception:
-                    pass
+                refresh_manual_controls()
                 first_result = state['selected_index'] is None
                 if first_result:
                     state['selected_index'] = index
@@ -2293,7 +2313,10 @@ def main(page: ft.Page):
         timer_text.value = format_elapsed(state['elapsed_seconds'])
         loading_ring.visible = False
         upload_button.disabled = bool(state['reprocess_cancel_events'])
+        add_more_button.visible = bool(results)
+        add_more_button.disabled = bool(state['reprocess_cancel_events']) or not results
         config_button.disabled = bool(state['reprocess_cancel_events'])
+        export_button.disabled = not results or bool(state['reprocess_cancel_events'])
         help_button.disabled = False
         stop_button.visible = False
         stop_button.disabled = False
@@ -2303,7 +2326,9 @@ def main(page: ft.Page):
             timer_text,
             loading_ring,
             upload_button,
+            add_more_button,
             config_button,
+            export_button,
             help_button,
             stop_button,
         ):
@@ -2328,7 +2353,7 @@ def main(page: ft.Page):
                     if batch_id != state['batch_id']:
                         continue
                     if kind == 'event':
-                        handle_event(message[2])
+                        handle_event(message[3], index_offset=message[2])
                         update_status()
                     elif kind == 'worker_error':
                         ex, tb = message[2], message[3]
@@ -2399,21 +2424,33 @@ def main(page: ft.Page):
                     return
             await asyncio.sleep(PROCESSING_UI_POLL_INTERVAL)
 
-    def initialize_batch(paths: list[str], names: list[str]):
+    def initialize_batch(
+        paths: list[str],
+        names: list[str],
+        *,
+        append: bool = False,
+    ):
+        if append and not results:
+            append = False
         state['batch_id'] += 1
         state['running'] = True
+        state['append_mode'] = append
         state['started_at'] = time.perf_counter()
         state['elapsed_seconds'] = 0.0
-        state['selected_index'] = None
         state['last_timer_refresh'] = 0.0
         state['cancel_event'] = threading.Event()
         state['stop_requested'] = False
         state['completion_notified'] = False
         state['close_after_stop'] = False
         clear_loading_dialog_refs()
-        clear_ocr_artifacts()
-        results.clear()
-        processing_items.clear()
+        if not append:
+            state['selected_index'] = None
+            clear_ocr_artifacts()
+            results.clear()
+            processing_items.clear()
+            audit_view.controls.clear()
+        state['batch_start_index'] = len(processing_items)
+        state['batch_size'] = len(names)
         try:
             while True:
                 event_queue.get_nowait()
@@ -2436,13 +2473,18 @@ def main(page: ft.Page):
         selector_filter.value = ''
         loading_ring.visible = True
         upload_button.disabled = True
+        add_more_button.visible = bool(results)
+        add_more_button.disabled = True
         config_button.disabled = True
         help_button.disabled = False
         stop_button.visible = True
         stop_button.disabled = False
         export_button.disabled = True
-        audit_view.controls.clear()
-        status_text.value = 'Preparando estados de cuenta...'
+        status_text.value = (
+            'Añadiendo estados de cuenta al resultado actual...'
+            if append
+            else 'Preparando estados de cuenta...'
+        )
         status_text.color = ft.Colors.ON_SURFACE
         timer_text.value = '00:00'
         audit_section.visible = True
@@ -2457,16 +2499,23 @@ def main(page: ft.Page):
             paths,
             names,
             state['batch_id'],
+            state['batch_start_index'],
             settings['ocr_primary_engine'],
             state['cancel_event'],
         )
 
-    async def pick_files(e):
-        if state['reprocess_cancel_events']:
+    async def pick_files(e, *, append: bool = False):
+        if state['running'] or state['reprocess_cancel_events']:
+            return
+        if append and not results:
             return
         try:
             selected = await ft.FilePicker().pick_files(
-                dialog_title='Selecciona estados de cuenta PDF',
+                dialog_title=(
+                    'Añade más estados de cuenta PDF al resultado actual'
+                    if append
+                    else 'Selecciona estados de cuenta PDF'
+                ),
                 allow_multiple=True,
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=['pdf'],
@@ -2480,7 +2529,7 @@ def main(page: ft.Page):
                 status_text.color = ft.Colors.RED
                 status_text.update()
                 return
-            initialize_batch(paths, names)
+            initialize_batch(paths, names, append=append)
             start_worker(paths, names)
         except Exception as ex:
             status_text.value = f'❌ Error al seleccionar archivos: {ex}'
@@ -2489,6 +2538,9 @@ def main(page: ft.Page):
                 status_text.update()
             except Exception:
                 page.update()
+
+    async def pick_more_files(e):
+        await pick_files(e, append=True)
 
     async def export_excel(e):
         if not results:
@@ -2580,6 +2632,14 @@ def main(page: ft.Page):
         on_click=pick_files,
         bgcolor=GOB_GREEN,
         color=BUTTON_TEXT,
+    )
+    add_more_button = ft.OutlinedButton(
+        content='Añadir más estados de cuenta',
+        icon=ft.Icons.ADD_CIRCLE_OUTLINE,
+        icon_color=GOB_GREEN,
+        visible=False,
+        disabled=True,
+        on_click=pick_more_files,
     )
     config_button = ft.IconButton(
         icon=ft.Icons.SETTINGS,
@@ -2695,6 +2755,7 @@ def main(page: ft.Page):
                 ft.Row(
                     [
                         upload_button,
+                        add_more_button,
                         stop_button,
                         loading_ring,
                         ft.Text('⏱', size=12),
