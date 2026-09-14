@@ -64,6 +64,17 @@ BBVA_DATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Cuando una perforación tapa el día y la diagonal, el OCR suele conservar
+# únicamente el mes (por ejemplo, "JUN") o añadir delante el contorno del
+# oyuelo como "O". El patrón sólo se usa junto a una fecha de liquidación
+# válida y concepto en sus columnas, nunca como detector general de fechas.
+BBVA_DAMAGED_MONTH_PATTERN = re.compile(
+    r"^[^A-Z0-9]*[0-9OCQ]{0,2}[^A-Z0-9]*("
+    + "|".join(sorted(BBVA_MONTHS))
+    + r")[^A-Z0-9]*$",
+    re.IGNORECASE,
+)
+
 BBVA_AMOUNT_PATTERN = re.compile(
     r"(?<!\d)([+-]?)((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})([-−]?)(?!\d)"
 )
@@ -331,16 +342,52 @@ def normalize_bbva_date(value: str) -> str | None:
     return f"{day:02d}/{month}"
 
 
+def extract_damaged_operation_month(value: str) -> str | None:
+    """Recupera sólo el mes cuando el oyuelo destruyó el día de operación.
+
+    No intenta adivinar el día: devuelve un mes canónico únicamente para el
+    patrón limitado de ruido que dejan las perforaciones en la primera columna.
+    """
+
+    if not value:
+        return None
+
+    match = BBVA_DAMAGED_MONTH_PATTERN.fullmatch(value.strip().upper())
+
+    if not match:
+        return None
+
+    return match.group(1).upper()
+
 
 def is_start_movement(line, cols):
 
-    fecha = column_text(
+    fecha_operacion = column_text(
         line,
         cols["FECHA_OPERACION"]
     )
 
+    if normalize_bbva_date(fecha_operacion) is not None:
+        return True
 
-    return normalize_bbva_date(fecha) is not None
+    # Fallback exclusivo para fechas perforadas: exige el mes residual en la
+    # columna de operación, una fecha completa en liquidación y texto en la
+    # columna de concepto. La combinación espacial evita dividir por accidente
+    # líneas de referencia, encabezados o continuaciones de layouts normales.
+    fecha_liquidacion = column_text(
+        line,
+        cols["FECHA_LIQUIDACION"]
+    )
+    concepto = column_text(
+        line,
+        cols["CONCEPTO"]
+    )
+
+    return (
+        extract_damaged_operation_month(fecha_operacion) is not None
+        and normalize_bbva_date(fecha_liquidacion) is not None
+        and bool(concepto)
+    )
 
 
 def line_page(line: List[Dict[str, Any]]) -> int:
@@ -537,7 +584,11 @@ def extract_fecha_operacion(line, cols):
         cols["FECHA_OPERACION"]
     )
 
-    return normalize_bbva_date(raw_value) or raw_value
+    return (
+        normalize_bbva_date(raw_value)
+        or extract_damaged_operation_month(raw_value)
+        or raw_value
+    )
 
 
 
