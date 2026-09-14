@@ -136,6 +136,94 @@ def test_digital_movement_row_keeps_historical_extraction() -> None:
     assert movements[0].saldo_liquidacion == pytest.approx(924.10)
 
 
+def test_ocr_perforated_operation_dates_keep_their_movements() -> None:
+    words = [
+        word("REFERENCIA", 321.0, 379.0, 70.0),
+        # Movimiento normal previo: conserva exactamente la ruta histórica.
+        word("14/JUN", 20.0, 54.0, 100.0),
+        word("15/JUN", 65.0, 99.0, 100.0),
+        word("PAGO", 110.0, 140.0, 100.0),
+        word("CUENTA", 145.0, 185.0, 100.0),
+        word("DE", 190.0, 205.0, 100.0),
+        word("TERCERO", 210.0, 260.0, 100.0),
+        word("1,450.00", 388.0, 421.0, 100.0),
+        word("72,962.11", 486.0, 528.0, 100.0),
+        word("67,994.36", 548.0, 590.0, 100.0),
+        # El oyuelo elimina día y diagonal; sólo queda el mes.
+        word("JUN", 25.0, 50.0, 122.0),
+        word("12/JUN", 65.0, 99.0, 122.0),
+        word("SUPERCENTER", 110.0, 180.0, 122.0),
+        word("RIO", 185.0, 205.0, 122.0),
+        word("DE", 210.0, 225.0, 122.0),
+        word("LOS", 230.0, 250.0, 122.0),
+        word("869.00", 390.0, 421.0, 122.0),
+        word("RFC:", 110.0, 135.0, 134.0),
+        word("NWM9709244W4", 140.0, 215.0, 134.0),
+        word("14:43", 220.0, 250.0, 134.0),
+        word("AUT:", 255.0, 278.0, 134.0),
+        word("598229", 282.0, 312.0, 134.0),
+        word("Referencia", 321.0, 364.0, 134.0),
+        word("******6302", 368.0, 420.0, 134.0),
+        # El aro puede ser reconocido como una O delante del mes.
+        word("OJUN", 20.0, 50.0, 156.0),
+        word("29/JUN", 65.0, 99.0, 156.0),
+        word("SITH2000013602961", 110.0, 205.0, 156.0),
+        word("2,785.50", 388.0, 421.0, 156.0),
+        word("31,520.36", 486.0, 528.0, 156.0),
+        word("31,520.36", 548.0, 590.0, 156.0),
+        word("Referencia", 321.0, 364.0, 168.0),
+        word("424502705632070", 368.0, 445.0, 168.0),
+    ]
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 3
+
+    normal, perforated, perforated_with_ring_noise = movements
+    assert normal.fecha_operacion == "14/JUN"
+    assert normal.fecha_liquidacion == "15/JUN"
+    assert normal.cargo == pytest.approx(1450.00)
+
+    # El día no se inventa: se conserva el mes recuperable y se extrae el resto.
+    assert perforated.fecha_operacion == "JUN"
+    assert perforated.fecha_liquidacion == "12/JUN"
+    assert perforated.concepto == (
+        "SUPERCENTER RIO DE LOS\n"
+        "RFC: NWM9709244W4 14:43 AUT: 598229"
+    )
+    assert perforated.cargo == pytest.approx(869.00)
+    assert perforated.referencia == "******6302"
+    assert perforated.rfc == "NWM9709244W4"
+    assert perforated.autorizacion == "598229"
+    assert perforated.hora_operacion == "14:43"
+
+    assert perforated_with_ring_noise.fecha_operacion == "JUN"
+    assert perforated_with_ring_noise.fecha_liquidacion == "29/JUN"
+    assert perforated_with_ring_noise.concepto == "SITH2000013602961"
+    assert perforated_with_ring_noise.cargo == pytest.approx(2785.50)
+    assert perforated_with_ring_noise.saldo_operacion == pytest.approx(31520.36)
+    assert perforated_with_ring_noise.saldo_liquidacion == pytest.approx(31520.36)
+    assert perforated_with_ring_noise.referencia == "424502705632070"
+
+
+def test_month_fragment_alone_does_not_split_a_normal_movement() -> None:
+    words = [
+        word("REFERENCIA", 321.0, 379.0, 70.0),
+        word("14/JUN", 20.0, 54.0, 100.0),
+        word("15/JUN", 65.0, 99.0, 100.0),
+        word("PAGO", 110.0, 140.0, 100.0),
+        # Sin fecha completa de liquidación no se activa el fallback.
+        word("JUN", 20.0, 50.0, 112.0),
+        word("CONTINUACION", 110.0, 180.0, 112.0),
+    ]
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 1
+    assert movements[0].fecha_operacion == "14/JUN"
+    assert movements[0].concepto == "PAGO\nCONTINUACION"
+
+
 def test_ocr_footer_cut_uses_the_top_of_the_whole_visual_line() -> None:
     words = [
         word("inflación", 280.0, 320.0, 765.6),
