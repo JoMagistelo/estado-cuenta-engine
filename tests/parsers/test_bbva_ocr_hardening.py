@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 
 from parsers.bbva.extractors.datos import extract_datos_cuenta_words
-from parsers.bbva.extractors.movimientos import extract_movimientos_words
+from parsers.bbva.extractors.movimientos import (
+    extract_movimientos_words,
+    normalize_bbva_date,
+)
 from parsers.bbva.utils.words_footer_filter import remove_bbva_footer
 
 
@@ -24,6 +27,26 @@ def word(
         "bottom": bottom if bottom is not None else top + 8.0,
         "page": page,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_date", "expected"),
+    [
+        ("03/AGO", "03/AGO"),
+        ("O3/AGO", "03/AGO"),
+        ("O06/OCT", "06/OCT"),
+        ("27INOV", "27/NOV"),
+        ("11/0CT", "11/OCT"),
+        ("13IOCT", "13/OCT"),
+        ("14JJUL", "14/JUL"),
+        ("44/0CT", None),
+    ],
+)
+def test_ocr_date_variants_are_normalized_conservatively(
+    raw_date: str,
+    expected: str | None,
+) -> None:
+    assert normalize_bbva_date(raw_date) == expected
 
 
 def test_ocr_account_header_uses_line_order_and_repeated_values() -> None:
@@ -253,6 +276,149 @@ def test_month_fragment_alone_does_not_split_a_normal_movement() -> None:
     assert len(movements) == 1
     assert movements[0].fecha_operacion == "14/JUN"
     assert movements[0].concepto == "PAGO\nCONTINUACION"
+
+
+def test_ocr_missing_operation_date_uses_liquidation_and_amount_as_start() -> None:
+    words = [
+        word("REFERENCIA", 321.0, 379.0, 70.0),
+        word("03/AGO", 20.0, 54.0, 100.0),
+        word("03/AGO", 65.0, 99.0, 100.0),
+        word("PAGO", 110.0, 140.0, 100.0),
+        word("TARJETA", 145.0, 195.0, 100.0),
+        word("4,000.00", 390.0, 421.0, 100.0),
+        # Caso real del oyuelo: la operación es ilegible, pero sobreviven
+        # liquidación, concepto, cargo y referencia.
+        word("viAGO", 20.0, 54.0, 130.0),
+        word("O3/AGO", 65.0, 99.0, 130.0),
+        word("PAGO", 110.0, 140.0, 130.0),
+        word("CUENTA", 145.0, 190.0, 130.0),
+        word("DE", 195.0, 210.0, 130.0),
+        word("TERCERO", 215.0, 270.0, 130.0),
+        word("10,000.00", 388.0, 421.0, 130.0),
+        word("BNET", 110.0, 140.0, 142.0),
+        word("2856337333", 145.0, 210.0, 142.0),
+        word("pension", 215.0, 260.0, 142.0),
+        word("Hannia", 265.0, 305.0, 142.0),
+        word("Referencia", 321.0, 364.0, 142.0),
+        word("0002838638", 368.0, 420.0, 142.0),
+    ]
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 2
+    damaged = movements[1]
+    assert damaged.fecha_operacion == "viAGO"
+    assert damaged.fecha_liquidacion == "03/AGO"
+    assert damaged.concepto == (
+        "PAGO CUENTA DE TERCERO\n"
+        "BNET 2856337333 pension Hannia"
+    )
+    assert damaged.cargo == pytest.approx(10000.00)
+    assert damaged.referencia == "0002838638"
+
+
+def test_ocr_abono_without_balances_is_not_omitted() -> None:
+    words = [
+        word("REFERENCIA", 321.0, 379.0, 70.0),
+        word("O6/OCT", 20.0, 54.0, 100.0),
+        word("O06/OCT", 65.0, 99.0, 100.0),
+        word("SPEI", 110.0, 135.0, 100.0),
+        word("RECIBIDO", 140.0, 190.0, 100.0),
+        word("NAFIN", 195.0, 230.0, 100.0),
+        word("8,500.00", 430.0, 461.0, 100.0),
+        word("18408682700", 110.0, 180.0, 112.0),
+        word("EGRESOS", 185.0, 235.0, 112.0),
+        word("SPEI", 240.0, 265.0, 112.0),
+        word("SVD", 270.0, 295.0, 112.0),
+        word("Referencia", 321.0, 364.0, 112.0),
+        word("0109272533", 368.0, 420.0, 112.0),
+        word("135", 425.0, 445.0, 112.0),
+        word("06/OCT", 20.0, 54.0, 160.0),
+        word("06/OCT", 65.0, 99.0, 160.0),
+        word("SPEI", 110.0, 135.0, 160.0),
+        word("ENVIADO", 140.0, 190.0, 160.0),
+        word("BANCOPPEL", 195.0, 260.0, 160.0),
+        word("3,750.00", 390.0, 421.0, 160.0),
+        word("4,990.45", 490.0, 525.0, 160.0),
+        word("4,990.45", 550.0, 590.0, 160.0),
+    ]
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 2
+    received, sent = movements
+    assert received.fecha_operacion == "06/OCT"
+    assert received.fecha_liquidacion == "06/OCT"
+    assert received.concepto.startswith("SPEI RECIBIDO NAFIN")
+    assert received.cargo == 0.0
+    assert received.abono == pytest.approx(8500.00)
+    assert received.saldo_operacion == 0.0
+    assert received.saldo_liquidacion == 0.0
+    assert sent.cargo == pytest.approx(3750.00)
+
+
+def test_ocr_consecutive_spei_with_corrupted_dates_are_not_merged() -> None:
+    words = [
+        word("REFERENCIA", 321.0, 379.0, 70.0),
+        word("11/0CT", 20.0, 54.0, 100.0),
+        word("13IOCT", 65.0, 99.0, 100.0),
+        word("SPEI", 110.0, 135.0, 100.0),
+        word("ENVIADO", 140.0, 190.0, 100.0),
+        word("AZTECA", 195.0, 240.0, 100.0),
+        word("8,000.00", 390.0, 421.0, 100.0),
+        word("0109250octubre", 110.0, 200.0, 112.0),
+        word("maria", 205.0, 235.0, 112.0),
+        word("00004027666120969315", 110.0, 240.0, 124.0),
+        word("MBAN01002510130080186046", 110.0, 285.0, 136.0),
+        word("magdalena", 110.0, 175.0, 148.0),
+        word("alvarez", 180.0, 225.0, 148.0),
+        # Día imposible y mes con cero: operación irrecuperable. La liquidación
+        # válida y el cargo deben abrir un movimiento nuevo.
+        word("44/0CT", 20.0, 54.0, 170.0),
+        word("13/OCT", 65.0, 99.0, 170.0),
+        word("SPEI", 110.0, 135.0, 170.0),
+        word("ENVIADO", 140.0, 190.0, 170.0),
+        word("AZTECA", 195.0, 240.0, 170.0),
+        word("8,000.00", 390.0, 421.0, 170.0),
+        word("0109250noviembre", 110.0, 215.0, 182.0),
+        word("Maria", 220.0, 250.0, 182.0),
+        word("00004027666120969315", 110.0, 240.0, 194.0),
+        word("MBAN01002510130080251923", 110.0, 285.0, 206.0),
+        word("magdalena", 110.0, 175.0, 218.0),
+        word("alvarez", 180.0, 225.0, 218.0),
+        word("11/0CT", 20.0, 54.0, 240.0),
+        word("13/OCT", 65.0, 99.0, 240.0),
+        word("SPEI", 110.0, 135.0, 240.0),
+        word("ENVIADO", 140.0, 190.0, 240.0),
+        word("BANAMEX", 195.0, 250.0, 240.0),
+        word("6,900.00", 390.0, 421.0, 240.0),
+        word("0109250renta", 110.0, 190.0, 252.0),
+        word("octubre", 195.0, 235.0, 252.0),
+        word("00002180037179005364", 110.0, 240.0, 264.0),
+        word("MBAN01002510130080557245", 110.0, 285.0, 276.0),
+        word("Jessica", 110.0, 150.0, 288.0),
+        word("Pacheco", 155.0, 205.0, 288.0),
+        word("Hernandez", 210.0, 275.0, 288.0),
+    ]
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 3
+    assert [
+        movement.concepto.splitlines()[0]
+        for movement in movements
+    ] == [
+        "SPEI ENVIADO AZTECA",
+        "SPEI ENVIADO AZTECA",
+        "SPEI ENVIADO BANAMEX",
+    ]
+    assert [movement.cargo for movement in movements] == pytest.approx(
+        [8000.00, 8000.00, 6900.00]
+    )
+    assert all(
+        movement.concepto.count("SPEI ENVIADO") == 1
+        for movement in movements
+    )
 
 
 def test_ocr_footer_cut_uses_the_top_of_the_whole_visual_line() -> None:
