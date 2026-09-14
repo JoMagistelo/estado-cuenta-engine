@@ -2316,6 +2316,7 @@ def main(page: ft.Page):
         add_more_button.visible = bool(results)
         add_more_button.disabled = bool(state['reprocess_cancel_events']) or not results
         config_button.disabled = bool(state['reprocess_cancel_events'])
+        export_button.disabled = not results or bool(state['reprocess_cancel_events'])
         help_button.disabled = False
         stop_button.visible = False
         stop_button.disabled = False
@@ -2327,6 +2328,7 @@ def main(page: ft.Page):
             upload_button,
             add_more_button,
             config_button,
+            export_button,
             help_button,
             stop_button,
         ):
