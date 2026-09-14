@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -732,7 +733,116 @@ class TesseractPDFReader:
             for line_words in lines.values()
         )
 
+        words.extend(cls._recover_bbva_summary(image, words, logical_page,
+                                               page_width, doctop_offset))
+
         return (
             words,
             page_text,
         )
+
+    @classmethod
+    def _recover_bbva_summary(
+        cls,
+        image: Image.Image,
+        words: list[dict[str, Any]],
+        logical_page: int,
+        page_width: float,
+        doctop_offset: float,
+    ) -> list[dict[str, Any]]:
+        """Relee sólo una tabla BBVA incompleta con Tesseract PSM 11.
+
+        PSM 3 suele perder importes dentro de celdas con bordes. Este pase
+        conserva el mismo motor y las palabras originales; agrega únicamente
+        palabras nuevas con sus coordenadas referidas a la página completa.
+        """
+        logos = [w for w in words if str(w["text"]).upper() in {"BBVA", "B", "BVA"}
+                 and float(w["top"]) < 120]
+        bank_mark = any(str(w["text"]).upper() == "BBVA" for w in logos)
+        if not bank_mark:
+            bank_mark = any(
+                str(first["text"]).upper() == "B"
+                and str(second["text"]).upper() == "BVA"
+                and 0 <= float(second["x0"]) - float(first["x1"]) < 15
+                and abs(float(second["top"]) - float(first["top"])) < 8
+                for first in logos for second in logos
+            )
+        if not bank_mark:
+            return []
+
+        header = next((w for w in words if "COMPORTAMIENTO" in
+                       str(w["text"]).upper()), None)
+        if header is not None:
+            left, top = float(header["x0"]) - 12, float(header["top"]) - 12
+        else:
+            title = next((w for w in words if "FINANCIERA" in
+                          str(w["text"]).upper()), None)
+            if title is None:
+                return []
+            left, top = page_width * .47, float(title["top"]) + 4
+
+        right = page_width - 5
+        bottom = top + 115
+        money = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2,}$")
+        found = sum(
+            bool(money.fullmatch(str(w["text"]).strip().replace("$", "")
+                                 .strip("[]{}|!;:()")))
+            for w in words if float(w["x0"]) > page_width * .80
+            and top < float(w["top"]) < bottom
+        )
+        if found >= 5 or right <= left:
+            return []
+
+        pixel_to_pdf = page_width / image.width
+        px0 = max(0, int(left / pixel_to_pdf))
+        py0 = max(0, int(top / pixel_to_pdf))
+        px1 = min(image.width, int(right / pixel_to_pdf))
+        py1 = min(image.height, int(bottom / pixel_to_pdf))
+        if px1 <= px0 or py1 <= py0:
+            return []
+
+        try:
+            data = pytesseract.image_to_data(
+                image.crop((px0, py0, px1, py1)),
+                lang=cls.LANGUAGE,
+                config="--oem 3 --psm 11",
+                output_type=Output.DICT,
+                timeout=cls.TIMEOUT_SECONDS,
+            )
+        except (RuntimeError, pytesseract.TesseractError):
+            # Un intento de rescate nunca invalida el OCR principal.
+            return []
+
+        extra: list[dict[str, Any]] = []
+        for index, raw in enumerate(data["text"]):
+            value = raw.strip()
+            if not value:
+                continue
+            x0 = (px0 + float(data["left"][index])) * pixel_to_pdf
+            y0 = (py0 + float(data["top"][index])) * pixel_to_pdf
+            width = float(data["width"][index]) * pixel_to_pdf
+            height = float(data["height"][index]) * pixel_to_pdf
+            if any(abs(float(w["x0"]) - x0) <= 8
+                   and abs(float(w["top"]) - y0) <= 5
+                   and (str(w["text"]).strip() == value
+                        or (abs(float(w["x1"]) - (x0 + width)) <= 10
+                            and len(str(w["text"]).strip()) >= len(value) - 2))
+                   for w in words):
+                continue
+            extra.append({
+                "text": value,
+                "x0": x0, "x1": x0 + width,
+                "top": y0, "bottom": y0 + height,
+                "doctop": doctop_offset + y0,
+                "width": width, "height": height,
+                "upright": True, "direction": "ltr",
+                "page": logical_page,
+                "confidence": float(data["conf"][index]),
+            })
+        # Evita duplicar etiquetas cuando el segundo pase tampoco rescató
+        # ningún importe que faltaba en el OCR principal.
+        if not any(float(w["x0"]) > page_width * .80
+                   and money.fullmatch(str(w["text"]).strip().replace("$", "")
+                                       .strip("[]{}|!;:()")) for w in extra):
+            return []
+        return extra
