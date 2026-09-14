@@ -56,6 +56,10 @@ def _bundled_paddle_model_root() -> Path | None:
 
 def _configure_offline_runtime() -> Path | None:
     """Fuerza operación local y prioriza los modelos incluidos en el EXE."""
+    # El escritorio inicia con PaddleOCR como motor principal, sin impedir que
+    # una instalación administrada seleccione otro motor mediante la variable.
+    os.environ.setdefault("OCR_PRIMARY_ENGINE", "paddleocr")
+
     # PaddleX no debe consultar fuentes de modelos durante el procesamiento.
     os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "1"
 
@@ -80,6 +84,32 @@ def _configure_offline_runtime() -> Path | None:
 
 
 _original_icon = ft.Icon
+_original_text = ft.Text
+
+_HELP_TEXT_REPLACEMENTS = {
+    (
+        "Los PDFs escaneados se procesan inicialmente sólo con el motor "
+        "seleccionado en Configuración. El programa no ejecuta un segundo OCR "
+        "de forma automática."
+    ): (
+        "Los PDFs escaneados se procesan por OCR; PaddleOCR es el motor "
+        "predeterminado y puede cambiarse en Configuración. El programa no "
+        "ejecuta un segundo OCR de forma automática."
+    ),
+    (
+        "En cada PDF OCR terminado aparece un icono de descarga para guardar "
+        "el documento con texto incrustado y un botón de reproceso manual. Si "
+        "se ejecuta el motor secundario con éxito, se conservan ambos PDFs OCR "
+        "y el nuevo resultado queda activo."
+    ): (
+        "Puedes procesar un PDF escaneado y, al terminar el OCR, descargar una "
+        "copia del mismo documento con texto incrustado, seleccionable y "
+        "buscable. Esto también permite conservar un PDF OCR aunque no exista "
+        "un parser bancario disponible. El botón de reproceso manual permite "
+        "probar el motor secundario; si termina correctamente, se conservan "
+        "ambos PDFs OCR."
+    ),
+}
 
 
 def _desktop_icon(*args, **kwargs):
@@ -98,7 +128,20 @@ def _desktop_icon(*args, **kwargs):
     return _original_icon(*args, **kwargs)
 
 
+def _desktop_text(*args, **kwargs):
+    """Aclara en Ayuda el flujo OCR sin duplicar la UI principal."""
+    value = args[0] if args else kwargs.get("value")
+    replacement = _HELP_TEXT_REPLACEMENTS.get(value) if isinstance(value, str) else None
+    if replacement is not None:
+        if args:
+            args = (replacement, *args[1:])
+        else:
+            kwargs["value"] = replacement
+    return _original_text(*args, **kwargs)
+
+
 ft.Icon = _desktop_icon
+ft.Text = _desktop_text
 
 
 def _configure_startup_window(page: ft.Page) -> None:
