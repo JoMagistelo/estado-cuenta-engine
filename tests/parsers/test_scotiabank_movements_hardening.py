@@ -56,7 +56,7 @@ def _movement_line(
 
     cursor = 108.0
     for token in concept:
-        width = max(18.0, min(62.0, len(token) * 5.5))
+        width = max(18.0, min(50.0, len(token) * 4.5))
         words.append(_word(token, cursor, cursor + width, top))
         cursor += width + 4.0
 
