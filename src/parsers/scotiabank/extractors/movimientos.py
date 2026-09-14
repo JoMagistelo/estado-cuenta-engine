@@ -188,6 +188,16 @@ def clean_word_text(value: Any) -> str:
     if not text:
         return ""
 
+    # Cuando un signo Unicode acompaña a un token numérico se conserva como
+    # signo monetario ASCII. Los trazos aislados de la tabla siguen filtrándose.
+    if re.search(r"\d", text):
+        text = (
+            text
+            .replace("\u2212", "-")
+            .replace("\u2013", "-")
+            .replace("\u2014", "-")
+        )
+
     # Tesseract suele convertir líneas de la tabla en estos símbolos.
     if not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9$]", text):
         return ""
@@ -345,14 +355,79 @@ def format_statement_date(value: Optional[date]) -> Optional[str]:
     return f"{value.day:02d}-{month_name}-{value.year % 100:02d}"
 
 
+def _movement_date_words(
+    line: SpatialLine,
+    layout: ColumnLayout,
+) -> List[SpatialWord]:
+    """Devuelve los tokens que forman la fecha sin perder meses en el borde.
+
+    En algunos PDFs digitales de Scotiabank el token del mes comienza dentro
+    de la columna FECHA pero su centro cae apenas dentro de CONCEPTO. La lógica
+    histórica clasificaba por centro, por lo que perdía ``NOV``: la fila dejaba
+    de reconocerse como movimiento y terminaba concatenada al bloque anterior.
+
+    El fallback sólo admite una abreviatura de mes exacta, próxima al borde y
+    únicamente cuando la parte izquierda ya contiene un día válido. De esta
+    forma no se ensancha globalmente la columna ni se reclasifica texto normal.
+    """
+
+    primary = [
+        word
+        for word in line.words
+        if word_center_x(word) <= layout.date_right
+    ]
+    primary.sort(key=lambda word: safe_float(word.get("x0")))
+
+    primary_text = " ".join(
+        clean_word_text(word.get("text", ""))
+        for word in primary
+        if clean_word_text(word.get("text", ""))
+    )
+    normalized_primary = normalize_upper(primary_text)
+
+    if (
+        MOVEMENT_DATE_RE.search(normalized_primary)
+        or MOVEMENT_DATE_RE.search(compact_text(primary_text))
+    ):
+        return primary
+
+    if not re.search(
+        r"(?<!\d)(0?[1-9]|[12]\d|3[01])(?!\d)",
+        normalized_primary,
+    ):
+        return primary
+
+    overflow = min(18.0, max(8.0, layout.page_width * 0.025))
+    month_candidates = [
+        word
+        for word in line.words
+        if word_center_x(word) > layout.date_right
+        and safe_float(word.get("x0")) <= layout.date_right + overflow
+        and compact_text(word.get("text", "")) in MONTH_NUMBERS
+    ]
+
+    if not month_candidates:
+        return primary
+
+    closest_month = min(
+        month_candidates,
+        key=lambda word: (
+            max(0.0, safe_float(word.get("x0")) - layout.date_right),
+            safe_float(word.get("x0")),
+        ),
+    )
+    result = [*primary, closest_month]
+    result.sort(key=lambda word: safe_float(word.get("x0")))
+    return result
+
+
 def _movement_date_parts(
     line: SpatialLine,
     layout: ColumnLayout,
 ) -> Optional[Tuple[int, int]]:
     date_words = [
         clean_word_text(word.get("text", ""))
-        for word in line.words
-        if word_center_x(word) <= layout.date_right
+        for word in _movement_date_words(line, layout)
     ]
     date_text = " ".join(value for value in date_words if value)
     match = MOVEMENT_DATE_RE.search(normalize_upper(date_text))
@@ -429,12 +504,32 @@ def parse_money(value: Any) -> Optional[float]:
         return None
 
     # Sólo se corrigen caracteres OCR dentro de un token que ya contiene
-    # evidencia numérica.
+    # evidencia numérica. Los signos Unicode se llevan a '-' para aceptar
+    # tanto ``-53.00`` como ``53.00-`` sin perder su semántica.
     normalized = original.translate(
-        str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1"})
+        str.maketrans(
+            {
+                "O": "0",
+                "o": "0",
+                "I": "1",
+                "l": "1",
+                "\u2212": "-",
+                "\u2013": "-",
+                "\u2014": "-",
+            }
+        )
     )
-    negative = normalized.lstrip().startswith("-") or (
+    digit_matches = list(re.finditer(r"\d", normalized))
+    first_digit = digit_matches[0] if digit_matches else None
+    last_digit = digit_matches[-1] if digit_matches else None
+    negative = (
         "(" in normalized and ")" in normalized
+    ) or bool(
+        first_digit
+        and "-" in normalized[: first_digit.start()]
+    ) or bool(
+        last_digit
+        and "-" in normalized[last_digit.end() :]
     )
     currency_hint = "$" in normalized
     numeric = re.sub(r"[^0-9.,]", "", normalized)
@@ -481,10 +576,17 @@ def is_money_text(value: Any) -> bool:
     if not text or "%" in text:
         return False
 
+    normalized = (
+        text
+        .replace("\u2212", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+    )
+
     return bool(
-        "$" in text
-        or re.search(r"[-(]?\d[\d,]*\.\d{2}\)?", text)
-        or re.search(r"[-(]?\d[\d.]*,\d{2}\)?", text)
+        "$" in normalized
+        or re.search(r"[-(]?\d[\d,]*\.\d{2}\)?-?", normalized)
+        or re.search(r"[-(]?\d[\d.]*,\d{2}\)?-?", normalized)
     )
 
 
@@ -717,10 +819,17 @@ def _concept_line_text(
     line: SpatialLine,
     layout: ColumnLayout,
 ) -> str:
+    # Si el mes cruzó unos puntos el borde FECHA/CONCEPTO, forma parte de la
+    # fecha recuperada y no debe contaminar el concepto como "NOV ...".
+    date_word_ids = {
+        id(word)
+        for word in _movement_date_words(line, layout)
+    }
     parts = [
         clean_word_text(word.get("text", ""))
         for word in line.words
-        if layout.date_right < word_center_x(word) < layout.reference_start
+        if id(word) not in date_word_ids
+        and layout.date_right < word_center_x(word) < layout.reference_start
     ]
     return " ".join(part for part in parts if part).strip()
 
