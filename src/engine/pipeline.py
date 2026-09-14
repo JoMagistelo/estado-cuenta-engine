@@ -12,6 +12,7 @@ from engine.statement_processor import process_single_statement_with_ocr_review
 from models.processing_result import ProcessingResult
 from readers.models import DocumentData
 from readers.reader_manager import ReaderManager
+from utils.text_normalizer import normalize_text
 from validators.movimiento_validator import validar_movimientos
 
 
@@ -152,6 +153,51 @@ def _read_ocr_engine(
     return ReaderManager.read_ocr_for_parser(pdf_path, **kwargs)
 
 
+def _build_ocr_only_result(
+    prepared: PreparedStatement,
+    document: DocumentData,
+    requested_primary_engine: str,
+    primary_engine: str,
+    *,
+    bank_key: str | None,
+    reason: str,
+) -> ProcessingResult:
+    """Conserva un OCR válido aunque no exista una ruta bancaria parseable.
+
+    La capa de texto ya fue incrustada y verificada antes de llegar aquí. Este
+    resultado deliberadamente no inventa datos bancarios: ``estado_cuenta`` queda
+    en ``None`` y el mapper de Excel lo omite, mientras ``ocr_artifacts`` mantiene
+    el PDF pesquisable disponible para descarga desde la interfaz.
+    """
+    metadata = dict(document.metadata or {})
+    selected_engine = str(metadata.get("reader") or primary_engine).lower()
+    primary_used = str(metadata.get("ocr_primary_engine") or primary_engine)
+    ocr_artifacts: dict[str, str] = {}
+    artifact_path = metadata.get("ocr_artifact_path")
+    if artifact_path and selected_engine:
+        ocr_artifacts[selected_engine] = str(artifact_path)
+
+    return ProcessingResult(
+        file_name=prepared.file_name,
+        bank_key=bank_key or "no_identificado",
+        estado_cuenta=None,
+        raw_text=document.raw_text,
+        normalized_text=document.normalized_text or normalize_text(document.raw_text),
+        validaciones=[],
+        processing_method="OCR",
+        debug={"ocr_only": True, "reason": reason},
+        ocr_review=None,
+        ocr_engine=selected_engine,
+        ocr_requested_primary_engine=requested_primary_engine,
+        ocr_primary_engine=primary_used,
+        ocr_secondary_engine=None,
+        fallback_attempted=False,
+        fallback_used=False,
+        source_pdf_path=str(Path(prepared.pdf_path).expanduser().resolve()),
+        ocr_artifacts=ocr_artifacts,
+    )
+
+
 def _process_prepared_statement(
     prepared: PreparedStatement,
     ocr_primary_engine: str = "tesseract",
@@ -207,23 +253,45 @@ def _process_prepared_statement(
         file_name=prepared.file_name,
     )
     if not bank_key:
+        if prepared.processing_method == "OCR":
+            return _build_ocr_only_result(
+                prepared,
+                document,
+                requested_primary_engine,
+                primary_engine,
+                bank_key=None,
+                reason="bank_not_identified",
+            )
         raise ValueError(
             f"No se pudo identificar la institución financiera para el archivo "
             f"'{prepared.file_name}'. No se encontró una CLABE bancaria válida ni "
             "una firma bancaria reconocible en el nombre del archivo."
         )
 
-    if cancel_event is None:
-        estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
-            document=document,
-            bank_key=bank_key,
-        )
-    else:
-        estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
-            document=document,
-            bank_key=bank_key,
-            cancel_event=cancel_event,
-        )
+    try:
+        if cancel_event is None:
+            estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
+                document=document,
+                bank_key=bank_key,
+            )
+        else:
+            estado_cuenta, document, ocr_review = process_single_statement_with_ocr_review(
+                document=document,
+                bank_key=bank_key,
+                cancel_event=cancel_event,
+            )
+    except NotImplementedError:
+        if prepared.processing_method == "OCR":
+            return _build_ocr_only_result(
+                prepared,
+                document,
+                requested_primary_engine,
+                primary_engine,
+                bank_key=bank_key,
+                reason="parser_not_available",
+            )
+        raise
+
     if _cancel_requested(cancel_event):
         raise CancelledError()
 
