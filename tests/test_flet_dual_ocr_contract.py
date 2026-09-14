@@ -41,5 +41,5 @@ def test_flet_exposes_only_manual_ocr_artifact_and_reprocess_actions():
     assert "Descargar PDF con texto incrustado" in source
     assert "tooltip='Reprocesar usando motor secundario'" in source
     assert "or bool(state['reprocess_cancel_events'])" in source
-    assert "export_button.disabled = not results or busy" in source
+    assert "export_button.disabled = not has_results or busy" in source
     assert "Espera a que termine el reprocesado OCR antes de generar el Excel." in source
