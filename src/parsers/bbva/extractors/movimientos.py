@@ -44,6 +44,11 @@ COLS_PREMIUM = {
 # muestras reales la separación máxima observada es cercana a 10 puntos.
 OCR_AMOUNT_ROW_TOLERANCE = 12.0
 
+# La perforación puede desnivelar o desplazar horizontalmente sólo las palabras
+# de las dos columnas de fecha. Esta tolerancia es menor al interlineado normal:
+# permite recomponer una misma fila visual sin unir movimientos consecutivos.
+OCR_DAMAGED_DATE_ROW_TOLERANCE = 8.0
+
 BBVA_MONTHS = {
     "ENE",
     "FEB",
@@ -406,6 +411,238 @@ def line_top(line: List[Dict[str, Any]]) -> float:
         return 0.0
 
     return sum(float(word.get("top", 0)) for word in line) / len(line)
+
+
+def word_center(word: Dict[str, Any]) -> float:
+    """Devuelve el centro horizontal de una palabra espacial."""
+
+    return (
+        float(word.get("x0", 0))
+        + float(word.get("x1", word.get("x0", 0)))
+    ) / 2
+
+
+def liquidation_date_near_column(
+    line: List[Dict[str, Any]],
+    cols: Dict[str, tuple[float, float]],
+) -> str | None:
+    """Busca la fecha de liquidación aunque el oyuelo desplace su caja."""
+
+    direct = normalize_bbva_date(
+        column_text(line, cols["FECHA_LIQUIDACION"])
+    )
+    if direct is not None:
+        return direct
+
+    date_area_xmax = max(
+        cols["FECHA_LIQUIDACION"][1],
+        cols["CONCEPTO"][0] + 5,
+    )
+    candidates: list[tuple[float, str]] = []
+
+    for word in line:
+        center = word_center(word)
+        if not cols["FECHA_OPERACION"][0] <= center <= date_area_xmax:
+            continue
+
+        normalized = normalize_bbva_date(str(word.get("text", "")))
+        if normalized is not None:
+            candidates.append((center, normalized))
+
+    if not candidates:
+        return None
+
+    # En una fila dañada, la única fecha completa que sobrevive es la de
+    # liquidación. Si hubiera más de una, la de la derecha corresponde a LIQ.
+    return max(candidates, key=lambda candidate: candidate[0])[1]
+
+
+def damaged_month_near_line(
+    lines: List[List[Dict[str, Any]]],
+    target_index: int,
+    cols: Dict[str, tuple[float, float]],
+) -> str | None:
+    """Localiza el mes residual aun si cayó en otro renglón o columna de fecha."""
+
+    target = lines[target_index]
+    target_page = line_page(target)
+    target_top = line_top(target)
+    date_area_xmax = max(
+        cols["FECHA_LIQUIDACION"][1],
+        cols["CONCEPTO"][0] + 5,
+    )
+    candidates: list[tuple[float, float, str]] = []
+
+    for line in lines:
+        if line_page(line) != target_page:
+            continue
+
+        distance = abs(line_top(line) - target_top)
+        if distance > OCR_DAMAGED_DATE_ROW_TOLERANCE:
+            continue
+
+        for word in line:
+            center = word_center(word)
+            if not cols["FECHA_OPERACION"][0] <= center <= date_area_xmax:
+                continue
+
+            # PDFWordReader normalmente separa por espacios; el split también
+            # cubre capas OCR que hayan conservado "JUN 12/JUN" como un token.
+            for token in str(word.get("text", "")).upper().split():
+                if normalize_bbva_date(token) is not None:
+                    continue
+
+                month = extract_damaged_operation_month(token)
+                if month is not None:
+                    candidates.append((distance, center, month))
+
+    if not candidates:
+        return None
+
+    # Prioriza la misma altura y luego la señal más a la izquierda.
+    return min(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
+
+
+def closest_concept_line_index(
+    lines: List[List[Dict[str, Any]]],
+    target_index: int,
+    cols: Dict[str, tuple[float, float]],
+) -> int | None:
+    """Encuentra el concepto perteneciente a la fila de fecha perforada."""
+
+    target = lines[target_index]
+    target_page = line_page(target)
+    target_top = line_top(target)
+    candidates: list[tuple[float, int]] = []
+
+    for index, line in enumerate(lines):
+        if line_page(line) != target_page:
+            continue
+
+        distance = abs(line_top(line) - target_top)
+        if distance > OCR_DAMAGED_DATE_ROW_TOLERANCE:
+            continue
+
+        if column_text(line, cols["CONCEPTO"]):
+            candidates.append((distance, index))
+
+    if not candidates:
+        return None
+
+    return min(candidates, key=lambda candidate: candidate[0])[1]
+
+
+def repair_perforated_date_rows(
+    lines: List[List[Dict[str, Any]]],
+    cols: Dict[str, tuple[float, float]],
+) -> List[List[Dict[str, Any]]]:
+    """Recompone filas cuya fecha fue desplazada o partida por el oyuelo.
+
+    La reparación exige simultáneamente una liquidación completa, un mes
+    residual cercano y un concepto cercano. Sólo entonces crea las palabras
+    canónicas necesarias dentro de las columnas históricas. Las listas y
+    palabras de entrada no se mutan.
+    """
+
+    augmented = [list(line) for line in lines]
+
+    for target_index, original_line in enumerate(lines):
+        operation_text = column_text(
+            original_line,
+            cols["FECHA_OPERACION"],
+        )
+        if normalize_bbva_date(operation_text) is not None:
+            continue
+
+        liquidation_date = liquidation_date_near_column(
+            original_line,
+            cols,
+        )
+        if liquidation_date is None:
+            continue
+
+        month = damaged_month_near_line(
+            lines,
+            target_index,
+            cols,
+        )
+        if month is None:
+            continue
+
+        concept_index = closest_concept_line_index(
+            lines,
+            target_index,
+            cols,
+        )
+        if concept_index is None:
+            continue
+
+        target_line = augmented[target_index]
+
+        # Si el OCR colocó el concepto unos puntos arriba o abajo, se mueve a
+        # la línea ancla para que ésta pueda iniciar el bloque del movimiento.
+        if (
+            concept_index != target_index
+            and not column_text(target_line, cols["CONCEPTO"])
+        ):
+            concept_words = [
+                word
+                for word in augmented[concept_index]
+                if cols["CONCEPTO"][0]
+                <= word_center(word)
+                <= cols["CONCEPTO"][1]
+            ]
+            concept_word_ids = {id(word) for word in concept_words}
+            augmented[concept_index] = [
+                word
+                for word in augmented[concept_index]
+                if id(word) not in concept_word_ids
+            ]
+            target_line.extend(concept_words)
+
+        # El mes puede haber quedado en la banda de liquidación o en una línea
+        # distinta. Se añade una copia canónica en FECHA_OPERACION.
+        current_operation = column_text(
+            target_line,
+            cols["FECHA_OPERACION"],
+        )
+        if extract_damaged_operation_month(current_operation) is None:
+            xmin, xmax = cols["FECHA_OPERACION"]
+            top = line_top(original_line)
+            target_line.append(
+                {
+                    "text": month,
+                    "x0": xmin,
+                    "x1": xmax,
+                    "top": top,
+                    "bottom": top,
+                    "page": line_page(original_line),
+                }
+            )
+
+        # También se corrige una caja de liquidación desplazada fuera de su
+        # columna, sin tocar la palabra OCR original.
+        current_liquidation = column_text(
+            target_line,
+            cols["FECHA_LIQUIDACION"],
+        )
+        if normalize_bbva_date(current_liquidation) is None:
+            xmin, xmax = cols["FECHA_LIQUIDACION"]
+            top = line_top(original_line)
+            target_line.append(
+                {
+                    "text": liquidation_date,
+                    "x0": xmin,
+                    "x1": xmax,
+                    "top": top,
+                    "bottom": top,
+                    "page": line_page(original_line),
+                }
+            )
+
+        target_line.sort(key=lambda word: word.get("x0", 0))
+
+    return augmented
 
 
 def page_has_account_header(
@@ -1295,6 +1532,14 @@ def extract_movimientos_words(
 
     lines = group_words_into_lines(
         words
+    )
+
+    # El oyuelo puede desplazar el mes, la liquidación o el concepto a líneas
+    # espaciales distintas. Se recompone primero la fila de fecha; después la
+    # lógica existente puede asociar los importes OCR partidos.
+    lines = repair_perforated_date_rows(
+        lines,
+        cols,
     )
 
     # En OCR los importes pueden quedar en una línea distinta a la fecha.
