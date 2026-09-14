@@ -17,7 +17,6 @@ from .ocr_searchable_pdf import OCR_LAYER_TAG, OCRSearchablePDFWriter
 from .paddleocr_pdf_reader import PaddleOCRPDFReader
 from .pdf_text_reader import PDFTextReader
 from .pdf_word_reader import PDFWordReader
-from .scotiabank_summary_ocr import recover_scotiabank_summary_words
 from .tesseract_pdf_reader import TesseractPDFReader
 
 
@@ -249,16 +248,6 @@ class ReaderManager:
                     start_page=start_page,
                     cancel_event=cancel_event,
                 )
-
-            _raise_if_cancelled(cancel_event)
-            recovered_summary_words = recover_scotiabank_summary_words(
-                file_path,
-                document.spatial_words,
-                start_page=start_page,
-            )
-            if recovered_summary_words:
-                document.spatial_words.extend(recovered_summary_words)
-            _raise_if_cancelled(cancel_event)
 
             document.metadata = dict(document.metadata or {})
             document.metadata["source_path"] = str(file_path.resolve())
