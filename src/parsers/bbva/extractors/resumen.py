@@ -1,8 +1,8 @@
 from typing import List, Dict, Any, Optional
 import re
-import unicodedata
 
 from models.resumen_financiero import ResumenFinanciero
+from .summary_table import extract_summary_tables
 
 
 # ============================================================
@@ -27,9 +27,9 @@ SALDO_PROMEDIO_PREMIUM_TOP = 246.123783
 # "Información Financiera" (Rendimiento, Comisiones y
 # Comportamiento del periodo).
 #
-# Las cajas históricas se conservan para documentos sin etiquetas
-# reconocibles. Los importes de Comportamiento se asocian a sus
-# etiquetas cuando están disponibles para tolerar cambios de fila.
+# Las cajas históricas se conservan para PDFs digitales sin una tabla
+# reconocible. Para tablas detectadas, summary_table.py encuentra la página
+# y asocia cada valor con su propia fila.
 #
 # El bloque se organiza en dos columnas sobre el mismo
 # renglón (mismo "top"):
@@ -301,8 +301,7 @@ def word_inside_box(
     con palabras que se encuentren parcialmente sobre el
     límite de una región.
     """
-    # Todo el resumen financiero está en la primera página.
-    # Ignoramos cualquier palabra que no sea de la página 1.
+    # Sólo las cajas digitales históricas corresponden a la página 1.
     page = word.get("page", 1)
     if page != 1:
         return False
@@ -440,92 +439,18 @@ def extract_numeric_amount_from_box(
     return None
 
 
-# Los importes de Comportamiento pueden moverse verticalmente entre emisiones.
-# Sólo se utilizan las cajas históricas cuando no se reconoce ninguna etiqueta
-# de esa sección; una etiqueta reconocida nunca toma el valor de otra fila.
-_COMPORTAMIENTO_LABELS = {
-    "saldo_anterior": {"SALDO", "ANTERIOR"},
-    "depositos_abonos": {"DEPOSITOS", "ABONOS"},
-    "retiros_cargos": {"RETIROS", "CARGOS"},
-    "saldo_final": {"SALDO", "FINAL"},
-    "saldo_promedio_minimo_mensual": {"SALDO", "PROMEDIO", "MINIMO", "MENSUAL"},
-    "saldo_global": {"SALDO", "GLOBAL"},
-}
-_COMPORTAMIENTO_AMOUNT = re.compile(
-    r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2,})?-?$"
-)
-
-
-def _comportamiento_labels(words: List[Dict[str, Any]]) -> dict[str, float]:
-    label_words = [
-        word for word in words
-        if word.get("page", 1) == 1
-        and 300.0 <= float(word.get("x0", 0)) < 485.0
-        and 200.0 <= float(word.get("top", 0)) < 510.0
-    ]
-    label_words.sort(key=lambda word: (float(word["top"]), float(word["x0"])))
-    rows: list[list[Dict[str, Any]]] = []
-    for word in label_words:
-        center = (float(word["top"]) + float(word["bottom"])) / 2
-        if rows and abs(center - sum(
-            (float(item["top"]) + float(item["bottom"])) / 2 for item in rows[-1]
-        ) / len(rows[-1])) <= 5.0:
-            rows[-1].append(word)
-        else:
-            rows.append([word])
-
-    labels: dict[str, float] = {}
-    for row in rows:
-        tokens = set(re.findall(
-            r"[A-Z0-9]+",
-            unicodedata.normalize(
-                "NFKD", " ".join(str(word.get("text", "")) for word in row)
-            ).encode("ascii", "ignore").decode("ascii").upper(),
-        ))
-        center = sum(
-            (float(word["top"]) + float(word["bottom"])) / 2 for word in row
-        ) / len(row)
-        for field, required in _COMPORTAMIENTO_LABELS.items():
-            if required <= tokens and field not in labels:
-                labels[field] = center
-    return labels
-
-
 def _comportamiento_amount(
     words: List[Dict[str, Any]],
     field: str,
     historical_box: tuple[float, float, float, float],
 ) -> float:
-    labels = _comportamiento_labels(words)
-    if not labels:
-        # Compatibilidad con PDFs digitales cuyo texto no expone las etiquetas.
-        if field == "saldo_global":
-            return extract_numeric_amount_from_box(words, historical_box) or 0.0
-        return parse_amount(text_from_box(words, historical_box))
-
-    if field not in labels:
-        return 0.0
-
-    candidates: list[tuple[float, float]] = []
-    for word in words:
-        if word.get("page", 1) != 1 or float(word.get("x0", 0)) < 490.0:
-            continue
-        raw = str(word.get("text", "")).strip().replace("$", "")
-        if not _COMPORTAMIENTO_AMOUNT.fullmatch(raw):
-            continue
-        center = (float(word["top"]) + float(word["bottom"])) / 2
-        distances = {name: abs(center - y) for name, y in labels.items()}
-        nearest = min(distances, key=distances.get)
-        if nearest != field or distances[field] > 9.0:
-            continue
-        try:
-            amount = float(raw.rstrip("-").replace(",", ""))
-        except ValueError:
-            continue
-        if raw.endswith("-"):
-            amount = -amount
-        candidates.append((distances[field], amount))
-    return min(candidates)[1] if candidates else 0.0
+    table = extract_summary_tables(words)
+    if table is not None:
+        return table[1].get(field, 0.0)
+    # PDFs digitales sin etiquetas legibles mantienen las cajas históricas.
+    if field == "saldo_global":
+        return extract_numeric_amount_from_box(words, historical_box) or 0.0
+    return parse_amount(text_from_box(words, historical_box))
 
 # ============================================================
 # UTILIDADES NUMÉRICAS
@@ -853,9 +778,8 @@ def extract_resumen_financiero_words(
     """
     Extractor espacial del resumen financiero BBVA.
 
-    En Comportamiento, las etiquetas anclan cada importe a su fila.
-    Sin etiquetas legibles se preservan las cajas históricas. Las
-    demás secciones mantienen la extracción espacial existente.
+    Las dos tablas se leen por etiqueta, fila y página cuando son detectables.
+    Sin etiquetas suficientes se preservan las cajas digitales históricas.
 
     Campos extraídos:
 
@@ -925,31 +849,25 @@ def extract_resumen_financiero_words(
         words
     )
 
-    saldo_anterior = extract_saldo_anterior(
-        words
-    )
+    table = extract_summary_tables(words)
+    if table is None:
+        # Extracción digital histórica, sin etiquetas de tabla detectables.
+        saldo_anterior = extract_saldo_anterior(words)
+        depositos_abonos = extract_depositos_abonos(words)
+        retiros_cargos = extract_retiros_cargos(words)
+        saldo_final = extract_saldo_final(words)
+        saldo_promedio_minimo_mensual = extract_saldo_promedio_minimo_mensual(words)
+        saldo_global = extract_saldo_global(words)
+    else:
+        right = table[1]
+        saldo_anterior = right.get("saldo_anterior", 0.0)
+        depositos_abonos = right.get("depositos_abonos", 0.0)
+        retiros_cargos = right.get("retiros_cargos", 0.0)
+        saldo_final = right.get("saldo_final", 0.0)
+        saldo_promedio_minimo_mensual = right.get("saldo_promedio_minimo_mensual", 0.0)
+        saldo_global = right.get("saldo_global", 0.0)
 
-    depositos_abonos = extract_depositos_abonos(
-        words
-    )
-
-    retiros_cargos = extract_retiros_cargos(
-        words
-    )
-
-    saldo_final = extract_saldo_final(
-        words
-    )
-
-    saldo_promedio_minimo_mensual = extract_saldo_promedio_minimo_mensual(
-        words
-    )
-
-    saldo_global = extract_saldo_global(
-        words
-    )
-
-    return ResumenFinanciero(
+    result = ResumenFinanciero(
         saldo_promedio=saldo_promedio,
 
         dias_periodo=dias_periodo,
@@ -982,3 +900,16 @@ def extract_resumen_financiero_words(
 
         saldo_global=saldo_global,
     )
+    if table is not None:
+        page, _, left, has_left = table
+        # También Rendimiento puede desplazarse (y pasar a la página 2).
+        # Si falta una fila, nunca se rellena con el importe de otra fila.
+        if has_left or page != 1:
+            for name in (
+                "saldo_promedio", "dias_periodo", "tasa_bruta_anual",
+                "saldo_promedio_gravable", "intereses_a_favor", "isr_retenido",
+                "cheques_pagados", "manejo_cuenta", "cargos_objetados",
+                "abonos_objetados",
+            ):
+                setattr(result, name, left.get(name, None if name == "saldo_promedio" else 0))
+    return result
