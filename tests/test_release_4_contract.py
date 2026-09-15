@@ -4,18 +4,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_release_version_is_4_0_0_across_app_package_and_windows_build():
-    main_flet = (ROOT / "app" / "main_flet.py").read_text(encoding="utf-8")
+def test_release_version_is_4_1_0_across_app_package_and_windows_build():
+    main_desktop = (ROOT / "app" / "main_desktop.py").read_text(encoding="utf-8")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     spec = (ROOT / "EstadoCuentaEngine.spec").read_text(encoding="utf-8")
     build_script = (ROOT / "scripts" / "build_windows_release.ps1").read_text(
         encoding="utf-8"
     )
 
-    assert "APP_VERSION = '4.0.0'" in main_flet
-    assert 'version = "4.0.0"' in pyproject
-    assert "APP_VERSION = (4, 0, 0, 0)" in spec
-    assert '[string]$Version = "4.0.0"' in build_script
+    assert 'RELEASE_VERSION = "4.1.0"' in main_desktop
+    assert "ui.APP_VERSION = RELEASE_VERSION" in main_desktop
+    assert 'version = "4.1.0"' in pyproject
+    assert "APP_VERSION = (4, 1, 0, 0)" in spec
+    assert '[string]$Version = "4.1.0"' in build_script
 
 
 def test_information_modal_explains_scanned_pdfs_without_ocr_jargon():

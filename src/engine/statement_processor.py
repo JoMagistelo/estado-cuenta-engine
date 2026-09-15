@@ -25,6 +25,7 @@ from parsers.scotiabank import parse_scotiabank
 from parsers.cetes import parse_cetes
 from parsers.mifel import parse_mifel
 from parsers.mercado_pago import parse_mercado_pago
+from parsers.nu import parse_nu
 from validators.movimiento_validator import validar_movimientos
 
 PARSER_REGISTRY = {
@@ -37,6 +38,7 @@ PARSER_REGISTRY = {
     'cetes': parse_cetes,
     'mifel': parse_mifel,
     'mercado_pago': parse_mercado_pago,
+    'nu': parse_nu,
 }
 ParserFn = Callable[[DocumentData], object]
 NormalizerFn = Callable[[list[dict]], list[dict]]
