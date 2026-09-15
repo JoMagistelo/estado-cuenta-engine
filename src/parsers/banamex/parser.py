@@ -12,7 +12,7 @@ from .extractors.movimientos import extract_movimientos_words
 
 def parse_banamex(document: DocumentData) -> EstadoCuenta:
     """
-    Parser principal de estados de cuenta BBVA.
+    Parser principal de estados de cuenta Banamex.
 
     Todos los extractores utilizan exclusivamente spatial_words.
 

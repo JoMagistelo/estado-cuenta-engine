@@ -876,6 +876,16 @@ def extract_saldo_anterior(
     layout: Optional[ResumenLayout] = None,
 ) -> Optional[float]:
     profile = _resolve_layout(words, layout)
+
+    anchored_value = _money_from_labeled_row(
+        words,
+        profile.saldo_anterior,
+        (("SALDO", "ANTERIOR"),),
+    )
+
+    if anchored_value is not None:
+        return anchored_value
+
     return _money_from_region(words, profile.saldo_anterior)
 
 
