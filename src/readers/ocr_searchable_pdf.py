@@ -326,6 +326,38 @@ def _append_content_stream(writer: PdfWriter, page, data: bytes) -> None:
         page[contents_name] = ArrayObject([existing, stream_ref])
 
 
+def _isolate_existing_page_content(writer: PdfWriter, page) -> None:
+    """Evita que el estado gráfico del PDF de origen alcance la capa OCR.
+
+    Los streams enumerados en ``/Contents`` forman un único flujo lógico. Algunos
+    productores, incluido Microsoft Print to PDF, dejan una matriz ``cm`` activa
+    al terminar su contenido. Un ``q`` al inicio de la nueva capa sólo guardaría
+    esa matriz heredada; no restablecería la identidad. Encapsular primero todo el
+    contenido existente entre ``q`` y ``Q`` conserva su apariencia y garantiza
+    que el stream OCR posterior comienza con el estado gráfico inicial de página.
+    """
+    contents_name = NameObject("/Contents")
+    existing = page.get(contents_name)
+    if existing is None:
+        return
+
+    resolved = existing.get_object() if hasattr(existing, "get_object") else existing
+    original_streams = list(resolved) if isinstance(resolved, ArrayObject) else [existing]
+
+    save_state = DecodedStreamObject()
+    save_state.set_data(b"q\n")
+    restore_state = DecodedStreamObject()
+    restore_state.set_data(b"Q\n")
+
+    page[contents_name] = ArrayObject(
+        [
+            writer._add_object(save_state.flate_encode()),
+            *original_streams,
+            writer._add_object(restore_state.flate_encode()),
+        ]
+    )
+
+
 def _verify_projection(
     expected: list[dict[str, Any]],
     actual: list[dict[str, Any]],
@@ -424,6 +456,7 @@ class OCRSearchablePDFWriter:
                 if not page_words:
                     continue
 
+                _isolate_existing_page_content(writer, page)
                 font_resource = _install_font(page, font_ref)
                 page_width = float(page.mediabox.width)
                 page_height = float(page.mediabox.height)
