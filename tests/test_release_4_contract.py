@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_release_version_is_4_0_0_across_app_package_and_windows_build():
+def test_release_version_is_4_1_0_across_app_package_and_windows_build():
     main_flet = (ROOT / "app" / "main_flet.py").read_text(encoding="utf-8")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     spec = (ROOT / "EstadoCuentaEngine.spec").read_text(encoding="utf-8")
@@ -12,10 +12,10 @@ def test_release_version_is_4_0_0_across_app_package_and_windows_build():
         encoding="utf-8"
     )
 
-    assert "APP_VERSION = '4.0.0'" in main_flet
-    assert 'version = "4.0.0"' in pyproject
-    assert "APP_VERSION = (4, 0, 0, 0)" in spec
-    assert '[string]$Version = "4.0.0"' in build_script
+    assert "APP_VERSION = '4.1.0'" in main_flet
+    assert 'version = "4.1.0"' in pyproject
+    assert "APP_VERSION = (4, 1, 0, 0)" in spec
+    assert '[string]$Version = "4.1.0"' in build_script
 
 
 def test_information_modal_explains_scanned_pdfs_without_ocr_jargon():
@@ -30,6 +30,7 @@ def test_information_modal_explains_scanned_pdfs_without_ocr_jargon():
     assert "seleccionar, copiar y buscar texto" in help_block
     assert "Bancos y tipos de estado de cuenta habilitados" in help_block
     assert "Tipos admitidos" in help_block
+    assert "Nu México" in help_block
     assert "Motor OCR activo" not in help_block
     assert "PDF OCR y reprocesado" not in help_block
     assert "Escaneado (OCR)" not in help_block
