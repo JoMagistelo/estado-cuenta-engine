@@ -494,6 +494,7 @@ def detect_header(
             "x0": x0,
             "x1": x1,
             "center": (x0 + x1) / 2.0,
+            "height": word_height(word),
         }
 
     return result
@@ -613,9 +614,23 @@ def build_config_from_header(
         and depositos_header is not None
         and saldo_header is not None
     ):
-        retiro_center = retiros_header["center"]
-        deposito_center = depositos_header["center"]
-        saldo_center = saldo_header["center"]
+        header_heights = [
+            header["height"]
+            for header in (
+                retiros_header,
+                depositos_header,
+                saldo_header,
+            )
+            if header["height"] > 0
+        ]
+        right_edge_offset = (
+            float(median(header_heights)) * 3.5
+            if header_heights
+            else 35.0
+        )
+        retiro_center = retiros_header["center"] + right_edge_offset
+        deposito_center = depositos_header["center"] + right_edge_offset
+        saldo_center = saldo_header["center"] + right_edge_offset
 
         if retiro_center < deposito_center < saldo_center:
             retiro_deposito_boundary = (
@@ -1436,6 +1451,10 @@ def build_movimiento(
         return None
 
     concepto = extract_concepto(block, configs)
+
+    if "DISPOSICIONES EN CAJERO EXENTAS" in normalize_upper(concepto):
+        return None
+
     cargo = extract_cargo(block, configs)
     abono = extract_abono(block, configs)
     saldo = extract_saldo(block, configs)
