@@ -26,6 +26,7 @@ DANGER = "#A63D40"
 
 STARTUP_WIDTH = 680
 STARTUP_HEIGHT = 420
+RELEASE_VERSION = "4.1.0"
 PADDLEOCR_MODEL_NAMES = (
     "PP-OCRv5_mobile_det",
     "latin_PP-OCRv5_mobile_rec",
@@ -426,6 +427,7 @@ async def _desktop_main(page: ft.Page) -> None:
         # main_flet importa el grafo funcional completo. Ejecutarlo fuera del
         # hilo del loop mantiene animada y responsiva la ventana de arranque.
         ui = await asyncio.to_thread(importlib.import_module, "main_flet")
+        ui.APP_VERSION = RELEASE_VERSION
 
         _update_startup_progress(
             page,
