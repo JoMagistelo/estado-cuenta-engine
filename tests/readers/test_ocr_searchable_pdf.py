@@ -51,6 +51,23 @@ def _pdf_with_existing_text(path: Path) -> None:
         writer.write(file_handle)
 
 
+def _pdf_with_persistent_graphics_transform(path: Path) -> None:
+    """Reproduce el estado gráfico que deja Microsoft Print to PDF."""
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=300, height=400)
+    stream = DecodedStreamObject()
+    stream.set_data(
+        b"0.75 0 0 -0.75 0 400 cm\n"
+        b"q\n"
+        b"0 0 20 20 re\n"
+        b"S\n"
+        b"Q\n"
+    )
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    with path.open("wb") as file_handle:
+        writer.write(file_handle)
+
+
 def _assert_box(actual: dict, expected: dict) -> None:
     for field in ("x0", "x1", "top", "bottom"):
         assert float(actual[field]) == pytest.approx(float(expected[field]), abs=0.02)
@@ -107,6 +124,37 @@ def test_searchable_pdf_normalizes_page_rotation_without_moving_ocr_geometry(tmp
     assert len(projected) == 1
     assert projected[0]["text"] == "ROTADO"
     _assert_box(projected[0], words[0])
+
+
+def test_searchable_pdf_isolates_persistent_source_ctm_before_ocr_layer(tmp_path: Path):
+    source = tmp_path / "microsoft_print_to_pdf_scan.pdf"
+    output = tmp_path / "microsoft_print_to_pdf_scan_ocr.pdf"
+    _pdf_with_persistent_graphics_transform(source)
+    words = [
+        {
+            "text": "BBVA",
+            "x0": 210.0,
+            "x1": 270.0,
+            "top": 30.0,
+            "bottom": 44.0,
+            "page": 1,
+        },
+        {
+            "text": "MOVIMIENTO",
+            "x0": 25.0,
+            "x1": 120.0,
+            "top": 280.0,
+            "bottom": 292.0,
+            "page": 1,
+        },
+    ]
+
+    OCRSearchablePDFWriter.write(source, words, output)
+
+    projected = PDFWordReader.read(output, layer_tag=OCR_LAYER_TAG)
+    assert [word["text"] for word in projected] == ["BBVA", "MOVIMIENTO"]
+    for actual, expected in zip(projected, words):
+        _assert_box(actual, expected)
 
 
 def test_reader_manager_returns_only_verified_pdf_layer_to_parser(tmp_path: Path):
