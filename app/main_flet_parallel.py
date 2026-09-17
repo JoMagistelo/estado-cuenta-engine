@@ -57,15 +57,17 @@ def mode_description(*, enabled: bool, workers: int, engine: str) -> str:
 
 
 def _project_version() -> str:
-    """Utiliza la versión instalada, o el pyproject local al ejecutar desde código fuente."""
+    """Prioriza la versión del código actual frente a metadatos de venv obsoletos."""
+    import tomllib
+
+    project_file = original_ui.PROJECT_ROOT / "pyproject.toml"
+    if project_file.is_file():
+        with project_file.open("rb") as stream:
+            return str(tomllib.load(stream)["project"]["version"])
     try:
         return version("extractor-de-movimientos-financieros")
     except PackageNotFoundError:
-        import tomllib
-
-        project_file = original_ui.PROJECT_ROOT / "pyproject.toml"
-        with project_file.open("rb") as stream:
-            return str(tomllib.load(stream)["project"]["version"])
+        return original_ui.APP_VERSION
 
 
 def main(page: ft.Page):
