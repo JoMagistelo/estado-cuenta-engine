@@ -112,11 +112,27 @@ def _apply_coordinate_normalizer(document: DocumentData, normalizer_fn) -> Docum
     return document
 
 
-def _mark_movements_unclassified(estado) -> None:
-    """Reserva `tipo_operacion` para el futuro clasificador de movimientos."""
+def _has_movement_amount(value: Any) -> bool:
+    """Indica si una celda monetaria contiene un importe distinto de cero."""
+    try:
+        return float(value or 0.0) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _classify_movements_by_amount_direction(estado) -> None:
+    """Clasifica todos los movimientos como CARGO o ABONO por su columna."""
     for movimiento in getattr(estado, 'movimientos', None) or []:
         try:
-            movimiento.tipo_operacion = 'No identificado'
+            has_cargo = _has_movement_amount(getattr(movimiento, 'cargo', 0.0))
+            has_abono = _has_movement_amount(getattr(movimiento, 'abono', 0.0))
+
+            if has_cargo and not has_abono:
+                movimiento.tipo_operacion = 'CARGO'
+            elif has_abono and not has_cargo:
+                movimiento.tipo_operacion = 'ABONO'
+            else:
+                movimiento.tipo_operacion = 'No identificado'
         except Exception:
             continue
 
@@ -132,7 +148,7 @@ def _process_once(document: DocumentData, bank_key: str):
         ocr_parser_fn = _resolve_ocr_parser(bank_key)
         if ocr_parser_fn is not None:
             estado = ocr_parser_fn(document)
-            _mark_movements_unclassified(estado)
+            _classify_movements_by_amount_direction(estado)
             return estado, document
 
         normalizer_fn = _resolve_coordinate_normalizer(bank_key)
@@ -140,7 +156,7 @@ def _process_once(document: DocumentData, bank_key: str):
             document = _apply_coordinate_normalizer(document, normalizer_fn)
 
     estado = parser_fn(document)
-    _mark_movements_unclassified(estado)
+    _classify_movements_by_amount_direction(estado)
     return estado, document
 
 

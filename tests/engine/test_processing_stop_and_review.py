@@ -47,13 +47,26 @@ def test_cancelled_batch_does_not_schedule_any_file(monkeypatch):
     assert [event.kind for event in events] == ['cancelled', 'cancelled']
     assert [event.file_name for event in events] == ['a.pdf', 'b.pdf']
 
-def test_all_parsers_leave_tipo_operacion_as_no_identificado(monkeypatch):
-    movimiento = SimpleNamespace(tipo_operacion='TRANSFERENCIA')
-    estado = SimpleNamespace(movimientos=[movimiento], resumen_financiero=None)
+def test_all_parsers_classify_movements_as_cargo_or_abono(monkeypatch):
+    cargo = SimpleNamespace(tipo_operacion='TRANSFERENCIA', cargo=125.0, abono=0.0)
+    abono = SimpleNamespace(tipo_operacion=None, cargo=0.0, abono=80.0)
+    negative_cargo = SimpleNamespace(tipo_operacion=None, cargo=-25.0, abono=0.0)
+    empty = SimpleNamespace(tipo_operacion='TRANSFERENCIA', cargo=0.0, abono=0.0)
+    ambiguous = SimpleNamespace(tipo_operacion=None, cargo=10.0, abono=10.0)
+    estado = SimpleNamespace(
+        movimientos=[cargo, abono, negative_cargo, empty, ambiguous],
+        resumen_financiero=None,
+    )
     document = DocumentData(raw_text='BANCO', normalized_text='', spatial_words=[], metadata={})
     monkeypatch.setitem(statement_processor.PARSER_REGISTRY, 'fake_bank', lambda doc: estado)
     parsed, _ = statement_processor._process_once(document, 'fake_bank')
-    assert parsed.movimientos[0].tipo_operacion == 'No identificado'
+    assert [mov.tipo_operacion for mov in parsed.movimientos] == [
+        'CARGO',
+        'ABONO',
+        'CARGO',
+        'No identificado',
+        'No identificado',
+    ]
 
 def test_manual_ocr_selection_changes_result_kept_for_export():
     tesseract_estado = SimpleNamespace(movimientos=[SimpleNamespace(tipo_operacion='No identificado')], resumen_financiero=object())
