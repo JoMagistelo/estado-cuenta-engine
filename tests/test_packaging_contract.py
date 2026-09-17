@@ -48,7 +48,10 @@ def test_desktop_entrypoint_keeps_native_loading_feedback_and_window_icon():
     assert "page.window.always_on_top = True" in source
     assert "await page.window.center()" in source
     assert "async def _desktop_main" in source
-    assert 'await asyncio.to_thread(importlib.import_module, "main_flet")' in source
+    assert 'await asyncio.to_thread(importlib.import_module, "main_flet_parallel")' in source
+    assert "multiprocessing.freeze_support()" in source
+    assert '"--self-test-parallel-runtime"' in source
+    assert 'parallel_ui = importlib.import_module("main_flet_parallel")' in source
     assert "page.controls.clear()" in source
     assert "page.window.resizable = True" in source
     assert "page.window.maximizable = True" in source

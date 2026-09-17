@@ -29,7 +29,7 @@ from utils.result_state import (
     replace_result_reference,
 )
 
-APP_VERSION = '4.0.0'
+APP_VERSION = '4.2.0'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 SELECTOR_ENGINE_WIDTH = 150
