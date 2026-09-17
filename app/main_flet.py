@@ -130,6 +130,40 @@ def numeric(value: Any) -> float:
         return 0.0
 
 
+def replace_result_reference(
+    results: list[Any],
+    previous: Any,
+    updated: Any,
+) -> None:
+    """Mantiene sincronizada la lista exportable después de reprocesar."""
+
+    for index, candidate in enumerate(results):
+        if candidate is previous:
+            results[index] = updated
+            return
+    results.append(updated)
+
+
+def remove_result_reference(results: list[Any], target: Any) -> bool:
+    """Elimina por identidad para no confundir resultados con datos iguales."""
+
+    for index, candidate in enumerate(results):
+        if candidate is target:
+            results.pop(index)
+            return True
+    return False
+
+
+def movement_matches_kind(movement: Any, kind: str | None) -> bool:
+    """Filtro visual; no altera el conjunto utilizado por la exportación."""
+
+    if kind == 'cargo':
+        return numeric(getattr(movement, 'cargo', 0.0)) > 0.0
+    if kind == 'abono':
+        return numeric(getattr(movement, 'abono', 0.0)) > 0.0
+    return True
+
+
 def main(page: ft.Page):
     page.title = 'Extractor de Movimientos Financieros'
     page.window.width = 1180
@@ -350,60 +384,79 @@ def main(page: ft.Page):
                 ordered.append(normalized)
         return ordered
 
-    def ocr_action_controls(index: int, item: dict[str, Any]) -> ft.Control:
+    def result_action_controls(index: int, item: dict[str, Any]) -> ft.Control:
         result = item.get('result')
-        if item.get('processing_method') != 'OCR' or result is None:
+        if result is None:
             return ft.Row([], spacing=0, tight=True)
 
         controls: list[ft.Control] = []
         artifacts = getattr(result, 'ocr_artifacts', {}) or {}
-        for engine in ordered_artifact_engines(result):
-            artifact_path = artifacts.get(engine)
-            if not artifact_path:
-                continue
+        if item.get('processing_method') == 'OCR':
+            for engine in ordered_artifact_engines(result):
+                artifact_path = artifacts.get(engine)
+                if not artifact_path:
+                    continue
+                controls.append(
+                    ft.IconButton(
+                        icon=ft.Icons.DOWNLOAD_OUTLINED,
+                        icon_size=14,
+                        width=26,
+                        height=26,
+                        padding=2,
+                        tooltip=f'Descargar PDF con texto incrustado · {engine_label(engine)}',
+                        on_click=(
+                            lambda e, i=index, eng=engine: page.run_task(
+                                download_ocr_artifact,
+                                i,
+                                eng,
+                            )
+                        ),
+                    )
+                )
+
+            primary = normalize_ocr_engine(
+                getattr(result, 'ocr_primary_engine', None)
+                or getattr(result, 'ocr_engine', None),
+                default='',
+            )
+            secondary = secondary_ocr_engine(primary) if primary else None
+            already_reprocessed = bool(
+                getattr(result, 'ocr_reprocessed', False)
+                or (secondary and secondary in artifacts)
+            )
             controls.append(
                 ft.IconButton(
-                    icon=ft.Icons.DOWNLOAD_OUTLINED,
-                    icon_size=16,
-                    width=30,
-                    height=30,
-                    padding=3,
-                    tooltip=f'Descargar PDF con texto incrustado · {engine_label(engine)}',
-                    on_click=(
-                        lambda e, i=index, eng=engine: page.run_task(
-                            download_ocr_artifact,
-                            i,
-                            eng,
-                        )
+                    icon=ft.Icons.REFRESH,
+                    icon_size=14,
+                    width=26,
+                    height=26,
+                    padding=2,
+                    tooltip='Reprocesar usando motor secundario',
+                    disabled=(
+                        state['running']
+                        or bool(state['reprocess_cancel_events'])
+                        or item.get('status') != 'completed'
+                        or already_reprocessed
                     ),
+                    on_click=lambda e, i=index: start_secondary_reprocess(i),
                 )
             )
 
-        primary = normalize_ocr_engine(
-            getattr(result, 'ocr_primary_engine', None)
-            or getattr(result, 'ocr_engine', None),
-            default='',
-        )
-        secondary = secondary_ocr_engine(primary) if primary else None
-        already_reprocessed = bool(
-            getattr(result, 'ocr_reprocessed', False)
-            or (secondary and secondary in artifacts)
-        )
         controls.append(
             ft.IconButton(
-                icon=ft.Icons.REFRESH,
-                icon_size=16,
-                width=30,
-                height=30,
-                padding=3,
-                tooltip='Reprocesar usando motor secundario',
+                icon=ft.Icons.DELETE_OUTLINE,
+                icon_color=DANGER,
+                icon_size=14,
+                width=26,
+                height=26,
+                padding=2,
+                tooltip='Eliminar este resultado',
                 disabled=(
                     state['running']
                     or bool(state['reprocess_cancel_events'])
                     or item.get('status') != 'completed'
-                    or already_reprocessed
                 ),
-                on_click=lambda e, i=index: start_secondary_reprocess(i),
+                on_click=lambda e, i=index: request_delete_result(i),
             )
         )
         return ft.Row(controls, spacing=1, tight=True)
@@ -451,7 +504,7 @@ def main(page: ft.Page):
                     alignment=ft.Alignment.CENTER,
                 ),
                 ft.Container(
-                    ocr_action_controls(index, item),
+                    result_action_controls(index, item),
                     width=SELECTOR_ACTIONS_WIDTH,
                     alignment=ft.Alignment.CENTER_RIGHT,
                 ),
@@ -499,7 +552,7 @@ def main(page: ft.Page):
                     heading('Tiempo', SELECTOR_TIME_WIDTH),
                     heading('Abonos', SELECTOR_VALIDATION_WIDTH),
                     heading('Cargos', SELECTOR_VALIDATION_WIDTH),
-                    heading('OCR', SELECTOR_ACTIONS_WIDTH),
+                    heading('Acciones', SELECTOR_ACTIONS_WIDTH),
                 ],
                 spacing=4,
             ),
@@ -712,6 +765,114 @@ def main(page: ft.Page):
             status_text.update()
         except Exception:
             page.update()
+
+    def delete_result_artifacts(result: Any) -> None:
+        """Borra únicamente artefactos OCR temporales de esta sesión."""
+
+        session_root = artifact_dir.resolve()
+        candidates = set((getattr(result, 'ocr_artifacts', {}) or {}).values())
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                path = Path(candidate).expanduser().resolve()
+                if path.is_relative_to(session_root):
+                    path.unlink(missing_ok=True)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                continue
+
+    def nearest_completed_index(preferred: int) -> int | None:
+        completed = [
+            index
+            for index, item in enumerate(processing_items)
+            if item.get('status') == 'completed' and item.get('result') is not None
+        ]
+        if not completed:
+            return None
+        return min(completed, key=lambda index: (abs(index - preferred), index))
+
+    def delete_result(index: int) -> None:
+        if (
+            state['running']
+            or state['reprocess_cancel_events']
+            or not 0 <= index < len(processing_items)
+        ):
+            return
+
+        item = processing_items[index]
+        result = item.get('result')
+        if item.get('status') != 'completed' or result is None:
+            return
+
+        file_name = str(item.get('file_name') or getattr(result, 'file_name', 'archivo'))
+        selected_index = state.get('selected_index')
+        processing_items.pop(index)
+        remove_result_reference(results, result)
+        delete_result_artifacts(result)
+
+        deleted_was_selected = selected_index == index
+        if isinstance(selected_index, int) and selected_index > index:
+            selected_index -= 1
+        if deleted_was_selected:
+            selected_index = nearest_completed_index(index)
+        elif isinstance(selected_index, int) and not 0 <= selected_index < len(processing_items):
+            selected_index = nearest_completed_index(index)
+        state['selected_index'] = selected_index
+
+        if isinstance(selected_index, int):
+            render_result(processing_items[selected_index]['result'])
+        else:
+            audit_view.controls.clear()
+            try:
+                audit_view.update()
+            except Exception:
+                pass
+
+        status_text.value = f'🗑️ {file_name} eliminado del resultado y de la exportación.'
+        status_text.color = DANGER
+        rebuild_selector()
+        refresh_manual_controls()
+        try:
+            status_text.update()
+        except Exception:
+            page.update()
+
+    def request_delete_result(index: int) -> None:
+        if (
+            state['running']
+            or state['reprocess_cancel_events']
+            or not 0 <= index < len(processing_items)
+        ):
+            return
+        item = processing_items[index]
+        if item.get('status') != 'completed' or item.get('result') is None:
+            return
+        file_name = str(item.get('file_name') or 'este PDF')
+
+        def confirm(_):
+            page.pop_dialog()
+            delete_result(index)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Eliminar resultado', weight=ft.FontWeight.BOLD),
+            content=ft.Text(
+                f'¿Eliminar “{file_name}”? Ya no aparecerá en el Excel exportado.',
+                size=10,
+            ),
+            actions=[
+                ft.TextButton(content='Cancelar', on_click=lambda e: page.pop_dialog()),
+                ft.FilledButton(
+                    content='Eliminar',
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    bgcolor=DANGER,
+                    color=BUTTON_TEXT,
+                    on_click=confirm,
+                ),
+            ],
+        )
+        page.show_dialog(dialog)
 
     def refresh_manual_controls() -> None:
         busy = bool(state['reprocess_cancel_events'])
@@ -968,8 +1129,20 @@ def main(page: ft.Page):
         )
         cargo_total_text = ft.Text('$0.00', size=10, weight=ft.FontWeight.BOLD)
         abono_total_text = ft.Text('$0.00', size=10, weight=ft.FontWeight.BOLD)
+        visible_count_text = ft.Text(
+            f'{len(movements)} movimiento(s)',
+            size=8,
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+        active_kind: dict[str, str | None] = {'value': None}
 
-        def total_chip(label: str, value_control: ft.Text, *, accent: str) -> ft.Container:
+        def total_chip(
+            label: str,
+            value_control: ft.Text,
+            *,
+            accent: str,
+            kind: str,
+        ) -> ft.Container:
             return ft.Container(
                 ft.Row(
                     [
@@ -983,10 +1156,23 @@ def main(page: ft.Page):
                 bgcolor=GOB_CREAM,
                 border=ft.Border.only(left=ft.BorderSide(3, accent)),
                 border_radius=6,
+                ink=True,
+                tooltip=f'Mostrar sólo {label.lower()}',
+                data=(kind, accent),
             )
 
-        cargo_chip = total_chip('Cargos', cargo_total_text, accent=GOB_GOLD)
-        abono_chip = total_chip('Abonos', abono_total_text, accent=GOB_GREEN)
+        cargo_chip = total_chip(
+            'Cargos',
+            cargo_total_text,
+            accent=GOB_GOLD,
+            kind='cargo',
+        )
+        abono_chip = total_chip(
+            'Abonos',
+            abono_total_text,
+            accent=GOB_GREEN,
+            kind='abono',
+        )
 
         def searchable_text(original_index: int, movement) -> str:
             values: list[str] = []
@@ -1002,7 +1188,7 @@ def main(page: ft.Page):
                 values.append(safe_value(value))
             return ' '.join(values).lower()
 
-        def filtered_entries() -> list[tuple[int, Any]]:
+        def text_filtered_entries() -> list[tuple[int, Any]]:
             query = (filter_field.value or '').strip().lower()
             entries = list(enumerate(movements, 1))
             if not query:
@@ -1013,12 +1199,51 @@ def main(page: ft.Page):
                 if query in searchable_text(original_index, movement)
             ]
 
+        def filtered_entries() -> list[tuple[int, Any]]:
+            kind = active_kind['value']
+            return [
+                (original_index, movement)
+                for original_index, movement in text_filtered_entries()
+                if movement_matches_kind(movement, kind)
+            ]
+
+        def style_total_chip(chip: ft.Container) -> None:
+            kind, accent = chip.data
+            selected = active_kind['value'] == kind
+            chip.bgcolor = (
+                GOB_GOLD_LIGHT if kind == 'cargo' else GOB_GREEN_LIGHT
+            ) if selected else GOB_CREAM
+            chip.border = (
+                ft.Border.all(1.5, accent)
+                if selected
+                else ft.Border.only(left=ft.BorderSide(3, accent))
+            )
+            chip.tooltip = (
+                'Mostrar todos los movimientos'
+                if selected
+                else f'Mostrar sólo {"cargos" if kind == "cargo" else "abonos"}'
+            )
+
         def rebuild_rows(*, update: bool = True) -> None:
             entries = filtered_entries()
-            cargo_total = sum(numeric(getattr(movement, 'cargo', 0.0)) for _, movement in entries)
-            abono_total = sum(numeric(getattr(movement, 'abono', 0.0)) for _, movement in entries)
+            summary_entries = text_filtered_entries()
+            cargo_total = sum(
+                numeric(getattr(movement, 'cargo', 0.0))
+                for _, movement in summary_entries
+            )
+            abono_total = sum(
+                numeric(getattr(movement, 'abono', 0.0))
+                for _, movement in summary_entries
+            )
             cargo_total_text.value = format_money(cargo_total)
             abono_total_text.value = format_money(abono_total)
+            visible_count_text.value = (
+                f'{len(entries)} de {len(movements)} movimiento(s)'
+                if len(entries) != len(movements)
+                else f'{len(movements)} movimiento(s)'
+            )
+            style_total_chip(cargo_chip)
+            style_total_chip(abono_chip)
 
             rows: list[ft.Control] = []
             for display_position, (original_index, movement) in enumerate(entries, start=1):
@@ -1053,6 +1278,9 @@ def main(page: ft.Page):
                     body,
                     cargo_total_text,
                     abono_total_text,
+                    visible_count_text,
+                    cargo_chip,
+                    abono_chip,
                 ):
                     try:
                         control.update()
@@ -1062,6 +1290,12 @@ def main(page: ft.Page):
         def filter_changed(_):
             rebuild_rows()
 
+        def toggle_kind(kind: str) -> None:
+            active_kind['value'] = None if active_kind['value'] == kind else kind
+            rebuild_rows()
+
+        cargo_chip.on_click = lambda e: toggle_kind('cargo')
+        abono_chip.on_click = lambda e: toggle_kind('abono')
         filter_field.on_change = filter_changed
         rebuild_rows(update=False)
 
@@ -1075,11 +1309,7 @@ def main(page: ft.Page):
         toolbar = ft.Row(
             [
                 filter_field,
-                ft.Text(
-                    f'{len(movements)} movimiento(s)',
-                    size=8,
-                    color=ft.Colors.ON_SURFACE_VARIANT,
-                ),
+                visible_count_text,
                 ft.Container(expand=True),
                 cargo_chip,
                 abono_chip,
@@ -2254,12 +2484,14 @@ def main(page: ft.Page):
 
         if kind == 'reprocess_completed':
             updated, elapsed = message[3], message[4]
+            previous = item.get('result')
             item.update(
                 status='completed',
                 result=updated,
                 reprocess_elapsed_seconds=elapsed,
                 reprocess_error=None,
             )
+            replace_result_reference(results, previous, updated)
             status_text.value = (
                 f'✅ {updated.file_name} reprocesado con '
                 f'{engine_label(updated.ocr_engine)}.'

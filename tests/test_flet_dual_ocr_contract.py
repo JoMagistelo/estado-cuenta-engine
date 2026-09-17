@@ -31,15 +31,19 @@ def test_dual_ocr_comparison_is_the_only_ocr_result_card():
     assert "Motor solicitado en Configuración:" not in source
 
 
-def test_flet_exposes_only_manual_ocr_artifact_and_reprocess_actions():
+def test_flet_keeps_ocr_actions_scoped_and_exposes_result_deletion():
     source = (Path(__file__).resolve().parents[1] / "app" / "main_flet.py").read_text(
         encoding="utf-8"
     )
 
-    assert "if item.get('processing_method') != 'OCR' or result is None:" in source
+    assert "if item.get('processing_method') == 'OCR':" in source
     assert "for engine in ordered_artifact_engines(result):" in source
     assert "Descargar PDF con texto incrustado" in source
     assert "tooltip='Reprocesar usando motor secundario'" in source
+    assert "tooltip='Eliminar este resultado'" in source
+    assert "heading('Acciones', SELECTOR_ACTIONS_WIDTH)" in source
+    assert "remove_result_reference(results, result)" in source
+    assert "Ya no aparecerá en el Excel exportado" in source
     assert "or bool(state['reprocess_cancel_events'])" in source
     assert "export_button.disabled = not has_results or busy" in source
     assert "Espera a que termine el reprocesado OCR antes de generar el Excel." in source

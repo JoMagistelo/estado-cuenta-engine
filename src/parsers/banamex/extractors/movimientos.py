@@ -916,7 +916,9 @@ def extract_fecha_operacion(
     line: List[Dict[str, Any]],
     config: ColumnConfig,
 ) -> str:
-    return column_text(line, config.fecha)
+    return normalize_movement_date_text(
+        column_text(line, config.fecha)
+    )
 
 
 def extract_concepto(
@@ -1012,8 +1014,35 @@ def extract_saldo(
 # ============================================================
 
 
-def is_date_text(text: str) -> bool:
+def normalize_movement_date_text(text: str) -> str:
+    """Limpia marcas visuales/OCR sin cambiar fechas digitales válidas.
+
+    MiCuenta imprime ``*`` o una raya junto a ciertas fechas. En escaneos,
+    además, Tesseract suele unir día y mes (``10DIC``) o leer el cero inicial
+    como ``O``. Esas marcas pertenecen a la columna FECHA pero no a la fecha.
+    """
+
     normalized = normalize_upper(text)
+    if not normalized:
+        return ""
+
+    normalized = re.sub(r"\s*[|*]+\s*$", "", normalized).strip()
+    normalized = re.sub(r"\s+-\s*$", "", normalized).strip()
+    normalized = re.sub(
+        r"^O(?=(?:\d)?\s*[A-Z])",
+        "0",
+        normalized,
+    )
+    normalized = re.sub(
+        r"^(\d{1,2})(?=[A-Z])",
+        r"\1 ",
+        normalized,
+    )
+    return normalized
+
+
+def is_date_text(text: str) -> bool:
+    normalized = normalize_movement_date_text(text)
 
     if not normalized:
         return False
@@ -1116,6 +1145,57 @@ def build_blocks(
         blocks.append(current)
 
     return blocks
+
+
+def _line_financial_columns(
+    line: List[Dict[str, Any]],
+    config: ColumnConfig,
+) -> set[str]:
+    columns: set[str] = set()
+    for word in line:
+        text = normalize_text(word.get("text", ""))
+        if not is_money(text):
+            continue
+        for column_name in ("retiros", "depositos", "saldo"):
+            if money_word_inside_column(word, getattr(config, column_name)):
+                columns.add(column_name)
+                break
+    return columns
+
+
+def split_mixed_financial_block(
+    block: List[List[Dict[str, Any]]],
+    configs: Dict[int, ColumnConfig],
+) -> List[List[List[Dict[str, Any]]]]:
+    """Separa un bloque mezclado usando sus filas financieras completas.
+
+    La ruta sólo se usa cuando el resultado preliminar contiene cargo y abono
+    simultáneos. Cada fila con importe y saldo cierra un movimiento Banamex;
+    por ello permite recuperar el siguiente aunque OCR haya perdido su fecha.
+    """
+
+    complete_rows: List[int] = []
+    for index, line in enumerate(block):
+        if not line:
+            continue
+        config = get_config(word_page(line[0]), configs)
+        columns = _line_financial_columns(line, config)
+        if "saldo" in columns and columns.intersection({"retiros", "depositos"}):
+            complete_rows.append(index)
+
+    if len(complete_rows) < 2:
+        return [block]
+
+    segments: List[List[List[Dict[str, Any]]]] = []
+    start = 0
+    for end in complete_rows[:-1]:
+        if end >= start:
+            segments.append(block[start:end + 1])
+            start = end + 1
+    if start < len(block):
+        segments.append(block[start:])
+
+    return [segment for segment in segments if segment]
 
 
 # ============================================================
@@ -2183,6 +2263,42 @@ def extract_movimientos_words(
 
         if movimiento is None:
             continue
+
+        if movimiento.cargo != 0.0 and movimiento.abono != 0.0:
+            repaired_blocks = split_mixed_financial_block(block, configs)
+            if len(repaired_blocks) > 1:
+                repaired_movements: List[Movimiento] = []
+                inherited_date = normalize_movement_date_text(
+                    movimiento.fecha_operacion or ""
+                )
+
+                for repaired_block in repaired_blocks:
+                    repaired = build_movimiento(repaired_block, configs)
+                    if repaired is None:
+                        continue
+
+                    repaired_date = normalize_movement_date_text(
+                        repaired.fecha_operacion or ""
+                    )
+                    if is_date_text(repaired_date):
+                        inherited_date = repaired_date
+                    elif inherited_date:
+                        repaired.fecha_operacion = inherited_date
+
+                    if repaired.cargo != 0.0 and repaired.abono != 0.0:
+                        repaired_movements = []
+                        break
+                    if (
+                        repaired.cargo == 0.0
+                        and repaired.abono == 0.0
+                        and repaired.saldo_operacion == 0.0
+                    ):
+                        continue
+                    repaired_movements.append(repaired)
+
+                if len(repaired_movements) > 1:
+                    movimientos.extend(repaired_movements)
+                    continue
 
         if (
             movimiento.cargo == 0.0
