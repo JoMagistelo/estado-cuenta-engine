@@ -82,12 +82,8 @@ def process_bank_statements_parallel_incremental(
     digital = ThreadPoolExecutor(
         max_workers=digital_workers, thread_name_prefix="statement-digital"
     )
-    ocr = ProcessPoolExecutor(
-        max_workers=ocr_workers,
-        mp_context=context,
-        initializer=_initialize_ocr_worker,
-        initargs=(shared_cancel,),
-    )
+    # No iniciar ni reservar motores OCR cuando el lote contiene sólo digitales.
+    ocr: ProcessPoolExecutor | None = None
 
     future_map: dict[Any, tuple[str, int, str, PreparedStatement | None]] = {}
     cancelled_indices: set[int] = set()
@@ -186,6 +182,13 @@ def process_bank_statements_parallel_incremental(
                         processing_method=prepared.processing_method,
                     )
                     if prepared.processing_method == "OCR":
+                        if ocr is None:
+                            ocr = ProcessPoolExecutor(
+                                max_workers=ocr_workers,
+                                mp_context=context,
+                                initializer=_initialize_ocr_worker,
+                                initargs=(shared_cancel,),
+                            )
                         future = ocr.submit(
                             _process_ocr_document,
                             prepared,
@@ -193,15 +196,10 @@ def process_bank_statements_parallel_incremental(
                             str(ocr_artifact_dir) if ocr_artifact_dir is not None else None,
                         )
                     else:
-                        if ocr_artifact_dir is None:
-                            future = digital.submit(
-                                _process_prepared_statement, prepared, primary_engine, cancel_event
-                            )
-                        else:
-                            # La ruta digital no consume el directorio OCR.
-                            future = digital.submit(
-                                _process_prepared_statement, prepared, primary_engine, cancel_event
-                            )
+                        # Un digital nunca entra al pool OCR ni consume su modelo.
+                        future = digital.submit(
+                            _process_prepared_statement, prepared, primary_engine, cancel_event
+                        )
                     future_map[future] = ("processing", index, file_name, prepared)
                     continue
 
@@ -251,8 +249,12 @@ def process_bank_statements_parallel_incremental(
                     result=result,
                 )
     finally:
+        # No permitir que Flet limpie los PDFs temporales mientras los hijos OCR
+        # siguen trabajando. Detener es cooperativo; el worker de UI espera en
+        # segundo plano y Flet conserva la capacidad de actualizar la pantalla.
         if stop_early or _cancel_requested(cancel_event):
             shared_cancel.set()
-        classifiers.shutdown(wait=not stop_early, cancel_futures=stop_early)
-        digital.shutdown(wait=not stop_early, cancel_futures=stop_early)
-        ocr.shutdown(wait=not stop_early, cancel_futures=stop_early)
+        classifiers.shutdown(wait=True, cancel_futures=stop_early)
+        digital.shutdown(wait=True, cancel_futures=stop_early)
+        if ocr is not None:
+            ocr.shutdown(wait=True, cancel_futures=stop_early)
