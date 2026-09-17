@@ -27,6 +27,7 @@ _ORDERING_ACCOUNT_RE = re.compile(
 _REFERENCE_RE = re.compile(r"\bREF\.?\s*[:#-]?\s*([A-Z0-9][A-Z0-9_-]*)", re.IGNORECASE)
 _TRACKING_RE = re.compile(
     r"\b(?:CLAVE\s+(?:DE\s+)?)?RASTREO\s*[:#.-]?\s*"
+    r"(?!CAJA\b|AUT\b|HORA\b|SUC\b|REF\b)"
     r"([A-Z0-9][A-Z0-9_-]{3,})\b",
     re.IGNORECASE,
 )
@@ -51,6 +52,13 @@ def _received_payment(concept: str | None) -> tuple[str, str] | None:
         return None
     bank = _clean_label_value(match.group("bank"), max_length=90)
     party = _clean_label_value(match.group("party"), max_length=120)
+    # Cuando falta el nombre, el OCR puede dejar una etiqueta como «REF.123».
+    if party and re.match(
+        r"^(?:REF|CTA|CUENTA|CLABE|RASTREO|TRANSFERENCIA|CAJA|AUT|HORA|SUC)\b",
+        party,
+        re.IGNORECASE,
+    ):
+        return None
     return (bank, party) if bank and party else None
 
 
