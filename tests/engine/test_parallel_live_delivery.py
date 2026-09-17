@@ -50,12 +50,14 @@ def test_digital_only_never_constructs_an_ocr_pool(monkeypatch):
 
 def test_digital_completed_before_earlier_ocr_and_pool_is_joined(monkeypatch):
     digital_done = threading.Event()
+    digital_delivered = threading.Event()
     shutdown_calls = []
     monkeypatch.setattr(parallel, "_prepare_statement", _prepare)
 
     def process(prepared, *args, **kwargs):
         if prepared.processing_method == "OCR":
             assert digital_done.wait(timeout=8), "El documento digital quedó bloqueado por OCR"
+            assert digital_delivered.wait(timeout=8), "El resultado digital no se publicó en vivo"
         else:
             digital_done.set()
         return prepared.file_name
@@ -74,9 +76,13 @@ def test_digital_completed_before_earlier_ocr_and_pool_is_joined(monkeypatch):
 
     monkeypatch.setattr(parallel, "_process_prepared_statement", process)
     monkeypatch.setattr(parallel, "ProcessPoolExecutor", fake_ocr_pool)
-    events = list(parallel.process_bank_statements_parallel_incremental(
+    events = []
+    for event in parallel.process_bank_statements_parallel_incremental(
         ["scan-slow.pdf", "digital-fast.pdf"], ocr_workers=2
-    ))
+    ):
+        events.append(event)
+        if event.kind == "completed" and event.file_name == "digital-fast.pdf":
+            digital_delivered.set()
     completed = [event.file_name for event in events if event.kind == "completed"]
     assert completed == ["digital-fast.pdf", "scan-slow.pdf"]
     assert shutdown_calls == [True]
