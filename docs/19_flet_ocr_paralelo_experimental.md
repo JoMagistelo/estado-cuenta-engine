@@ -1,32 +1,39 @@
 # Prueba visual OCR paralelo en Flet (PR #76)
 
-**Esta integración es experimental y optativa.** No modifica `app/main_flet.py`, el EXE publicado, los parsers, los lectores, el PDF incrustado ni el Excel. Abre una variante de la misma interfaz Flet que incorpora la opción en **Configuración**; no fusionar con producción antes de comprobar equivalencia y estabilidad en Windows.
+**Esta integración es experimental y optativa.** No modifica `app/main_flet.py`, el EXE publicado, los parsers, los lectores ni el formato de Excel. La variante Flet muestra resultados a medida que terminan y ordena únicamente la lista entregada a Excel según el orden original de selección. No fusionar con producción antes de comprobar equivalencia, velocidad y estabilidad en Windows.
 
-## Arrancar desde PowerShell
+## Actualizar y abrir desde PowerShell
 
-Primero cierra la app y espera a que termine cualquier benchmark en ejecución.
+Cierra la aplicación antes de cambiar de rama; revisa `git status` si tienes cambios locales. Si ya creaste `prueba-pr-76` para probar el PR:
 
 ```powershell
 cd C:\Proyectos\estado-cuenta-engine
+git status
 git fetch origin
-git switch perf/experimental-ocr-multiprocess-benchmark
+git switch prueba-pr-76
 git pull --ff-only origin perf/experimental-ocr-multiprocess-benchmark
-.\.venv\Scripts\Activate.ps1
 flet run app/main_flet_parallel.py
 ```
 
-En la aplicación, abre el engrane **Configuración**, selecciona `PaddleOCR` como motor activo, activa **Procesamiento OCR paralelo (experimental)**, elige **2 procesos** con el deslizador y pulsa **Guardar**. El encabezado indica `OCR x2 procesos`. Selecciona los mismos PDF y pulsa Procesar normalmente: la lista existente mostrará varios escaneados en estado `Procesando` a la vez y conservará los resultados conforme terminen. Si quieres probar tres o cuatro trabajadores, cierra primero otros programas que consuman mucha memoria; no hay garantía de una mejora adicional.
+Si todavía no tienes la rama local, sustituye `git switch prueba-pr-76` y el `git pull` por `git switch -c prueba-pr-76 origin/perf/experimental-ocr-multiprocess-benchmark`. No necesitas reinstalar dependencias si ya están presentes en el entorno que usa tu terminal.
 
-Para regresar al comportamiento anterior, desactiva el interruptor en Configuración y guarda. Si deseas ejecutar la interfaz original sin el adaptador, usa `flet run app/main_flet.py`. Los ajustes del modo experimental **no se guardan entre aperturas**: comienza desactivado por seguridad. No cambies estos ajustes durante un lote; Configuración se deshabilita mientras se procesa.
+En **Configuración** comprueba **PaddleOCR**, Turbo **activado** y **4 procesos** al abrir. Un `OCR_PRIMARY_ENGINE` explícito prevalece sobre el valor por defecto. Si falta RAM o es más lento, ajusta a 2 o 3 procesos, o desactiva Turbo. Los ajustes de esta entrada experimental son de la sesión; la interfaz normal sigue intacta.
 
 ## Qué cambia y qué no
 
-- Se conserva `engine.pipeline._process_prepared_statement` para cada PDF completo, incluida su ruta OCR → PDF con capa verificada → lectura digital → parsers → validaciones. No se omiten páginas y no se modifica el número predeterminado de hilos de PaddleOCR por proceso.
-- Solo los PDF clasificados como OCR se envían a procesos Python separados. Los PDF digitales conservan su `ThreadPoolExecutor` habitual. La interfaz conserva estados por archivo, botón Detener, revisión del resultado y exportación.
-- Los procesos se inician con `spawn` y reciben una señal compartida de cancelación. Detener marca como cancelados los trabajos pendientes y avisa a los OCR en curso; la cancelación dentro de una página no es instantánea. No cierres Windows a la fuerza mientras se estén escribiendo PDF.
-- El programa puede consumir más RAM, un proceso por juego de modelos. En Windows, si aparece `BrokenProcessPool`, errores de memoria u otra excepción, desactiva el modo experimental y conserva la salida de consola para diagnóstico. No se realiza un reproceso automático silencioso de archivos fallidos.
-- **Esta variante es para `flet run` con el entorno Python local**. El EXE one-file actual sigue sin paralelismo. Integrarlo en el portable exige `freeze_support()`, pruebas con el binario offline y controles adicionales de procesos/cancelación.
+- El clasificador distingue Digital/OCR con la lógica existente. Los digitales van a los hilos de lectura digital; sólo los escaneados entran en `ProcessPoolExecutor(spawn)`. El pool OCR ni siquiera se crea en lotes exclusivamente digitales. No se garantiza que todos los digitales *empiecen* primero, pero sus resultados no esperan a los OCR anteriores.
+- Cada PDF mantiene el pipeline íntegro: OCR → PDF con texto incrustado y verificado → lector canónico → parsers → validaciones. Se conservan las palabras y sus coordenadas; no se omiten páginas ni se modifica el número de hilos de PaddleOCR por proceso.
+- La pantalla recibe `completed` / `error` / `cancelled` de inmediato, incluso si otro PDF anterior continúa trabajando. El Excel conserva el orden de selección entre lotes y después de reprocesar con el motor secundario. La interfaz puede mostrar primero un digital aunque el OCR aparezca antes en el selector.
+- Los procesos OCR reciben cancelación compartida. El trabajador en segundo plano espera su cierre antes de que Flet termine el lote y limpie los artefactos; si una biblioteca OCR no coopera, detener puede tardar hasta terminar su operación actual. Evita forzar el cierre de Windows durante la escritura.
+- Cada proceso carga sus modelos: cuatro procesos pueden agotar RAM o rendir peor que dos. El EXE one-file actual **no** ejecuta esta variante experimental ni ha sido validado con ella.
 
-## Validación requerida
+## Comprobación automática antes de fusionar
 
-La medición aportada por el usuario fue **463.5 segundos (7 min 43.5 s) para 17 PDF con 2 procesos**, realizada con `--parallel-only`; no demuestra por sí sola equivalencia ni una reducción porcentual frente a los mismos 17 PDF en Flet. Compara movimientos, encabezados, totales, validaciones y PDFs incrustados frente al modo original utilizando los mismos archivos, además del tiempo total. Para comparación automatizada estricta, ejecuta `scripts/benchmark_parallel_ocr.py` sin `--parallel-only` sobre un conjunto autorizado de prueba. Mantén esta PR en borrador hasta terminar la evaluación.
+Con un lote autorizado de PDF, ejecuta sin mantener otro benchmark o lote activo:
+
+```powershell
+python scripts/compare_flet_ocr_modes.py "C:\ruta\lote_pdf" --engine paddleocr --workers 4 --report ".\comparacion_pr76_x4.json"
+python scripts/compare_flet_ocr_modes.py "C:\ruta\lote_pdf" --engine paddleocr --workers 2 --report ".\comparacion_pr76_x2.json"
+```
+
+Comprueba equivalencia exacta de datos, movimientos, validaciones, texto y palabras/coordenadas; mide el tiempo total y la memoria en varios intentos. La única medición histórica disponible fue **463,5 s para 17 PDF con dos procesos y sin referencia secuencial**: no demuestra un ahorro. La CI sintética y la compilación del EXE normal no sustituyen las pruebas en el Windows de destino. El PR permanece en borrador hasta contar con esta evidencia.
