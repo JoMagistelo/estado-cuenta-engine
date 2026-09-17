@@ -4,6 +4,7 @@ from readers.models.document_data import DocumentData
 
 from models.estado_cuenta import EstadoCuenta
 
+from .beneficiary_enrichment import enrich_banamex_beneficiaries
 from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
@@ -73,13 +74,14 @@ def parse_banamex(document: DocumentData) -> EstadoCuenta:
     # MOVIMIENTOS
     # ============================================================
     #
-    # Este extractor ya funciona correctamente y se conserva
-    # exactamente con el mismo mecanismo.
+    # El extractor histórico permanece intacto. La segunda pasada únicamente
+    # completa beneficiarios vacíos cuando el concepto trae ``POR ORDEN DE``.
     #
 
     movimientos = extract_movimientos_words(
         spatial_words
     )
+    enrich_banamex_beneficiaries(movimientos)
 
     # ============================================================
     # CONSTRUCCIÓN DEL ESTADO DE CUENTA
