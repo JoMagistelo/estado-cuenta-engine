@@ -13,7 +13,7 @@ from importlib.metadata import PackageNotFoundError, version
 import flet as ft
 
 import main_flet as original_ui
-from engine.ordered_processing_events import ordered_terminal_events
+from engine.live_result_order import LiveResultOrder
 from engine.parallel_ocr_pipeline import process_bank_statements_parallel_incremental
 from engine.pipeline import process_bank_statements_incremental as standard_incremental
 
@@ -74,21 +74,41 @@ def main(page: ft.Page):
     # El modo turbo es la configuración de prueba inicial, no una promesa de
     # rendimiento: cuatro modelos simultáneos requieren más RAM/CPU.
     performance = {"enabled": True, "workers": 4}
+    result_order = LiveResultOrder()
+    original_export = original_ui.export_batch_excel
+    original_replace = original_ui.replace_result_reference
+
+    def export_in_selection_order(results, *args, **kwargs):
+        # Se ordena sólo el snapshot del Excel, nunca los eventos de la interfaz.
+        return original_export(result_order.ordered(results), *args, **kwargs)
+
+    def replace_preserving_order(results, previous, updated):
+        # El reprocesado manual reemplaza el objeto; su posición sigue siendo la
+        # del PDF original incluso si terminó antes que otros documentos.
+        outcome = original_replace(results, previous, updated)
+        result_order.transfer(previous, updated)
+        return outcome
+
+    original_ui.export_batch_excel = export_in_selection_order
+    original_ui.replace_result_reference = replace_preserving_order
 
     def process_with_selected_mode(*args, **kwargs):
+        paths = args[0] if args else kwargs["pdf_paths"]
+        if not state["append_mode"]:
+            result_order.reset()
+        batch_start = result_order.reserve_batch(len(paths))
         if not performance["enabled"]:
-            # Referencia inmutable: el hot reload de Flet no debe encadenar
-            # adaptadores ni cambiar inadvertidamente el modo estándar.
-            yield from standard_incremental(*args, **kwargs)
+            events = standard_incremental(*args, **kwargs)
         else:
-            # Cada PDF sigue el pipeline íntegro, en un proceso propio. La UI
-            # original agrega resultados según llegan: entregar los terminales
-            # en orden de selección evita cambiar el orden del Excel.
-            yield from ordered_terminal_events(
-                process_bank_statements_parallel_incremental(
-                    *args, **{**kwargs, "ocr_workers": performance["workers"]}
-                )
+            events = process_bank_statements_parallel_incremental(
+                *args, **{**kwargs, "ocr_workers": performance["workers"]}
             )
+        # Los resultados digitales y OCR se publican al terminar, sin esperar a
+        # índices anteriores. El índice se utiliza únicamente al exportar.
+        for event in events:
+            if event.kind == "completed" and event.result is not None:
+                result_order.register(event.result, batch_start + event.index)
+            yield event
 
     original_ui.process_bank_statements_incremental = process_with_selected_mode
     original_ui.APP_VERSION = _project_version()
