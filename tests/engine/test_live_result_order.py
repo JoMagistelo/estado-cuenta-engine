@@ -36,7 +36,7 @@ def test_duplicate_filenames_use_identity_not_name_or_equality():
     second = Result("same.pdf", 1)
     order.register(first, 0)
     order.register(second, 1)
-    assert order.ordered([second, first]) == [first, second]
+    assert order.ordered([second, first])[0] is first
 
 
 def test_manual_ocr_replacement_preserves_position_and_does_not_mutate_results():
