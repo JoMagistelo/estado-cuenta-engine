@@ -74,8 +74,8 @@ def parse_banamex(document: DocumentData) -> EstadoCuenta:
     # MOVIMIENTOS
     # ============================================================
     #
-    # El extractor histórico permanece intacto. La segunda pasada únicamente
-    # completa beneficiarios vacíos cuando el concepto trae ``POR ORDEN DE``.
+    # El extractor histórico permanece intacto. La segunda pasada completa
+    # metadatos del tipo «PAGO RECIBIDO DE [BANCO] POR ORDEN DE [ORDENANTE]».
     #
 
     movimientos = extract_movimientos_words(
