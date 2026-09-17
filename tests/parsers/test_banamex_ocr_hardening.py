@@ -369,3 +369,128 @@ def test_digital_movement_column_contract_is_preserved() -> None:
     assert movements[0].cargo == pytest.approx(75.90)
     assert movements[0].abono == 0.0
     assert movements[0].saldo_operacion == pytest.approx(924.10)
+
+
+def _movement_header(page: int, center_y: float = 96.2) -> list[SpatialWord]:
+    return _line(
+        page,
+        center_y,
+        [
+            ("FECHA", 18.6, 52.5),
+            ("CONCEPTO", 129.5, 186.2),
+            ("RETIROS", 271.0, 315.5),
+            ("DEPOSITOS", 336.6, 394.9),
+            ("SALDO", 424.6, 458.5),
+        ],
+        skew=0.0,
+    )
+
+
+def test_ocr_date_marks_split_movements_and_preserve_page_continuation() -> None:
+    words = _movement_header(1)
+    words += _line(
+        1,
+        740.0,
+        [("10DIC", 14.0, 43.0), ("-", 45.0, 49.0), ("COMISION", 58.0, 108.0)],
+        skew=0.0,
+    )
+    words += _movement_header(2)
+    words += _line(
+        2,
+        109.0,
+        [("59.04", 294.0, 326.0), ("3,940.96", 443.0, 480.0)],
+        skew=0.0,
+    )
+    words += _line(
+        2,
+        130.0,
+        [
+            ("10", 14.0, 25.0),
+            ("DIC", 29.0, 46.0),
+            ("*", 48.0, 51.0),
+            ("IVA", 58.0, 75.0),
+            ("9.45", 300.0, 326.0),
+            ("3,931.51", 443.0, 480.0),
+        ],
+        skew=0.0,
+    )
+    words += _line(
+        2,
+        151.0,
+        [
+            ("10", 14.0, 25.0),
+            ("DIC", 29.0, 46.0),
+            ("*", 48.0, 51.0),
+            ("PAGO", 58.0, 88.0),
+            ("4,050.00", 288.0, 326.0),
+            ("118.49-", 448.0, 480.0),
+        ],
+        skew=0.0,
+    )
+    words += _line(
+        2,
+        172.0,
+        [
+            ("10", 14.0, 25.0),
+            ("DIC", 29.0, 46.0),
+            ("*", 48.0, 51.0),
+            ("DISPOSICION", 58.0, 125.0),
+            ("118.49", 367.0, 400.0),
+            ("0.00", 455.0, 480.0),
+        ],
+        skew=0.0,
+    )
+
+    movements = extract_movimientos_words(words)
+
+    assert [movement.fecha_operacion for movement in movements] == [
+        "10 DIC",
+        "10 DIC",
+        "10 DIC",
+        "10 DIC",
+    ]
+    assert [movement.cargo for movement in movements] == pytest.approx(
+        [59.04, 9.45, 4050.0, 0.0]
+    )
+    assert [movement.abono for movement in movements] == pytest.approx(
+        [0.0, 0.0, 0.0, 118.49]
+    )
+    assert all(not (movement.cargo and movement.abono) for movement in movements)
+
+
+def test_mixed_cargo_and_abono_block_is_recovered_when_ocr_loses_date() -> None:
+    words = _movement_header(1)
+    words += _line(
+        1,
+        120.0,
+        [("10", 14.0, 25.0), ("DIC", 29.0, 46.0), ("PAGO", 58.0, 88.0)],
+        skew=0.0,
+    )
+    words += _line(
+        1,
+        132.0,
+        [("100.00", 292.0, 326.0), ("900.00", 447.0, 480.0)],
+        skew=0.0,
+    )
+    words += _line(
+        1,
+        145.0,
+        [("DISPOSICION", 58.0, 125.0), ("DE", 130.0, 143.0), ("LINEA", 148.0, 178.0)],
+        skew=0.0,
+    )
+    words += _line(
+        1,
+        157.0,
+        [("50.00", 370.0, 400.0), ("950.00", 447.0, 480.0)],
+        skew=0.0,
+    )
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 2
+    assert movements[0].fecha_operacion == "10 DIC"
+    assert movements[0].cargo == pytest.approx(100.0)
+    assert movements[0].abono == 0.0
+    assert movements[1].fecha_operacion == "10 DIC"
+    assert movements[1].cargo == 0.0
+    assert movements[1].abono == pytest.approx(50.0)
