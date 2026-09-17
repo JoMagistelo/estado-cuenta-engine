@@ -36,6 +36,15 @@ ANCHOR_RE = re.compile(
     r"(?P<amount>[+-]\s*\$?\s*[\d,]+(?:\.\d{1,2})?)\s*$",
     re.IGNORECASE,
 )
+DETACHED_ANCHOR_RE = re.compile(
+    r"^\s*(?P<day>\d{1,2})\s+"
+    r"(?P<month>ENE(?:RO)?|FEB(?:RERO)?|MAR(?:ZO)?|ABR(?:IL)?|MAY(?:O)?|"
+    r"JUN(?:IO)?|JUL(?:IO)?|AGO(?:STO)?|SEP(?:T(?:IEMBRE)?)?|SET(?:IEMBRE)?|"
+    r"OCT(?:UBRE)?|NOV(?:IEMBRE)?|DIC(?:IEMBRE)?)\s+"
+    r"(?P<year>\d{4})\s+"
+    r"(?P<amount>[+-]\s*\$?\s*[\d,]+(?:\.\d{1,2})?)\s*$",
+    re.IGNORECASE,
+)
 TIME_TOKEN_RE = re.compile(r"\bHORA\s*:\s*([0-9OoIl:]{4,10})", re.IGNORECASE)
 TRACK_RE = re.compile(
     r"\bCLAVE\s+DE\s+RASTREO\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{3,80})",
@@ -69,6 +78,7 @@ MOVEMENT_END_MARKERS = (
 @dataclass(slots=True)
 class MovementAnchor:
     line_index: int
+    block_start_index: int
     fecha: str
     concepto: str
     amount: float
@@ -79,10 +89,13 @@ def _month_number(value: str) -> Optional[int]:
     return MONTH_NUMBERS.get(normalized[:3])
 
 
-def _parse_anchor(line: SpatialLine, line_index: int) -> Optional[MovementAnchor]:
-    match = ANCHOR_RE.match(normalize_text(line.text))
-    if not match:
-        return None
+def _anchor_from_match(
+    match: re.Match[str],
+    *,
+    line_index: int,
+    block_start_index: int,
+    concept: str,
+) -> Optional[MovementAnchor]:
     month = _month_number(match.group("month"))
     amount = parse_money(match.group("amount"))
     if month is None or amount is None:
@@ -93,9 +106,65 @@ def _parse_anchor(line: SpatialLine, line_index: int) -> Optional[MovementAnchor
         return None
     return MovementAnchor(
         line_index=line_index,
+        block_start_index=block_start_index,
         fecha=parsed.strftime("%d/%m/%Y"),
-        concepto=normalize_text(match.group("concept")),
+        concepto=normalize_text(concept),
         amount=amount,
+    )
+
+
+def _parse_anchor(line: SpatialLine, line_index: int) -> Optional[MovementAnchor]:
+    match = ANCHOR_RE.match(normalize_text(line.text))
+    if not match:
+        return None
+    return _anchor_from_match(
+        match,
+        line_index=line_index,
+        block_start_index=line_index,
+        concept=match.group("concept"),
+    )
+
+
+def _parse_detached_anchor(
+    lines: Sequence[SpatialLine],
+    line_index: int,
+) -> Optional[MovementAnchor]:
+    """Recupera filas donde el concepto quedó ligeramente arriba de la fecha.
+
+    Nu puede dibujar la primera línea del concepto unos puntos por encima de la
+    fecha y del importe. La recuperación es deliberadamente estrecha: misma
+    página, concepto en la columna central y separación vertical máxima de 9
+    puntos. Así no se fusionan detalles normales del movimiento anterior.
+    """
+    if line_index == 0:
+        return None
+    line = lines[line_index]
+    match = DETACHED_ANCHOR_RE.match(normalize_text(line.text))
+    if not match:
+        return None
+
+    concept_line = lines[line_index - 1]
+    vertical_gap = line.center_y - concept_line.center_y
+    if concept_line.page != line.page or not 0.0 < vertical_gap <= 9.0:
+        return None
+    if _is_noise_line(concept_line):
+        return None
+
+    try:
+        concept_x0 = min(float(word.get("x0", 0.0)) for word in concept_line.words)
+    except (TypeError, ValueError):
+        return None
+    if not 110.0 <= concept_x0 <= 220.0:
+        return None
+
+    concept = normalize_text(concept_line.text)
+    if not concept or DETACHED_ANCHOR_RE.match(concept):
+        return None
+    return _anchor_from_match(
+        match,
+        line_index=line_index,
+        block_start_index=line_index - 1,
+        concept=concept,
     )
 
 
@@ -295,7 +364,7 @@ def _movement_from_block(
     movement = Movimiento(
         fecha_operacion=anchor.fecha,
         fecha_liquidacion=None,
-        concepto=memo or anchor.concepto,
+        concepto=memo or raw_concept,
         tipo_operacion=_extract_tipo_operacion(anchor, raw_concept),
         cargo=round(cargo, 2),
         abono=round(abono, 2),
@@ -318,18 +387,22 @@ def _movement_from_block(
 
 def extract_movimientos_words(words: List[SpatialWord]) -> List[Movimiento]:
     lines = group_words_into_lines(words)
-    anchors = [
-        anchor
-        for index, line in enumerate(lines)
-        if (anchor := _parse_anchor(line, index)) is not None
-    ]
+    anchors: List[MovementAnchor] = []
+    for index, line in enumerate(lines):
+        anchor = _parse_anchor(line, index) or _parse_detached_anchor(lines, index)
+        if anchor is not None:
+            anchors.append(anchor)
     if not anchors:
         return []
 
     section_end = _movement_section_end(lines, anchors[-1].line_index + 1)
     result: List[Movimiento] = []
     for index, anchor in enumerate(anchors):
-        end = anchors[index + 1].line_index if index + 1 < len(anchors) else section_end
+        end = (
+            anchors[index + 1].block_start_index
+            if index + 1 < len(anchors)
+            else section_end
+        )
         detail_lines = lines[anchor.line_index + 1 : end]
         result.append(_movement_from_block(anchor, detail_lines))
     return result

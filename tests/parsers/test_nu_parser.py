@@ -136,6 +136,37 @@ def test_nu_movement_parser_keeps_cross_page_spei_detail() -> None:
     assert movimientos[0].clave_rastreo == "NU38DEMO123"
 
 
+def test_nu_recovers_movement_with_concept_above_date_and_amount() -> None:
+    words = [
+        _word("15 JUN 2026 COMPRA PRUEBA -$10.00", 56.0, 650.0, 3),
+        _word("TESORERIA DE LA FEDERACION", 135.0, 681.0, 3),
+        _word("HACIENDA TE", 324.0, 681.0, 3),
+        _word("16 JUN 2026", 56.0, 687.0, 3),
+        _word("+$6,738.00", 484.0, 687.0, 3),
+        _word("DEVUELVE SA152600397339", 135.0, 696.0, 3),
+        _word(
+            "Con estos movimientos, tu saldo promedio del periodo fue de $1.00",
+            48.0,
+            730.0,
+            3,
+        ),
+    ]
+
+    movements = extract_movimientos_words(words)
+
+    assert len(movements) == 2
+    assert movements[0].concepto == "COMPRA PRUEBA"
+    assert "TESORERIA" not in movements[0].concepto_original
+
+    recovered = movements[1]
+    assert recovered.fecha_operacion == "16/06/2026"
+    assert recovered.abono == 6738.0
+    assert recovered.cargo == 0.0
+    assert recovered.concepto == (
+        "TESORERIA DE LA FEDERACION HACIENDA TE DEVUELVE SA152600397339"
+    )
+
+
 @pytest.mark.parametrize(
     ("counterparty_text", "expected"),
     [
