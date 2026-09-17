@@ -49,10 +49,6 @@ BANK_RE = re.compile(
     r"\b(?:ENVIADO\s+A|RECIBIDO\s+DE)\s+(.+?)\.\s+(?:AL|DEL)\s+CLIENTE\b",
     re.IGNORECASE,
 )
-COUNTERPARTY_RE = re.compile(
-    r"\b(?:AL|DEL)\s+CLIENTE\s+(.+?)\s*\(DATO\s+NO\s+VERIFICADO",
-    re.IGNORECASE,
-)
 ACCOUNT_RE = re.compile(
     r"\b(?:A|DE)\s+LA\s+CUENTA\s+([0-9][0-9\s-]{7,30})\s+CLABE\b",
     re.IGNORECASE,
@@ -136,11 +132,75 @@ def _detail_text(lines: Sequence[SpatialLine]) -> str:
     return normalize_text(" ".join(line.text for line in lines if not _is_noise_line(line)))
 
 
-def _extract_counterparty(text: str) -> Optional[str]:
-    match = COUNTERPARTY_RE.search(text)
-    if not match:
+def _ascii_preserving_length(value: str) -> str:
+    """Quita acentos sin cambiar índices del texto que se devolverá."""
+    return value.translate(
+        str.maketrans(
+            {
+                "á": "a",
+                "é": "e",
+                "í": "i",
+                "ó": "o",
+                "ú": "u",
+                "ü": "u",
+                "ñ": "n",
+                "Á": "A",
+                "É": "E",
+                "Í": "I",
+                "Ó": "O",
+                "Ú": "U",
+                "Ü": "U",
+                "Ñ": "N",
+            }
+        )
+    )
+
+
+def _clean_counterparty(value: str) -> Optional[str]:
+    result = normalize_text(value).strip(" :;,.-()")
+    result = re.sub(
+        r"\s*\(?\s*DATO\s+NO\s+VERIFICADO.*$",
+        "",
+        result,
+        flags=re.IGNORECASE,
+    ).strip(" :;,.-()")
+    if not result or len(result) > 120:
         return None
-    return normalize_text(match.group(1)).strip(" ,.-") or None
+    if not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", result):
+        return None
+    return result
+
+
+def _extract_counterparty(text: str) -> Optional[str]:
+    """Extrae la contraparte aun si OCR pierde el delimitador de Nu.
+
+    El formato usual termina el nombre con ``Dato no verificado``. Algunos
+    documentos omiten o dañan esa leyenda aunque el nombre permanezca completo
+    en el concepto; en ese caso se usan los siguientes campos semánticos como
+    límite seguro.
+    """
+    original = normalize_text(text)
+    searchable = _ascii_preserving_length(original)
+    stop = (
+        r"(?=\s*(?:\(|,|\.)?\s*(?:"
+        r"(?:DATO\s+)?NO\s+VER[I1L]F[I1L]CADO|"
+        r"POR\s+CONCEPTO|"
+        r"(?:A|DE)\s+LA\s+CUENTA|"
+        r"CLAVE\s+DE\s+(?:RASTREO|REFERENCIA)"
+        r")\b|$)"
+    )
+    patterns = (
+        rf"\b(?:AL|DEL|A\s+LA|DE\s+LA)\s+CL[I1L]ENTE\s*[:#-]?\s*(.+?){stop}",
+        rf"\b(?:NOMBRE\s+(?:DEL|DE\s+LA)\s+)?BENEF[I1L]C[I1L]AR[I1L][OA]\s*[:#-]?\s*(.+?){stop}",
+        rf"\bA\s+NOMBRE\s+DE\s*[:#-]?\s*(.+?){stop}",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, searchable, re.IGNORECASE)
+        if match:
+            value = _clean_counterparty(original[match.start(1) : match.end(1)])
+            if value:
+                return value
+    return None
 
 
 def _extract_account(text: str) -> Optional[str]:
@@ -196,6 +256,31 @@ def _extract_tipo_operacion(anchor: MovementAnchor, text: str) -> str:
     return "CARGO" if anchor.amount < 0 else "ABONO"
 
 
+def enrich_movement_metadata_from_concepto(movement: Movimiento) -> Movimiento:
+    """Segunda extracción desde el concepto ya consolidado del movimiento.
+
+    Se ejecuta después de construir el modelo y sólo completa campos vacíos.
+    Así, un beneficiario presente en ``concepto_original`` llega a Excel aunque
+    la extracción inicial haya fallado, sin sustituir valores ya confirmados.
+    """
+    for source in (movement.concepto, movement.concepto_original):
+        concept = normalize_text(source)
+        if not concept:
+            continue
+
+        account = _extract_account(concept)
+        movement.beneficiario = movement.beneficiario or _extract_counterparty(concept)
+        movement.cuenta_beneficiario = movement.cuenta_beneficiario or account
+        movement.clabe_beneficiario = movement.clabe_beneficiario or (
+            account if account and len(account) == 18 else None
+        )
+        movement.clave_rastreo = movement.clave_rastreo or _extract_tracking(concept)
+        movement.referencia = movement.referencia or _extract_match(REFERENCE_RE, concept)
+        movement.sucursal = movement.sucursal or _extract_match(BANK_RE, concept)
+        movement.hora_operacion = movement.hora_operacion or _extract_time(concept)
+    return movement
+
+
 def _movement_from_block(
     anchor: MovementAnchor,
     detail_lines: Sequence[SpatialLine],
@@ -207,7 +292,7 @@ def _movement_from_block(
     cargo = abs(anchor.amount) if anchor.amount < 0 else 0.0
     abono = anchor.amount if anchor.amount > 0 else 0.0
 
-    return Movimiento(
+    movement = Movimiento(
         fecha_operacion=anchor.fecha,
         fecha_liquidacion=None,
         concepto=memo or anchor.concepto,
@@ -228,6 +313,7 @@ def _movement_from_block(
         saldo_liquidacion=0.0,
         concepto_original=raw_concept,
     )
+    return enrich_movement_metadata_from_concepto(movement)
 
 
 def extract_movimientos_words(words: List[SpatialWord]) -> List[Movimiento]:
@@ -249,4 +335,4 @@ def extract_movimientos_words(words: List[SpatialWord]) -> List[Movimiento]:
     return result
 
 
-__all__ = ["extract_movimientos_words"]
+__all__ = ["enrich_movement_metadata_from_concepto", "extract_movimientos_words"]

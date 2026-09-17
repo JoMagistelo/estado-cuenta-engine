@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from models.movimiento import Movimiento
 from parsers.nu import parse_nu
-from parsers.nu.extractors.movimientos import extract_movimientos_words
+from parsers.nu.extractors.movimientos import (
+    enrich_movement_metadata_from_concepto,
+    extract_movimientos_words,
+)
 from parsers.nu_ocr import parse_nu_ocr
 from readers.models.document_data import DocumentData
 
@@ -128,3 +134,73 @@ def test_nu_movement_parser_keeps_cross_page_spei_detail() -> None:
     movimientos = extract_movimientos_words(_nu_words())
     assert movimientos[0].clabe_beneficiario == "638180000000000001"
     assert movimientos[0].clave_rastreo == "NU38DEMO123"
+
+
+@pytest.mark.parametrize(
+    ("counterparty_text", "expected"),
+    [
+        ("Al cliente Persona Sin Leyenda, por concepto Renta.", "Persona Sin Leyenda"),
+        ("Del cl1ente Persona OCR. De la cuenta 002180000000000001 clabe", "Persona OCR"),
+        ("Beneficiario: Persona Etiquetada, Clave de rastreo ABC123", "Persona Etiquetada"),
+        ("A nombre de Persona Alterna, Clave de referencia 9", "Persona Alterna"),
+    ],
+)
+def test_nu_second_pass_recovers_beneficiary_from_concept_variants(
+    counterparty_text: str,
+    expected: str,
+) -> None:
+    movement = Movimiento(
+        fecha_operacion="30/09/2025",
+        fecha_liquidacion=None,
+        concepto="Renta",
+        tipo_operacion="TRANSFERENCIA SPEI ENVIADA",
+        cargo=100.0,
+        abono=0.0,
+        beneficiario=None,
+        concepto_original=f"Transferencia SPEI. {counterparty_text}",
+    )
+
+    enriched = enrich_movement_metadata_from_concepto(movement)
+
+    assert enriched.beneficiario == expected
+
+
+def test_nu_second_pass_does_not_overwrite_confirmed_beneficiary() -> None:
+    movement = Movimiento(
+        fecha_operacion="30/09/2025",
+        fecha_liquidacion=None,
+        concepto="Renta",
+        tipo_operacion="TRANSFERENCIA SPEI ENVIADA",
+        cargo=100.0,
+        abono=0.0,
+        beneficiario="Persona Confirmada",
+        concepto_original=(
+            "Transferencia SPEI. Al cliente Persona Alterna, por concepto Renta."
+        ),
+    )
+
+    assert (
+        enrich_movement_metadata_from_concepto(movement).beneficiario
+        == "Persona Confirmada"
+    )
+
+
+def test_nu_second_pass_reads_exported_concept_when_original_lacks_beneficiary() -> None:
+    movement = Movimiento(
+        fecha_operacion="30/09/2025",
+        fecha_liquidacion=None,
+        concepto=(
+            "Transferencia SPEI. Beneficiario Persona Desde Concepto, "
+            "Clave de referencia 9"
+        ),
+        tipo_operacion="TRANSFERENCIA SPEI ENVIADA",
+        cargo=100.0,
+        abono=0.0,
+        beneficiario=None,
+        concepto_original="Renta",
+    )
+
+    assert (
+        enrich_movement_metadata_from_concepto(movement).beneficiario
+        == "Persona Desde Concepto"
+    )
