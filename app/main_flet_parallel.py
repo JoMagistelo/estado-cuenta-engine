@@ -11,7 +11,9 @@ import multiprocessing
 import flet as ft
 
 import main_flet as original_ui
+from engine.ordered_processing_events import ordered_terminal_events
 from engine.parallel_ocr_pipeline import process_bank_statements_parallel_incremental
+from engine.pipeline import process_bank_statements_incremental as standard_incremental
 
 
 def _find_configuration(controls):
@@ -36,10 +38,9 @@ def _find_configuration(controls):
 
 
 def _original_settings(handler):
-    """Recupera el mismo diccionario de configuración que usa el lote original.
+    """Obtiene la configuración real usada por la interfaz base.
 
-    El adaptador es explícitamente experimental; fallar con claridad si la
-    interfaz base cambia es preferible a ejecutar con una configuración falsa.
+    Si Flet cambia su contrato, aborta en lugar de simular una configuración.
     """
     cells = dict(zip(handler.__code__.co_freevars, handler.__closure__ or ()))
     if "settings" not in cells or "state" not in cells:
@@ -47,17 +48,28 @@ def _original_settings(handler):
     return cells["settings"].cell_contents, cells["state"].cell_contents
 
 
+def mode_description(*, enabled: bool, workers: int, engine: str) -> str:
+    """Muestra motor y concurrencia reales; evita comparar motores diferentes."""
+    label = original_ui.engine_label(engine)
+    return (f"{label} · paralelo x{workers}" if enabled else f"{label} · estándar")
+
+
 def main(page: ft.Page):
     performance = {"enabled": False, "workers": 2}
-    original_process = original_ui.process_bank_statements_incremental
 
     def process_with_selected_mode(*args, **kwargs):
         if not performance["enabled"]:
-            yield from original_process(*args, **kwargs)
+            # Referencia inmutable: el hot reload de Flet no debe encadenar
+            # adaptadores ni cambiar inadvertidamente el modo estándar.
+            yield from standard_incremental(*args, **kwargs)
         else:
-            # Flet toma los ajustes al arrancar el lote y deshabilita Configuración.
-            yield from process_bank_statements_parallel_incremental(
-                *args, **{**kwargs, "ocr_workers": performance["workers"]}
+            # Cada PDF sigue el pipeline íntegro, en un proceso propio. La UI
+            # original agrega resultados según llegan: entregar los terminales
+            # en orden de selección evita cambiar el orden del Excel.
+            yield from ordered_terminal_events(
+                process_bank_statements_parallel_incremental(
+                    *args, **{**kwargs, "ocr_workers": performance["workers"]}
+                )
             )
 
     original_ui.process_bank_statements_incremental = process_with_selected_mode
@@ -68,7 +80,15 @@ def main(page: ft.Page):
         raise RuntimeError("No se encontró el botón Configuración de la interfaz Flet")
     config_button, config_row = found
     original_settings, state = _original_settings(config_button.on_click)
-    mode_text = ft.Text("OCR estándar", size=8, color=ft.Colors.ON_SURFACE_VARIANT)
+    mode_text = ft.Text(
+        mode_description(
+            enabled=False,
+            workers=performance["workers"],
+            engine=original_settings["ocr_primary_engine"],
+        ),
+        size=8,
+        color=ft.Colors.ON_SURFACE_VARIANT,
+    )
     if isinstance(config_row, ft.Row):
         position = config_row.controls.index(config_button)
         config_row.controls.insert(position, mode_text)
@@ -120,10 +140,10 @@ def main(page: ft.Page):
             )
             performance["enabled"] = bool(toggle.value)
             performance["workers"] = int(worker_slider.value)
-            mode_text.value = (
-                f"OCR x{performance['workers']} procesos"
-                if performance["enabled"]
-                else "OCR estándar"
+            mode_text.value = mode_description(
+                enabled=performance["enabled"],
+                workers=performance["workers"],
+                engine=original_settings["ocr_primary_engine"],
             )
             page.pop_dialog()
             page.update()
@@ -136,8 +156,9 @@ def main(page: ft.Page):
                     [
                         selector,
                         ft.Text(
-                            "El motor elegido es el único OCR del procesamiento normal. "
-                            "Los PDF digitales conservan su ruta original.",
+                            "Verifica el motor: el benchmark de 7:43 usó PaddleOCR. "
+                            "Comparar PaddleOCR con Tesseract no permite atribuir "
+                            "diferencias de extracción al paralelismo.",
                             size=9,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
