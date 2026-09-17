@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from scripts.benchmark_parallel_ocr import collect_pdf_paths, compare_results
+# El benchmark es un script autónomo y no forma parte del paquete instalable.
+# pytest en GitHub Actions no incluye necesariamente la raíz del repo en sys.path.
+_benchmark_path = Path(__file__).resolve().parents[2] / "scripts" / "benchmark_parallel_ocr.py"
+_spec = importlib.util.spec_from_file_location("benchmark_parallel_ocr", _benchmark_path)
+assert _spec is not None and _spec.loader is not None
+_benchmark = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_benchmark)
+collect_pdf_paths = _benchmark.collect_pdf_paths
+compare_results = _benchmark.compare_results
 
 
 def _result(**changes):
