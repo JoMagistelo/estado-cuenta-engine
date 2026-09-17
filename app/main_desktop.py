@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import multiprocessing
 import os
 import sys
 import tempfile
@@ -26,7 +27,7 @@ DANGER = "#A63D40"
 
 STARTUP_WIDTH = 680
 STARTUP_HEIGHT = 420
-RELEASE_VERSION = "4.1.0"
+RELEASE_VERSION = "4.2.0"
 PADDLEOCR_MODEL_NAMES = (
     "PP-OCRv5_mobile_det",
     "latin_PP-OCRv5_mobile_rec",
@@ -424,9 +425,9 @@ async def _desktop_main(page: ft.Page) -> None:
             detail_message="Preparando lectores, validadores y exportadores.",
         )
 
-        # main_flet importa el grafo funcional completo. Ejecutarlo fuera del
-        # hilo del loop mantiene animada y responsiva la ventana de arranque.
-        ui = await asyncio.to_thread(importlib.import_module, "main_flet")
+        # La entrada paralela reutiliza main_flet e incorpora la aceleración OCR
+        # validada para 4.2. Ejecutarla fuera del loop mantiene animado el splash.
+        ui = await asyncio.to_thread(importlib.import_module, "main_flet_parallel")
         ui.APP_VERSION = RELEASE_VERSION
 
         _update_startup_progress(
@@ -440,8 +441,10 @@ async def _desktop_main(page: ft.Page) -> None:
         )
         await asyncio.sleep(0)
 
-        ui.PROJECT_ROOT = _desktop_resource_root()
-        ui.LOGO_PATH = ui.PROJECT_ROOT / "assets" / "logo_gobierno_mexico.png"
+        ui.original_ui.PROJECT_ROOT = _desktop_resource_root()
+        ui.original_ui.LOGO_PATH = (
+            ui.original_ui.PROJECT_ROOT / "assets" / "logo_gobierno_mexico.png"
+        )
 
         _update_startup_progress(
             page,
@@ -583,7 +586,39 @@ def _run_packaged_portable_paddleocr_runtime_self_test() -> bool:
     return True
 
 
+def _parallel_runtime_probe(delay_seconds: float) -> int:
+    """Trabajo mínimo pickleable para comprobar ``spawn`` dentro del EXE."""
+    import time
+
+    time.sleep(delay_seconds)
+    return os.getpid()
+
+
+def _run_packaged_parallel_runtime_self_test() -> bool:
+    """Comprueba que el portable puede crear hijos sin reabrir la interfaz."""
+    if "--self-test-parallel-runtime" not in sys.argv:
+        return False
+
+    from concurrent.futures import ProcessPoolExecutor
+
+    parallel_ui = importlib.import_module("main_flet_parallel")
+    if not callable(getattr(parallel_ui, "main", None)):
+        raise RuntimeError("El ejecutable no contiene la interfaz paralela.")
+
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=2, mp_context=context) as pool:
+        # Give the second frozen worker enough time to start before either task
+        # finishes, avoiding a false negative on slower Windows machines.
+        process_ids = list(pool.map(_parallel_runtime_probe, (1.5, 1.5)))
+    if len(set(process_ids)) != 2:
+        raise RuntimeError("El ejecutable no inició dos procesos independientes.")
+    return True
+
+
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    if _run_packaged_parallel_runtime_self_test():
+        raise SystemExit(0)
     if _run_packaged_paddlex_self_test():
         raise SystemExit(0)
     if _run_packaged_portable_paddleocr_runtime_self_test():

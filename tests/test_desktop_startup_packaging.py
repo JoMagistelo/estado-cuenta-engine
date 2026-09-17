@@ -12,12 +12,11 @@ def test_pyinstaller_spec_does_not_create_tcl_tk_splash():
     assert "runtime_hooks=[]" in spec
 
 
-def test_pyinstaller_spec_includes_dynamically_loaded_main_flet():
+def test_pyinstaller_spec_includes_dynamically_loaded_parallel_ui():
     spec = (ROOT / "EstadoCuentaEngine.spec").read_text(encoding="utf-8")
 
-    # main_desktop usa importlib.import_module("main_flet"). PyInstaller no
-    # descubre ese import dinámico durante Analysis, así que debe declararse.
-    assert 'extra_hiddenimports = ["main_flet"]' in spec
+    # main_desktop carga dinámicamente el adaptador y éste reutiliza main_flet.
+    assert 'extra_hiddenimports = ["main_flet", "main_flet_parallel"]' in spec
     assert "hiddenimports=extra_hiddenimports" in spec
 
 
@@ -42,7 +41,9 @@ def test_desktop_entrypoint_renders_professional_startup_before_heavy_ui_import(
     assert "page.window.visible = True" in source
     assert "ft.ProgressBar" in source
     assert "ft.ProgressRing(" in source
-    assert 'await asyncio.to_thread(importlib.import_module, "main_flet")' in source
+    assert 'await asyncio.to_thread(importlib.import_module, "main_flet_parallel")' in source
+    assert "ui.original_ui.PROJECT_ROOT" in source
+    assert "multiprocessing.freeze_support()" in source
     assert "page.controls.clear()" in source
     assert "_prepare_main_window(page)" in source
     assert "await _show_startup_error(page, ex)" in source

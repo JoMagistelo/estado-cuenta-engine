@@ -49,7 +49,7 @@ def _run_parallel(
     workers: int,
     threads_per_worker: int | None,
 ):
-    """Mismo generador que emplea la entrada Flet experimental."""
+    """Mismo generador que emplea la entrada Flet de producción."""
     from engine.parallel_ocr_pipeline import process_bank_statements_parallel_incremental
 
     results = [None] * len(paths)

@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "4.1.0",
+    [string]$Version = "4.2.0",
     [switch]$SkipTests,
     [switch]$PortableOffline,
     [switch]$IncludePaddleModels,
@@ -119,6 +119,18 @@ finally {
 $Exe = Join-Path $ProjectRoot "dist\Extractor_de_Movimientos_Financieros.exe"
 if (-not (Test-Path $Exe)) {
     throw "No se generó el ejecutable esperado: $Exe"
+}
+
+# El paralelismo debe comprobarse dentro del binario congelado. Esta prueba
+# inicia dos hijos con spawn y detecta la regresión donde el EXE reabre la UI,
+# queda bloqueado o no incluye los módulos de la entrada paralela.
+$ParallelSmoke = Start-Process `
+    -FilePath $Exe `
+    -ArgumentList "--self-test-parallel-runtime" `
+    -Wait `
+    -PassThru
+if ($ParallelSmoke.ExitCode -ne 0) {
+    throw "El EXE no pudo iniciar el procesamiento paralelo (ExitCode=$($ParallelSmoke.ExitCode))."
 }
 
 if ($PortableOffline) {
@@ -272,7 +284,7 @@ Antes de distribuir:
 1. validar el SHA-256;
 2. aplicar firma de código institucional si TIC la requiere;
 3. probar el EXE en el Windows objetivo con una cuenta sin privilegios administrativos;
-4. confirmar lectura Digital, OCR Tesseract, fallback PaddleOCR, selección dual, exportación y cierre controlado;
+4. confirmar lectura Digital, PaddleOCR paralelo, alternativa Tesseract, exportación y cierre controlado;
 5. para -PortableOffline, copiar sólo el EXE a una computadora limpia y confirmar que el visor Flet no intenta conectarse a Internet, el self-test Paddle embebido y una UAT real.
 
 Streamlit se despliega como servicio separado: debe usar modelos locales autorizados y

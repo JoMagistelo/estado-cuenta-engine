@@ -24,7 +24,7 @@ PADDLEOCR_MODEL_NAMES = (
     "latin_PP-OCRv5_mobile_rec",
 )
 
-APP_VERSION = (4, 1, 0, 0)
+APP_VERSION = (4, 2, 0, 0)
 
 
 def _build_icon() -> Path:
@@ -216,12 +216,11 @@ version_info = _build_version_info()
 extra_datas = []
 extra_binaries = []
 
-# ``main_desktop`` carga la UI con importlib.import_module("main_flet") para
+# ``main_desktop`` carga la UI con importlib.import_module("main_flet_parallel") para
 # mantener el import pesado fuera del hilo de Flet. PyInstaller no puede inferir
-# imports realizados de esa forma, por lo que el módulo debe declararse como
-# hidden import. Sin esto el EXE inicia el splash pero falla con
-# ModuleNotFoundError: No module named 'main_flet'.
-extra_hiddenimports = ["main_flet"]
+# imports realizados de esa forma. Se declaran tanto el adaptador paralelo como
+# la UI institucional que reutiliza para evitar fallos después del splash.
+extra_hiddenimports = ["main_flet", "main_flet_parallel"]
 
 # PaddleOCR 3.x construye la canalización OCR a través de PaddleX y carga
 # configuraciones YAML/JSON de forma dinámica. Si sólo se recogen ``paddle`` y
