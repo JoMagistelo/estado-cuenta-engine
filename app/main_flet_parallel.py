@@ -7,6 +7,8 @@ No altera main_flet.py ni el EXE distribuido; reutiliza su interfaz íntegra.
 from __future__ import annotations
 
 import multiprocessing
+import os
+from importlib.metadata import PackageNotFoundError, version
 
 import flet as ft
 
@@ -54,8 +56,22 @@ def mode_description(*, enabled: bool, workers: int, engine: str) -> str:
     return (f"{label} · paralelo x{workers}" if enabled else f"{label} · estándar")
 
 
+def _project_version() -> str:
+    """Utiliza la versión instalada, o el pyproject local al ejecutar desde código fuente."""
+    try:
+        return version("extractor-de-movimientos-financieros")
+    except PackageNotFoundError:
+        import tomllib
+
+        project_file = original_ui.PROJECT_ROOT / "pyproject.toml"
+        with project_file.open("rb") as stream:
+            return str(tomllib.load(stream)["project"]["version"])
+
+
 def main(page: ft.Page):
-    performance = {"enabled": False, "workers": 2}
+    # El modo turbo es la configuración de prueba inicial, no una promesa de
+    # rendimiento: cuatro modelos simultáneos requieren más RAM/CPU.
+    performance = {"enabled": True, "workers": 4}
 
     def process_with_selected_mode(*args, **kwargs):
         if not performance["enabled"]:
@@ -73,6 +89,11 @@ def main(page: ft.Page):
             )
 
     original_ui.process_bank_statements_incremental = process_with_selected_mode
+    original_ui.APP_VERSION = _project_version()
+    # main_flet.py usa Tesseract si no existe OCR_PRIMARY_ENGINE. La entrada
+    # experimental propone PaddleOCR por defecto sin anular una elección
+    # explícita del usuario mediante variable de entorno.
+    os.environ.setdefault("OCR_PRIMARY_ENGINE", "paddleocr")
     original_ui.main(page)
 
     found = _find_configuration(page.controls)
@@ -82,7 +103,7 @@ def main(page: ft.Page):
     original_settings, state = _original_settings(config_button.on_click)
     mode_text = ft.Text(
         mode_description(
-            enabled=False,
+            enabled=performance["enabled"],
             workers=performance["workers"],
             engine=original_settings["ocr_primary_engine"],
         ),
@@ -156,9 +177,8 @@ def main(page: ft.Page):
                     [
                         selector,
                         ft.Text(
-                            "Verifica el motor: el benchmark de 7:43 usó PaddleOCR. "
-                            "Comparar PaddleOCR con Tesseract no permite atribuir "
-                            "diferencias de extracción al paralelismo.",
+                            "El benchmark de 7:43 usó PaddleOCR; para comparar resultados "
+                            "se debe usar el mismo motor en ambas pruebas.",
                             size=9,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
@@ -174,9 +194,10 @@ def main(page: ft.Page):
                         count_text,
                         worker_slider,
                         ft.Text(
-                            "Cada proceso carga sus propios modelos en RAM. "
-                            "Dos procesos son el punto de partida; más procesos no "
-                            "garantizan mayor velocidad. El modo estándar se conserva.",
+                            "Turbo inicia activado con cuatro procesos. Cada uno carga "
+                            "sus propios modelos en RAM; cuatro procesos pueden ser más "
+                            "lentos que dos o agotar memoria. Reduce el deslizador o "
+                            "desactiva el modo para volver al procesamiento estándar.",
                             size=9,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
