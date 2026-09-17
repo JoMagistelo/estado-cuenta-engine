@@ -32,7 +32,8 @@ def test_flet_window_opens_at_current_size_and_can_be_maximized():
 def test_movement_totals_are_clickable_view_filters_only():
     source = Path("app/main_flet.py").read_text(encoding="utf-8")
 
-    assert "def movement_matches_kind" in source
+    assert "from utils.result_state import (" in source
+    assert "movement_matches_kind," in source
     assert "active_kind: dict[str, str | None] = {'value': None}" in source
     assert "cargo_chip.on_click = lambda e: toggle_kind('cargo')" in source
     assert "abono_chip.on_click = lambda e: toggle_kind('abono')" in source

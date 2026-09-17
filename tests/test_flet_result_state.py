@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.main_flet import (
+from utils.result_state import (
     movement_matches_kind,
     remove_result_reference,
     replace_result_reference,

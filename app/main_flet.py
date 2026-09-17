@@ -23,6 +23,11 @@ from engine.ocr_reprocessing import reprocess_with_secondary_ocr
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
+from utils.result_state import (
+    movement_matches_kind,
+    remove_result_reference,
+    replace_result_reference,
+)
 
 APP_VERSION = '4.0.0'
 PROCESSING_UI_POLL_INTERVAL = 0.2
@@ -128,40 +133,6 @@ def numeric(value: Any) -> float:
         return max(float(value or 0.0), 0.0)
     except (TypeError, ValueError):
         return 0.0
-
-
-def replace_result_reference(
-    results: list[Any],
-    previous: Any,
-    updated: Any,
-) -> None:
-    """Mantiene sincronizada la lista exportable después de reprocesar."""
-
-    for index, candidate in enumerate(results):
-        if candidate is previous:
-            results[index] = updated
-            return
-    results.append(updated)
-
-
-def remove_result_reference(results: list[Any], target: Any) -> bool:
-    """Elimina por identidad para no confundir resultados con datos iguales."""
-
-    for index, candidate in enumerate(results):
-        if candidate is target:
-            results.pop(index)
-            return True
-    return False
-
-
-def movement_matches_kind(movement: Any, kind: str | None) -> bool:
-    """Filtro visual; no altera el conjunto utilizado por la exportación."""
-
-    if kind == 'cargo':
-        return numeric(getattr(movement, 'cargo', 0.0)) > 0.0
-    if kind == 'abono':
-        return numeric(getattr(movement, 'abono', 0.0)) > 0.0
-    return True
 
 
 def main(page: ft.Page):
