@@ -14,7 +14,10 @@ import flet as ft
 
 import main_flet as original_ui
 from engine.live_result_order import LiveResultOrder
-from engine.parallel_ocr_pipeline import process_bank_statements_parallel_incremental
+from engine.parallel_ocr_pipeline import (
+    MAX_OCR_WORKERS,
+    process_bank_statements_parallel_incremental,
+)
 from engine.pipeline import process_bank_statements_incremental as standard_incremental
 
 
@@ -53,7 +56,7 @@ def _original_settings(handler):
 def mode_description(*, enabled: bool, workers: int, engine: str) -> str:
     """Muestra motor y concurrencia reales; evita comparar motores diferentes."""
     label = original_ui.engine_label(engine)
-    return (f"{label} · paralelo x{workers}" if enabled else f"{label} · estándar")
+    return (f"{label} · turbo hasta x{workers}" if enabled else f"{label} · estándar")
 
 
 def _project_version() -> str:
@@ -71,9 +74,9 @@ def _project_version() -> str:
 
 
 def main(page: ft.Page):
-    # El modo turbo es la configuración de prueba inicial, no una promesa de
-    # rendimiento: cuatro modelos simultáneos requieren más RAM/CPU.
-    performance = {"enabled": True, "workers": 4}
+    # El máximo solicitado es experimental. El pipeline sólo crea tantos
+    # procesos como PDFs OCR haya y reparte entre ellos el presupuesto de CPU.
+    performance = {"enabled": True, "workers": MAX_OCR_WORKERS}
     result_order = LiveResultOrder()
     original_export = original_ui.export_batch_excel
     original_replace = original_ui.replace_result_reference
@@ -154,15 +157,15 @@ def main(page: ft.Page):
             active_color=original_ui.GOB_GREEN,
         )
         count_text = ft.Text(
-            f"Procesos OCR simultáneos: {performance['workers']}", size=10
+            f"Máximo de PDFs OCR simultáneos: {performance['workers']}", size=10
         )
         worker_slider = ft.Slider(
             min=2,
-            max=4,
-            divisions=2,
+            max=MAX_OCR_WORKERS,
+            divisions=MAX_OCR_WORKERS - 2,
             value=performance["workers"],
             disabled=not performance["enabled"],
-            label="{value} procesos",
+            label="hasta {value} procesos",
             width=290,
         )
 
@@ -171,7 +174,9 @@ def main(page: ft.Page):
             worker_slider.update()
 
         def slider_changed(_):
-            count_text.value = f"Procesos OCR simultáneos: {int(worker_slider.value)}"
+            count_text.value = (
+                f"Máximo de PDFs OCR simultáneos: {int(worker_slider.value)}"
+            )
             count_text.update()
 
         toggle.on_change = switch_changed
@@ -216,10 +221,12 @@ def main(page: ft.Page):
                         count_text,
                         worker_slider,
                         ft.Text(
-                            "Turbo inicia activado con cuatro procesos. Cada uno carga "
-                            "sus propios modelos en RAM; cuatro procesos pueden ser más "
-                            "lentos que dos o agotar memoria. Reduce el deslizador o "
-                            "desactiva el modo para volver al procesamiento estándar.",
+                            "Turbo inicia en x8, pero sólo abre tantos procesos como PDFs "
+                            "escaneados existan. Paddle distribuye automáticamente los "
+                            "hilos de CPU entre los procesos activos: x8 no significa que "
+                            "ocho archivos terminen juntos ni garantiza que supere a x4. "
+                            "Cada proceso conserva su propio modelo en RAM; si el equipo "
+                            "pierde rendimiento, prueba x6 o x4.",
                             size=9,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),

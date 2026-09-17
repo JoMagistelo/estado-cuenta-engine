@@ -42,7 +42,13 @@ def _run_standard(paths: list[str], engine: str, artifact_dir: str):
     return results, sorted(set(failed))
 
 
-def _run_parallel(paths: list[str], engine: str, artifact_dir: str, workers: int):
+def _run_parallel(
+    paths: list[str],
+    engine: str,
+    artifact_dir: str,
+    workers: int,
+    threads_per_worker: int | None,
+):
     """Mismo generador que emplea la entrada Flet experimental."""
     from engine.parallel_ocr_pipeline import process_bank_statements_parallel_incremental
 
@@ -53,6 +59,7 @@ def _run_parallel(paths: list[str], engine: str, artifact_dir: str, workers: int
         ocr_primary_engine=engine,
         ocr_artifact_dir=artifact_dir,
         ocr_workers=workers,
+        ocr_threads_per_worker=threads_per_worker,
     ):
         if event.kind == "completed":
             results[event.index] = event.result
@@ -98,11 +105,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("pdfs", nargs="+", help="PDF problemático o carpeta de PDF.")
     parser.add_argument("--engine", choices=("paddleocr", "tesseract"), default="paddleocr")
-    parser.add_argument("--workers", type=int, choices=(2, 3, 4), default=2)
+    parser.add_argument("--workers", type=int, choices=range(2, 9), default=8)
+    parser.add_argument(
+        "--threads-per-worker",
+        type=int,
+        help="Override de 1 a 32; si se omite, reparte automáticamente la CPU.",
+    )
     parser.add_argument("--report", type=Path, help="JSON local sin datos financieros.")
     args = parser.parse_args(argv)
     try:
         paths = collect_pdf_paths(args.pdfs)
+        if args.threads_per_worker is not None and not 1 <= args.threads_per_worker <= 32:
+            raise ValueError("--threads-per-worker debe estar entre 1 y 32.")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -128,9 +142,32 @@ def main(argv: list[str] | None = None) -> int:
                 ).result()
             standard_seconds = time.perf_counter() - started
             print(f"Estándar: {standard_seconds:.1f} s")
+            from engine.parallel_ocr_pipeline import recommended_ocr_threads_per_worker
+
+            ocr_count = sum(
+                result is not None and result.processing_method == "OCR" for result in baseline
+            )
+            effective_workers = min(args.workers, ocr_count) if ocr_count else 0
+            planned_threads = (
+                args.threads_per_worker
+                if args.threads_per_worker is not None
+                else (
+                    recommended_ocr_threads_per_worker(effective_workers)
+                    if effective_workers
+                    else 0
+                )
+            )
+            print(
+                "Plan paralelo efectivo: "
+                f"{effective_workers} proceso(s) OCR x {planned_threads} hilo(s) de CPU"
+            )
             started = time.perf_counter()
             parallel, parallel_failed = _run_parallel(
-                paths, args.engine, str(parallel_dir), args.workers
+                paths,
+                args.engine,
+                str(parallel_dir),
+                args.workers,
+                args.threads_per_worker,
             )
             parallel_seconds = time.perf_counter() - started
             print(f"Paralelo: {parallel_seconds:.1f} s")
@@ -151,6 +188,9 @@ def main(argv: list[str] | None = None) -> int:
                 "document_count": len(paths),
                 "ocr_engine_both_modes": args.engine,
                 "parallel_workers": args.workers,
+                "effective_ocr_workers": effective_workers,
+                "threads_per_ocr_worker": planned_threads,
+                "logical_cpus": os.cpu_count(),
                 "standard_seconds": standard_seconds,
                 "parallel_seconds": parallel_seconds,
                 "standard_error_indices": baseline_failed,

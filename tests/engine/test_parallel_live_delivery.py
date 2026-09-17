@@ -8,8 +8,16 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from engine import parallel_ocr_pipeline as parallel
 from engine.pipeline import PreparedStatement
+
+
+@pytest.fixture(autouse=True)
+def _restore_parallel_worker_environment(monkeypatch):
+    for variable in parallel._THREAD_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
 
 
 def _prepare(path, file_name):
