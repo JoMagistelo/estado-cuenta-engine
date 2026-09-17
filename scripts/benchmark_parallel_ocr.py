@@ -48,26 +48,30 @@ def collect_pdf_paths(inputs: list[str]) -> list[str]:
     return [str(path) for path in found]
 
 
-def _process_one(path: str, engine: str, artifact_dir: str) -> Any:
-    """Trabajo ejecutado en un proceso hijo: usa el pipeline original sin cambios."""
+def _process_all(paths: list[str], engine: str, artifact_dir: str) -> list[Any]:
+    """Ejecuta el pipeline original dentro de un proceso sin cambiarlo."""
     from engine.pipeline import process_bank_statements
 
     return process_bank_statements(
-        [path],
-        ocr_primary_engine=engine,
-        ocr_artifact_dir=artifact_dir,
-    )[0]
-
-
-def run_serial(paths: list[str], engine: str, artifact_dir: str) -> tuple[list[Any], float]:
-    from engine.pipeline import process_bank_statements
-
-    start = time.perf_counter()
-    results = process_bank_statements(
         paths,
         ocr_primary_engine=engine,
         ocr_artifact_dir=artifact_dir,
     )
+
+
+def _process_one(path: str, engine: str, artifact_dir: str) -> Any:
+    """Trabajo ejecutado en un proceso hijo: reutiliza su motor entre tareas."""
+    return _process_all([path], engine, artifact_dir)[0]
+
+
+def run_serial(paths: list[str], engine: str, artifact_dir: str) -> tuple[list[Any], float]:
+    """Referencia en proceso exclusivo: libera sus modelos antes de probar paralelo."""
+    start = time.perf_counter()
+    with ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=multiprocessing.get_context("spawn"),
+    ) as pool:
+        results = pool.submit(_process_all, paths, engine, artifact_dir).result()
     return results, time.perf_counter() - start
 
 
