@@ -15,3 +15,7 @@ class ResultadoValidacion:
     correcto: bool
 
     mensaje: str
+
+    # Conciliación condicionada que debe mostrarse con su explicación, no como
+    # igualdad exacta. Los resultados existentes mantienen el valor False.
+    advertencia: bool = False

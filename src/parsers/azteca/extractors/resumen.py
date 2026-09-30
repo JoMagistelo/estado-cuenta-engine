@@ -2,12 +2,29 @@ from __future__ import annotations
 
 import re
 
-from models.resumen_financiero import ResumenFinanciero
+from ..validacion import ResumenFinancieroAzteca
 
 from .common import Line, amount_for_label, group_lines, normalized
 
 
-def extract_resumen_financiero_lines(lines: list[Line]) -> ResumenFinanciero:
+def _total_retiros_tabla(lines: list[Line]) -> float | None:
+    inside = False
+    for line in lines:
+        text = normalized(line.text)
+        if re.match(r"^TOTAL (?:DE )?RETIROS DEL MES", text):
+            inside = True
+        elif inside and re.match(r"^TOTAL\s*\$", text):
+            return amount_for_label([line], r"^TOTAL\s*\$")
+        elif re.match(
+            r"^(?:CUANTO RECIBI|COMISIONES QUE|PARA FINES|IMPUESTOS RETENIDOS|"
+            r"CARGOS OBJETADOS|TUS MOVIMIENTOS|GLOSARIO|TOTAL (?:DE )?DEPOSITOS DEL MES)",
+            text,
+        ):
+            inside = False
+    return None
+
+
+def extract_resumen_financiero_lines(lines: list[Line]) -> ResumenFinancieroAzteca:
     def value(pattern: str) -> float | None:
         return amount_for_label(lines, pattern)
 
@@ -27,7 +44,7 @@ def extract_resumen_financiero_lines(lines: list[Line]) -> ResumenFinanciero:
     if commission is None:
         commission = value(r"^COMISIONES\s*\(")
     final = value(r"^SALDO FINAL AL\b")
-    return ResumenFinanciero(
+    return ResumenFinancieroAzteca(
         saldo_promedio=value(r"^SALDO PROMEDIO DEL MES\*?\s+\$"),
         dias_periodo=days,
         tasa_bruta_anual=rate,
@@ -44,8 +61,9 @@ def extract_resumen_financiero_lines(lines: list[Line]) -> ResumenFinanciero:
         saldo_final=final,
         saldo_promedio_minimo_mensual=0.0,
         saldo_global=final,
+        total_retiros_tabla=_total_retiros_tabla(lines),
     )
 
 
-def extract_resumen_financiero_words(words: list[dict]) -> ResumenFinanciero:
+def extract_resumen_financiero_words(words: list[dict]) -> ResumenFinancieroAzteca:
     return extract_resumen_financiero_lines(group_lines(words))
