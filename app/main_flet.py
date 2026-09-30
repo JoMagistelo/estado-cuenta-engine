@@ -1305,6 +1305,10 @@ def main(page: ft.Page):
             icon = '—'
             color = ft.Colors.ON_SURFACE_VARIANT
             detail = 'No se pudo calcular'
+        elif getattr(item, 'advertencia', False):
+            icon = '⚠️'
+            color = ft.Colors.ORANGE
+            detail = item.mensaje
         elif item.correcto:
             icon = '✅'
             color = ft.Colors.GREEN

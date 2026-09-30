@@ -812,6 +812,9 @@ def render_primary_validations(result) -> None:
                 if item is None:
                     st.markdown(f'### — Validación {short}')
                     st.caption('No se pudo calcular')
+                elif getattr(item, 'advertencia', False):
+                    st.markdown(f'### ⚠️ Validación {short}')
+                    st.caption(item.mensaje)
                 elif item.correcto:
                     st.markdown(f'### ✅ Validación {short}')
                     st.caption('Conciliación correcta')

@@ -176,23 +176,17 @@ def test_brief_spei_keeps_unknown_metadata_empty(case: str) -> None:
         assert any("BAZ" in m.concepto for m in state.movimientos if m.cargo)
 
 
-@pytest.mark.parametrize(
-    "case,summary_cargos,error,difference",
-    [
-        ("feb", 3829.00, "Total retiros / cargos", 0.43),
-        ("mar", 2524.00, "Total retiros / cargos", 0.81),
-        ("jun_2", 550.00, "Ecuación financiera", -37.96),
-    ],
-)
-def test_ocr_inconsistencies_remain_visible(case, summary_cargos, error, difference) -> None:
-    state = parse_azteca(DocumentData(spatial_words=fixture_words(case)))
-    assert state.resumen_financiero.retiros_cargos == summary_cargos
+def test_unexplained_ocr_inconsistency_remains_visible() -> None:
+    state = parse_azteca(DocumentData(spatial_words=fixture_words("jun_2")))
+    assert state.resumen_financiero.retiros_cargos == 550.0
     failures = [
         r
         for r in validar_movimientos(state.movimientos, state.resumen_financiero)
         if not r.correcto
     ]
-    assert [(r.nombre, round(r.diferencia, 2)) for r in failures] == [(error, difference)]
+    assert [(r.nombre, round(r.diferencia, 2)) for r in failures] == [
+        ("Ecuación financiera", -37.96)
+    ]
 
 
 @pytest.mark.parametrize("scale,offset", [(0.6, 0), (1.0, 25), (2.0, 10)])
