@@ -26,9 +26,11 @@ from parsers.cetes import parse_cetes
 from parsers.mifel import parse_mifel
 from parsers.mercado_pago import parse_mercado_pago
 from parsers.nu import parse_nu
+from parsers.azteca import parse_azteca
 from validators.movimiento_validator import validar_movimientos
 
 PARSER_REGISTRY = {
+    'azteca': parse_azteca,
     'bbva': parse_bbva,
     'banamex': parse_banamex,
     'banorte': parse_banorte,
