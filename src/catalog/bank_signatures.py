@@ -6,6 +6,13 @@ en sus señales debe acompañarse de pruebas de regresión de detección.
 """
 
 BANK_SIGNATURES = {
+    "azteca": {
+        "display_name": "Banco Azteca",
+        "clabe_prefixes": ["127"],
+        "rfcs": ["BAI0205236Y8"],
+        "keywords": ["BANCO AZTECA", "GUARDADITO"],
+        "filename_keywords": ["BANCO AZTECA", "AZTECA"],
+    },
     "bbva": {
         "display_name": "BBVA México",
         "clabe_prefixes": ["012"],
