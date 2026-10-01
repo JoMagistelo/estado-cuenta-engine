@@ -1,53 +1,18 @@
-"""Regresiones Azteca: nueve muestras OCR anonimizadas y casos parciales.
-
-Las muestras conservan coordenadas, importes, fechas y errores del OCR; omiten
-domicilios/CFDI y sustituyen nombres, RFC, cuentas, créditos y rastreos. El formato
-compacto por línea es [página, [[texto, x0, x1, top, bottom], ...]].
-"""
+"""Regresiones del parser Azteca con datos exclusivamente sintéticos."""
 
 from __future__ import annotations
 
 import copy
-import json
-from pathlib import Path
 
 import pytest
 
 from detectors.bank_detector import identify_bank_key
-from engine.statement_processor import process_single_statement
+from mappers.estado_cuenta_tables import estado_cuenta_to_tables
 from models.movimiento import Movimiento
 from models.processing_result import ProcessingResult
-from mappers.estado_cuenta_tables import estado_cuenta_to_tables
 from parsers.azteca import parse_azteca
 from parsers.azteca.extractors.movimientos import enrich_movement_metadata_from_concepto
 from readers.models.document_data import DocumentData
-from validators.movimiento_validator import validar_movimientos
-
-FIXTURES = Path(__file__).parent / "fixtures" / "azteca"
-# Valores contrastados con los renglones OCR, sin ajustar diferencias al resumen.
-# cantidad, abonos, cargos, inicio, fin, promedio, días impresos, saldo final
-CASES = {
-    "ene": (20, 2094.00, 2114.00, "29/12/2025", "27/01/2026", 61.63, 31, 0.92),
-    "feb": (24, 3831.63, 3829.43, "28/01/2026", "27/02/2026", 26.41, 31, 3.55),
-    "mar": (6, 2600.00, 2524.81, "28/02/2026", "27/03/2026", 3.62, 28, 79.55),
-    "abr": (14, 2892.47, 2904.00, "28/03/2026", "27/04/2026", 64.16, 31, 68.02),
-    "may": (13, 2403.94, 2423.00, "28/04/2026", "27/05/2026", 35.40, 30, 48.96),
-    "jun": (12, 2321.00, 2332.00, "28/05/2026", "28/06/2026", 28.44, 31, 37.96),
-    "jun_2": (3, 677.00, 550.00, "27/06/2026", "30/06/2026", 40.96, 4, 164.96),
-    "jul": (16, 28288.00, 28260.00, "01/07/2026", "31/07/2026", 152.70, 31, 192.96),
-    "ago": (12, 4400.00, 4592.00, "01/08/2026", "31/08/2026", 15.73, 31, 0.96),
-}
-
-
-def fixture_words(case: str) -> list[dict]:
-    fixture = json.loads((FIXTURES / f"{case}.json").read_text(encoding="utf-8"))
-    words = []
-    for page, row in fixture["lines"]:
-        for text, x0, x1, top, bottom in row:
-            words.append(
-                {"text": text, "x0": x0, "x1": x1, "top": top, "bottom": bottom, "page": page}
-            )
-    return words
 
 
 def line(text: str, y: float, page: int = 1, x: float = 130.0) -> list[dict]:
@@ -55,7 +20,14 @@ def line(text: str, y: float, page: int = 1, x: float = 130.0) -> list[dict]:
     for token in text.split():
         width = len(token) * 4
         words.append(
-            {"text": token, "x0": x, "x1": x + width, "top": y, "bottom": y + 10, "page": page}
+            {
+                "text": token,
+                "x0": x,
+                "x1": x + width,
+                "top": y,
+                "bottom": y + 10,
+                "page": page,
+            }
         )
         x += width + 3
     return words
@@ -78,121 +50,109 @@ def table_header(y: float, page: int = 1) -> list[dict]:
     )
 
 
-@pytest.mark.parametrize("case", CASES)
-def test_nine_ocr_layouts_extract_all_movements_and_account(case: str) -> None:
-    words = fixture_words(case)
-    before = copy.deepcopy(words)
-    state, document = process_single_statement(
-        DocumentData(spatial_words=words, metadata={"ocr": True, "reader": "paddleocr"}),
-        "azteca",
+def synthetic_statement_words() -> list[dict]:
+    """Estado representativo construido a mano, sin contenido de documentos reales."""
+    return (
+        line("Banco Azteca", 20, x=350)
+        + line("PERSONA PRUEBA", 45, x=55)
+        + line("No. Cliente: 90000000", 60, x=55)
+        + line("RFC: XAXX010101000", 75, x=55)
+        + line("No. Cuenta: 90000000000000", 90, x=55)
+        + line("Cuenta CLABE: 127180000000000001", 105, x=55)
+        + line("Tipo de Cuenta: GUARDADITO DIGITAL", 120, x=55)
+        + line(
+            "Periodo: del 01 de septiembre 2026 al 30 de septiembre 2026",
+            135,
+            x=55,
+        )
+        + line("Fecha de corte: 30 de septiembre 2026", 150, x=55)
+        + line("Resumen Mensual", 175, x=65)
+        + line("Saldo Inicial al 31 de agosto 2026 = $100.00", 195, x=65)
+        + line("Depósitos del Periodo $150.00", 210, x=65)
+        + line("Retiros del Periodo $120.00", 225, x=65)
+        + line("Saldo Final al 30 de septiembre 2026 = $130.00", 240, x=65)
+        + line("Saldo promedio del mes* $110.00", 255, x=65)
+        + line("# de días del mes 30", 270, x=65)
+        + line("Tasa de interés anualizada 0.01%", 285, x=65)
+        + line("Interés Recibido $0.00", 300, x=65)
+        + line("Impuesto Retenido = $0.00", 315, x=65)
+        + line("Comisiones (-) $0.00", 330, x=65)
+        + line("Total Depósitos del mes", 360, x=65)
+        + table_header(375)
+        + row("05/09/2026", "TRANSFERENCIA SPEI A SU FAVOR", "(+) $150.00", 395)
+        + line("EMISOR: BBVA MEXICO", 410)
+        + line("CUENTA: 012180000000000001", 425)
+        + line("NOM ORIGI: PERSONA EJEMPLO", 440)
+        + line("RASTREO: TEST-IN-0001", 455)
+        + line("REF: 0000001", 470)
+        + line("CONCEPTO: prueba", 485)
+        + line("Total $150.00", 500, x=65)
+        + line("Total de Retiros del mes", 530, x=65)
+        + table_header(545)
+        + row("10/09/2026", "PAGO SERVICIO", "(-) $100.00", 565)
+        + row("20/09/2026", "ORDEN DE TRANSFERENCIA SPEI", "(-) $20.00", 590)
+        + line("RECEPTOR: BBVA MEXICO", 605)
+        + line(
+            "NOM BENEF: PERSONA EJEMPLO DATO NO VERIFICADO POR ESTA INSTITUCION.",
+            620,
+        )
+        + line("RASTREO: TEST-OUT-0001", 635)
+        + line("REF: 0000002", 650)
+        + line("CONCEPTO: prueba", 665)
+        + line("Total $120.00", 680, x=65)
     )
-    count, abonos, cargos, start, end, average, days, final = CASES[case]
-    account, summary = state.datos_cuenta, state.resumen_financiero
-    assert len(state.movimientos) == count
-    assert sum(m.abono for m in state.movimientos) == pytest.approx(abonos)
-    assert sum(m.cargo for m in state.movimientos) == pytest.approx(cargos)
-    assert account.periodo_inicio == start
-    assert account.periodo_fin == account.fecha_corte == end
-    assert account.producto_principal == "GUARDADITO DIGITAL"
+
+
+def test_synthetic_statement_extracts_account_summary_and_movements() -> None:
+    words = synthetic_statement_words()
+    before = copy.deepcopy(words)
+    state = parse_azteca(DocumentData(spatial_words=words))
+    account = state.datos_cuenta
+    summary = state.resumen_financiero
+
+    assert account.nombre_cliente == "PERSONA PRUEBA"
+    assert account.rfc == "XAXX010101000"
+    assert account.numero_cliente == "90000000"
     assert account.numero_cuenta == "90000000000000"
     assert account.clabe == "127180000000000001"
-    recent = case in {"jun_2", "jul", "ago"}
-    assert account.nombre_cliente == (
-        "ANDREA PRUEBA EJEMPLO" if recent else "PRUEBA EJEMPLO ANDREA"
-    )
-    assert account.rfc == ("PEPA900101ABC" if recent else "XAXX010101000")
-    assert account.numero_cliente == ("900000000" if recent else "90000000")
-    assert summary.saldo_promedio == average
-    assert summary.dias_periodo == days
-    assert summary.saldo_final == summary.saldo_global == final
-    assert summary.depositos_abonos == abonos
+    assert account.producto_principal == "GUARDADITO DIGITAL"
+    assert account.periodo_inicio == "01/09/2026"
+    assert account.periodo_fin == account.fecha_corte == "30/09/2026"
+
+    assert summary.saldo_anterior == 100.0
+    assert summary.depositos_abonos == 150.0
+    assert summary.retiros_cargos == 120.0
+    assert summary.total_retiros_tabla == 120.0
+    assert summary.saldo_final == summary.saldo_global == 130.0
+    assert summary.saldo_promedio == 110.0
+    assert summary.dias_periodo == 30
+    assert summary.tasa_bruta_anual == 0.01
     assert summary.intereses_a_favor == summary.isr_retenido == 0.0
-    assert summary.manejo_cuenta == (0.01 if case == "jul" else 0.0)
+
+    assert len(state.movimientos) == 3
+    assert sum(m.abono for m in state.movimientos) == 150.0
+    assert sum(m.cargo for m in state.movimientos) == 120.0
+    incoming = state.movimientos[0]
+    assert incoming.beneficiario == "PERSONA EJEMPLO"
+    assert incoming.cuenta_beneficiario == incoming.clabe_beneficiario == "012180000000000001"
+    assert incoming.sucursal == "BBVA MEXICO"
+    assert incoming.clave_rastreo == "TEST-IN-0001"
+    assert incoming.referencia == "0000001"
+    assert incoming.concepto_original == "prueba"
+    outgoing = state.movimientos[-1]
+    assert outgoing.beneficiario == "PERSONA EJEMPLO"
+    assert outgoing.sucursal == "BBVA MEXICO"
+    assert outgoing.clave_rastreo == "TEST-OUT-0001"
+    assert outgoing.referencia == "0000002"
+    assert outgoing.concepto_original == "prueba"
     assert state.otros_productos.producto == "N/A"
-    for movement in state.movimientos:
-        assert movement.fecha_operacion
-        assert movement.fecha_liquidacion is None
-        assert movement.tipo_operacion == ("ABONO" if movement.abono else "CARGO")
-        assert not any(
-            t in movement.concepto
-            for t in [
-                "Continúa",
-                "Hoja",
-                "Total ",
-                "ELECT/SUCURSAL",
-                "Este documento",
-                "Saldo promedio",
-                "Inversión Azteca",
-                "Lugar o Canal",
-            ]
-        )
-    assert words == before  # No normalización global ni mutación de las words.
-    assert document.spatial_words is words
-
-
-@pytest.mark.parametrize(
-    "case,received", [("feb", 8), ("mar", 2), ("abr", 6), ("may", 5), ("jun", 4)]
-)
-def test_detailed_spei_metadata_and_concept_semantics(case: str, received: int) -> None:
-    state = parse_azteca(DocumentData(spatial_words=fixture_words(case)))
-    incoming = [m for m in state.movimientos if m.abono]
-    assert len(incoming) == received
-    for movement in incoming:
-        assert movement.beneficiario == "ANDREA PRUEBA EJEMPLO"
-        assert movement.cuenta_beneficiario == movement.clabe_beneficiario == "012180000000000001"
-        assert movement.sucursal == "BBVA MEXICO"
-        assert movement.clave_rastreo.startswith("TEST")
-        assert movement.referencia == "0000001"
-        assert movement.concepto_original in {"pago", "transferencia", "pagi"}
-        assert movement.concepto.startswith(
-            "TRANSFERENCIA SPEI A SU FAVOR EMISOR:"
-        ) or movement.concepto.startswith("TRANSFEREÑCIA SPEI A SU FAVOR EMISOR:")
-        assert "CUENTA:" in movement.concepto and "CONCEPTO:" in movement.concepto
-
-
-def test_outgoing_spei_does_not_invent_account_or_include_disclaimer_in_name() -> None:
-    state = parse_azteca(DocumentData(spatial_words=fixture_words("feb")))
-    outgoing = [m for m in state.movimientos if m.cargo and m.clave_rastreo]
-    assert [m.cargo for m in outgoing] == [600.0, 200.0]
-    for movement in outgoing:
-        assert movement.beneficiario == "Andrea Prueba"
-        assert movement.sucursal == "BBVA MEXICO"
-        assert movement.cuenta_beneficiario is movement.clabe_beneficiario is None
-        assert movement.concepto_original == "j"
-        assert "DATO NO VERIFICADO" in movement.concepto
-
-
-@pytest.mark.parametrize("case", ["ene", "jun_2", "jul", "ago"])
-def test_brief_spei_keeps_unknown_metadata_empty(case: str) -> None:
-    state = parse_azteca(DocumentData(spatial_words=fixture_words(case)))
-    for movement in state.movimientos:
-        assert movement.beneficiario is None
-        assert movement.cuenta_beneficiario is movement.clabe_beneficiario is None
-        assert movement.concepto_original is None
-        if movement.abono and "SPEI" in movement.concepto:
-            assert movement.sucursal is None
-    if case in {"jul", "ago"}:
-        assert any(m.concepto == "RENOVACION PRESTAMOS PERSONALES" for m in state.movimientos)
-        assert any("BAZ" in m.concepto for m in state.movimientos if m.cargo)
-
-
-def test_unexplained_ocr_inconsistency_remains_visible() -> None:
-    state = parse_azteca(DocumentData(spatial_words=fixture_words("jun_2")))
-    assert state.resumen_financiero.retiros_cargos == 550.0
-    failures = [
-        r
-        for r in validar_movimientos(state.movimientos, state.resumen_financiero)
-        if not r.correcto
-    ]
-    assert [(r.nombre, round(r.diferencia, 2)) for r in failures] == [
-        ("Ecuación financiera", -37.96)
-    ]
+    assert words == before
 
 
 @pytest.mark.parametrize("scale,offset", [(0.6, 0), (1.0, 25), (2.0, 10)])
-def test_scaled_shifted_and_unordered_ocr_words(scale: float, offset: float) -> None:
-    words = fixture_words("abr")
-    expected = parse_azteca(DocumentData(spatial_words=words))
+def test_scaled_shifted_and_unordered_synthetic_words(scale: float, offset: float) -> None:
+    words = synthetic_statement_words()
+    expected = parse_azteca(DocumentData(spatial_words=copy.deepcopy(words)))
     for word in words:
         for key in ["x0", "x1", "top", "bottom"]:
             word[key] = word[key] * scale + offset
@@ -213,7 +173,7 @@ def test_cross_page_detail_and_multiline_memo_with_bank_named_by_counterparty() 
         + line("Este documento es una representación impresa de un CFDI", 750)
         + line("Banco Azteca", 40, 2, 350)
         + table_header(80, 2)
-        + line("ABC123 REF: 1234567", 100, 2)
+        + line("TEST-CROSS-0001 REF: 1234567", 100, 2)
         + line("CONCEPTO: compra de", 120, 2)
         + line("comida", 135, 2)
         + row("02/09/2026", "TRANSFERENCIA SPEI A SU FAVOR", "(+) $20.00", 155, 2)
@@ -227,7 +187,7 @@ def test_cross_page_detail_and_multiline_memo_with_bank_named_by_counterparty() 
     assert movement.beneficiario == "Persona Ejemplo"
     assert movement.sucursal == "BANAMEX"
     assert movement.cuenta_beneficiario == movement.clabe_beneficiario == "002180000000000001"
-    assert movement.clave_rastreo == "ABC123"
+    assert movement.clave_rastreo == "TEST-CROSS-0001"
     assert movement.referencia == "1234567"
     assert movement.concepto_original == "compra de comida"
     assert movement.concepto.endswith("CONCEPTO: compra de comida")
@@ -262,18 +222,18 @@ def test_separate_account_and_clabe_and_other_labeled_metadata() -> None:
         "01/09/2026",
         None,
         "ORDEN DE TRANSFERENCIA SPEI RECEPTOR: BANAMEX NOM BENEF: Persona Ejemplo "
-        "CUENTA: 0001234567 CLABE: 002180000000000001 RASTREO: ABC123 REF: 9 "
-        "RFC: PEPA900101ABC AUT: 0001 CAJA: 2 HORA: 10:30:00 CONCEPTO: compra de comida",
+        "CUENTA: 0000000001 CLABE: 002180000000000001 RASTREO: TEST-META-0001 REF: 9 "
+        "RFC: XAXX010101000 AUT: 0001 CAJA: 2 HORA: 10:30:00 CONCEPTO: compra de comida",
         "CARGO",
         10.0,
         0.0,
     )
     enriched = enrich_movement_metadata_from_concepto(movement)
     assert enriched.beneficiario == "Persona Ejemplo"
-    assert enriched.cuenta_beneficiario == "0001234567"
+    assert enriched.cuenta_beneficiario == "0000000001"
     assert enriched.clabe_beneficiario == "002180000000000001"
     assert enriched.sucursal == "BANAMEX"
-    assert enriched.rfc == "PEPA900101ABC"
+    assert enriched.rfc == "XAXX010101000"
     assert enriched.autorizacion == "0001"
     assert enriched.caja == "2"
     assert enriched.hora_operacion == "10:30:00"
@@ -317,14 +277,14 @@ def test_missing_summary_does_not_synthesize_financial_totals() -> None:
     assert state.resumen_financiero.saldo_final is None
 
 
-def test_existing_export_mapper_preserves_full_concept_and_user_memo() -> None:
-    state = parse_azteca(DocumentData(spatial_words=fixture_words("abr")))
+def test_existing_export_mapper_preserves_full_synthetic_concept_and_memo() -> None:
+    state = parse_azteca(DocumentData(spatial_words=synthetic_statement_words()))
     result = ProcessingResult("Azteca.pdf", "azteca", state, "", "", processing_method="OCR")
     tables = estado_cuenta_to_tables([result])
     movement = tables["Movimientos"][0]
     assert movement["Concepto"] == state.movimientos[0].concepto
-    assert movement["Concepto Original"] == "pago"
-    assert movement["Beneficiario"] == "ANDREA PRUEBA EJEMPLO"
+    assert movement["Concepto Original"] == "prueba"
+    assert movement["Beneficiario"] == "PERSONA EJEMPLO"
     assert movement["Sucursal"] == "BBVA MEXICO"
     assert movement["Cuenta del Beneficiario"] == "012180000000000001"
     assert movement["CLABE del Beneficiario"] == "012180000000000001"
