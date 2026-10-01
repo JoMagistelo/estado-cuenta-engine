@@ -1983,12 +1983,14 @@ def main(page: ft.Page):
         layout_rows = [
             ('BBVA', 'Digital'),
             ('Banorte', 'Digital · Escaneado'),
-            ('Banamex', 'Digital'),
+            ('Banamex', 'Digital · Escaneado'),
             ('HSBC', 'Digital · Escaneado'),
             ('Scotiabank', 'Digital'),
             ('Mifel', 'Estado de cuenta habilitado'),
             ('CETESDIRECTO', 'Estado de cuenta habilitado'),
             ('Mercado Pago', 'Estado de cuenta habilitado'),
+            ('Nu México', 'Digital · Escaneado'),
+            ('Banco Azteca', 'Escaneado'),
         ]
         table_controls: list[ft.Control] = [
             ft.Container(
