@@ -36,8 +36,12 @@ def validar_movimientos(
     if resumen.retiros_cargos is not None:
         total_cargos = sum(m.cargo or 0 for m in movimientos)
         diferencia = total_cargos - resumen.retiros_cargos
+        # Sólo resúmenes que declaran una política específica pueden conciliar
+        # una diferencia explicada. Los demás conservan la validación histórica.
+        validar_total_cargos = getattr(resumen, "validar_total_cargos", None)
+        conciliacion = validar_total_cargos(movimientos) if callable(validar_total_cargos) else None
         resultados.append(
-            ResultadoValidacion(
+            conciliacion or ResultadoValidacion(
                 nombre="Total retiros / cargos",
                 esperado=resumen.retiros_cargos,
                 obtenido=total_cargos,
