@@ -27,6 +27,7 @@ from parsers.mifel import parse_mifel
 from parsers.mercado_pago import parse_mercado_pago
 from parsers.nu import parse_nu
 from parsers.azteca import parse_azteca
+from parsers.santander import parse_santander
 from validators.movimiento_validator import validar_movimientos
 
 PARSER_REGISTRY = {
@@ -41,6 +42,7 @@ PARSER_REGISTRY = {
     'mifel': parse_mifel,
     'mercado_pago': parse_mercado_pago,
     'nu': parse_nu,
+    'santander': parse_santander,
 }
 ParserFn = Callable[[DocumentData], object]
 NormalizerFn = Callable[[list[dict]], list[dict]]

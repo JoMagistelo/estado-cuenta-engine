@@ -1233,7 +1233,7 @@ def render_header() -> None:
                     '**Estados vivos**  \nLos PDFs se muestran mientras se clasifican y procesan. Los terminados pueden revisarse sin esperar al lote completo.'
                 )
                 st.markdown(
-                    '**Formatos habilitados**  \nBBVA Digital · Banorte Digital/Escaneado · Banamex Digital/Escaneado · HSBC Digital/Escaneado · Scotiabank Digital · Mifel · CETESDIRECTO · Mercado Pago · Nu México Digital/Escaneado · Banco Azteca Escaneado'
+                    '**Formatos habilitados**  \nBBVA Digital · Banorte Digital/Escaneado · Banamex Digital/Escaneado · HSBC Digital/Escaneado · Santander Digital/Escaneado (cuenta de cheques) · Scotiabank Digital · Mifel · CETESDIRECTO · Mercado Pago · Nu México Digital/Escaneado · Banco Azteca Escaneado'
                 )
 
 
