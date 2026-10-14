@@ -148,6 +148,27 @@ python -m pip install --group dev
 
 ## 6. Ejecución
 
+### Empaquetar y ejecutar la versión 5.0.0 en Windows
+
+Después de fusionar el PR de la versión, desde PowerShell con el entorno virtual
+activo:
+
+```powershell
+Set-Location C:\Proyectos\estado-cuenta-engine
+git switch master
+git pull --ff-only origin master
+python -m pip install -e ".[desktop,paddleocr]"
+.\scripts\build_windows_release.ps1 -Version "5.0.0" -PortableOffline
+Get-Content .\dist\release-manifest.json
+.\dist\Extractor_de_Movimientos_Financieros.exe
+```
+
+El script ejecuta las pruebas, limpia `build`, `dist` y `.packaging`, y verifica
+el ejecutable portable con sus modelos PaddleOCR y cliente Flet embebidos.
+El manifiesto debe indicar `5.0.0`; las propiedades del EXE usan `5.0.0.0`.
+La interfaz muestra `Versión 5.0.0` y el modal «Información y ayuda» incluye
+Santander como «Digital · Escaneado (cuenta de cheques)».
+
 ### Streamlit
 
 ```powershell
