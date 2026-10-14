@@ -160,6 +160,36 @@ streamlit run app/main_streamlit.py
 python app/main_flet.py
 ```
 
+### Generar words originales de los readers
+
+Desde la raíz del proyecto, con el entorno virtual activo, cambiar sólo la
+ruta de la carpeta:
+
+```powershell
+$Carpeta = 'C:\ruta\a\tus\pdfs'
+python .\scripts\generar_words.py "$Carpeta"
+```
+
+Recorre los PDFs de esa carpeta y sus subcarpetas, incluidas extensiones `.PDF`.
+Guarda los JSON en `output/` del proyecto, conservando las subcarpetas de origen
+para evitar colisiones entre PDFs con el mismo nombre.
+
+| Salida | Fuente exacta |
+| --- | --- |
+| `<nombre>__readwords.json` | Lista de `PDFWordReader.read(pdf, start_page=0)`, sólo si contiene words extraíbles. |
+| `<nombre>__paddleocr_words.json` | `PaddleOCRPDFReader.read(pdf, start_page=0).spatial_words`, para PDFs digitales y escaneados. |
+
+Serializa las listas directamente, conservando campos, valores, orden y
+coordenadas. No ejecuta parsers, normalizadores ni `read_ocr_for_parser`, y no
+genera ni vuelve a leer una capa de texto OCR. Los PDFs originales se leen sin
+modificarlos. PaddleOCR usa el runtime y los modelos locales habituales.
+
+Opcionalmente, `--modo digital` o `--modo paddleocr` ejecuta un solo reader;
+`--salida 'C:\ruta\salida'` cambia el destino. Si ya existe un JSON, lo reemplaza
+sólo después de terminar su escritura. Los errores de un reader no impiden
+intentar el otro ni continuar con los demás PDFs; el proceso retorna código 1
+si hubo errores y 2 si la ruta es inválida o no contiene PDFs.
+
 ## 7. Calidad y regresión
 
 La automatización de calidad valida:
