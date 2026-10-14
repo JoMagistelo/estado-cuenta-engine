@@ -1985,6 +1985,7 @@ def main(page: ft.Page):
             ('Banorte', 'Digital · Escaneado'),
             ('Banamex', 'Digital · Escaneado'),
             ('HSBC', 'Digital · Escaneado'),
+            ('Santander', 'Digital · Escaneado (cuenta de cheques)'),
             ('Scotiabank', 'Digital'),
             ('Mifel', 'Estado de cuenta habilitado'),
             ('CETESDIRECTO', 'Estado de cuenta habilitado'),
