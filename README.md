@@ -148,6 +148,27 @@ python -m pip install --group dev
 
 ## 6. Ejecución
 
+### Empaquetar y ejecutar la versión 5.0.0 en Windows
+
+Después de fusionar el PR de la versión, desde PowerShell con el entorno virtual
+activo:
+
+```powershell
+Set-Location C:\Proyectos\estado-cuenta-engine
+git switch master
+git pull --ff-only origin master
+python -m pip install -e ".[desktop,paddleocr]"
+.\scripts\build_windows_release.ps1 -Version "5.0.0" -PortableOffline
+Get-Content .\dist\release-manifest.json
+.\dist\Extractor_de_Movimientos_Financieros.exe
+```
+
+El script ejecuta las pruebas, limpia `build`, `dist` y `.packaging`, y verifica
+el ejecutable portable con sus modelos PaddleOCR y cliente Flet embebidos.
+El manifiesto debe indicar `5.0.0`; las propiedades del EXE usan `5.0.0.0`.
+La interfaz muestra `Versión 5.0.0` y el modal «Información y ayuda» incluye
+Santander como «Digital · Escaneado (cuenta de cheques)».
+
 ### Streamlit
 
 ```powershell
@@ -159,6 +180,36 @@ streamlit run app/main_streamlit.py
 ```powershell
 python app/main_flet.py
 ```
+
+### Generar words originales de los readers
+
+Desde la raíz del proyecto, con el entorno virtual activo, cambiar sólo la
+ruta de la carpeta:
+
+```powershell
+$Carpeta = 'C:\ruta\a\tus\pdfs'
+python .\scripts\generar_words.py "$Carpeta"
+```
+
+Recorre los PDFs de esa carpeta y sus subcarpetas, incluidas extensiones `.PDF`.
+Guarda los JSON en `output/` del proyecto, conservando las subcarpetas de origen
+para evitar colisiones entre PDFs con el mismo nombre.
+
+| Salida | Fuente exacta |
+| --- | --- |
+| `<nombre>__readwords.json` | Lista de `PDFWordReader.read(pdf, start_page=0)`, sólo si contiene words extraíbles. |
+| `<nombre>__paddleocr_words.json` | `PaddleOCRPDFReader.read(pdf, start_page=0).spatial_words`, para PDFs digitales y escaneados. |
+
+Serializa las listas directamente, conservando campos, valores, orden y
+coordenadas. No ejecuta parsers, normalizadores ni `read_ocr_for_parser`, y no
+genera ni vuelve a leer una capa de texto OCR. Los PDFs originales se leen sin
+modificarlos. PaddleOCR usa el runtime y los modelos locales habituales.
+
+Opcionalmente, `--modo digital` o `--modo paddleocr` ejecuta un solo reader;
+`--salida 'C:\ruta\salida'` cambia el destino. Si ya existe un JSON, lo reemplaza
+sólo después de terminar su escritura. Los errores de un reader no impiden
+intentar el otro ni continuar con los demás PDFs; el proceso retorna código 1
+si hubo errores y 2 si la ruta es inválida o no contiene PDFs.
 
 ## 7. Calidad y regresión
 

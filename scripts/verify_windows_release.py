@@ -59,7 +59,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe", type=Path)
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--version", default="2.3.0")
+    parser.add_argument("--version", default="5.0.0")
     args = parser.parse_args()
 
     exe_path = args.exe.resolve()
