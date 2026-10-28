@@ -150,14 +150,28 @@ python -m pip install --group dev
 
 ### Empaquetar y ejecutar la versión 5.0.0 en Windows
 
-Después de fusionar el PR de la versión, desde PowerShell con el entorno virtual
-activo:
+Después de fusionar el PR, desde PowerShell con el entorno virtual de build
+ya preparado y activo, actualizar el repositorio:
 
 ```powershell
 Set-Location C:\Proyectos\estado-cuenta-engine
 git switch master
 git pull --ff-only origin master
+```
+
+La corrección de conciliación de Nu también requiere [Pillow 13](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html), que corrige
+los hallazgos de la auditoría de dependencias. Si el entorno todavía tiene
+Pillow 12, sincronizar las dependencias una vez antes de empaquetar:
+
+```powershell
 python -m pip install -e ".[desktop,paddleocr]"
+```
+
+La instalación se repite cuando cambian las dependencias declaradas en
+`pyproject.toml`. Para actualizaciones posteriores que sólo cambian código,
+basta con actualizar el repositorio y ejecutar el build habitual:
+
+```powershell
 .\scripts\build_windows_release.ps1 -Version "5.0.0" -PortableOffline
 Get-Content .\dist\release-manifest.json
 .\dist\Extractor_de_Movimientos_Financieros.exe
