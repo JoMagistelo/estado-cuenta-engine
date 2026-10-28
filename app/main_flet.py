@@ -1312,7 +1312,7 @@ def main(page: ft.Page):
         elif item.correcto:
             icon = '✅'
             color = ft.Colors.GREEN
-            detail = 'Conciliación correcta'
+            detail = 'Nu: flujos externos conciliados' if getattr(result, 'bank_key', None) == 'nu' else 'Conciliación correcta'
         else:
             icon = '❌'
             color = ft.Colors.RED
@@ -1340,6 +1340,7 @@ def main(page: ft.Page):
             border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
             border_radius=7,
             expand=True,
+            tooltip=item.mensaje if item is not None and getattr(result, 'bank_key', None) == 'nu' else None,
         )
 
     def secondary_validation_row(item) -> ft.Container:
@@ -2047,6 +2048,10 @@ def main(page: ft.Page):
                         ft.Text('Validaciones financieras', size=11, weight=ft.FontWeight.BOLD, color=GOB_GREEN),
                         ft.Text(
                             'Las columnas Abonos y Cargos indican si los totales encontrados en los movimientos coinciden con los totales impresos en el estado de cuenta.',
+                            size=9,
+                        ),
+                        ft.Text(
+                            'En Nu, los totales del detalle conservan todas las operaciones. La conciliación distingue los traspasos de Cajitas y considera los rendimientos y las comisiones en el balance. Coloca el cursor sobre la validación para ver el desglose.',
                             size=9,
                         ),
                         ft.Divider(),

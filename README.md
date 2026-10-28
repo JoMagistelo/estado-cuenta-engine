@@ -308,6 +308,7 @@ El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](
 - [`13_control_cambios.md`](docs/13_control_cambios.md): criterios de control de cambios.
 - [`14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md): política OCR de producción, trazabilidad, capacidad secundaria explícita y ruta de evolución arquitectónica.
 - [`15_parser_santander.md`](docs/15_parser_santander.md): cobertura, contrato, extensión de layouts y validación local de Santander.
+- [`nu_conciliacion.md`](docs/nu_conciliacion.md): conciliación de Cajitas, rendimientos y comisiones de Nu conservando el detalle original.
 
 ## 12. Responsabilidades de entrega
 

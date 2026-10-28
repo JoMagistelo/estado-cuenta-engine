@@ -3,11 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
-from models.resumen_financiero import ResumenFinanciero
+from ..validacion import ResumenFinancieroNu
 
 from .common import SpatialLine, group_words_into_lines, normalize_upper, parse_money
 from .datos import extract_period
-from .movimientos import extract_movimientos_words
 
 SpatialWord = Dict[str, Any]
 
@@ -51,9 +50,8 @@ def _tasa_bruta_anual(lines: Sequence[SpatialLine]) -> float:
     return 0.0
 
 
-def extract_resumen_financiero_words(words: List[SpatialWord]) -> ResumenFinanciero:
+def extract_resumen_financiero_words(words: List[SpatialWord]) -> ResumenFinancieroNu:
     lines = _lines(words)
-    movimientos = extract_movimientos_words(words)
 
     saldo_anterior = _amount_for_label(lines, "SALDO INICIAL")
     depositos = _amount_for_label(lines, "DEPOSITOS")
@@ -64,39 +62,33 @@ def extract_resumen_financiero_words(words: List[SpatialWord]) -> ResumenFinanci
     isr = _amount_for_label(lines, "IMPUESTOS SOBRE EL DINERO GENERADO")
     comisiones = _amount_for_label(lines, "COMISIONES COBRADAS POR NU")
 
-    if depositos is None:
-        depositos = round(sum(item.abono or 0.0 for item in movimientos), 2)
-    else:
+    # No sustituir el resumen impreso con las sumas que se pretenden validar.
+    if depositos is not None:
         depositos = abs(depositos)
-
-    if retiros is None:
-        retiros = round(sum(item.cargo or 0.0 for item in movimientos), 2)
-    else:
+    if retiros is not None:
         retiros = abs(retiros)
+    neto = _amount_for_label(lines, "DINERO GENERADO ESTE MES")
+    if neto is None and intereses is not None and isr is not None:
+        neto = round(intereses - abs(isr), 2)
 
-    if saldo_final is None and saldo_anterior is not None:
-        saldo_final = round(saldo_anterior + depositos - retiros, 2)
-    if saldo_anterior is None and saldo_final is not None:
-        saldo_anterior = round(saldo_final - depositos + retiros, 2)
-
-    final_value = saldo_final if saldo_final is not None else 0.0
-    return ResumenFinanciero(
+    return ResumenFinancieroNu(
         saldo_promedio=saldo_promedio if saldo_promedio is not None else 0.0,
         dias_periodo=_period_days(words),
         tasa_bruta_anual=_tasa_bruta_anual(lines),
         saldo_promedio_gravable=0.0,
-        intereses_a_favor=abs(intereses) if intereses is not None else 0.0,
-        isr_retenido=abs(isr) if isr is not None else 0.0,
+        intereses_a_favor=abs(intereses) if intereses is not None else None,
+        isr_retenido=abs(isr) if isr is not None else None,
         cheques_pagados=0,
-        manejo_cuenta=abs(comisiones) if comisiones is not None else 0.0,
+        manejo_cuenta=abs(comisiones) if comisiones is not None else None,
         cargos_objetados=0.0,
         abonos_objetados=0.0,
-        saldo_anterior=saldo_anterior if saldo_anterior is not None else 0.0,
+        saldo_anterior=saldo_anterior,
         depositos_abonos=depositos,
         retiros_cargos=retiros,
-        saldo_final=final_value,
+        saldo_final=saldo_final,
         saldo_promedio_minimo_mensual=0.0,
-        saldo_global=final_value,
+        saldo_global=saldo_final,
+        rendimiento_neto=neto,
     )
 
 

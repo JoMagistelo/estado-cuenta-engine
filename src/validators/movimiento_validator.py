@@ -22,8 +22,10 @@ def validar_movimientos(
     if resumen.depositos_abonos is not None:
         total_abonos = sum(m.abono or 0 for m in movimientos)
         diferencia = total_abonos - resumen.depositos_abonos
+        validar_total_abonos = getattr(resumen, "validar_total_abonos", None)
+        conciliacion = validar_total_abonos(movimientos) if callable(validar_total_abonos) else None
         resultados.append(
-            ResultadoValidacion(
+            conciliacion or ResultadoValidacion(
                 nombre="Total depósitos / abonos",
                 esperado=resumen.depositos_abonos,
                 obtenido=total_abonos,
@@ -89,8 +91,10 @@ def validar_movimientos(
             - resumen.retiros_cargos
         )
         diferencia = saldo_calculado - resumen.saldo_final
+        validar_ecuacion = getattr(resumen, "validar_ecuacion_financiera", None)
+        conciliacion = validar_ecuacion() if callable(validar_ecuacion) else None
         resultados.append(
-            ResultadoValidacion(
+            conciliacion or ResultadoValidacion(
                 nombre="Ecuación financiera",
                 esperado=resumen.saldo_final,
                 obtenido=saldo_calculado,
@@ -100,4 +104,7 @@ def validar_movimientos(
             )
         )
 
+    validar_componentes = getattr(resumen, "validar_componentes", None)
+    if callable(validar_componentes):
+        resultados.extend(validar_componentes(movimientos))
     return resultados

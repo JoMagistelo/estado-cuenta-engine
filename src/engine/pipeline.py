@@ -124,11 +124,8 @@ def _prepare_statement(pdf_path: str, file_name: str) -> PreparedStatement:
 def _result_validations(estado_cuenta, ocr_review) -> list:
     if ocr_review is not None:
         return list(ocr_review.get_candidate(ocr_review.selected_engine).validaciones)
-    if getattr(estado_cuenta, "movimientos", None) and getattr(
-        estado_cuenta,
-        "resumen_financiero",
-        None,
-    ):
+    resumen = getattr(estado_cuenta, "resumen_financiero", None)
+    if resumen is not None and (getattr(estado_cuenta, "movimientos", None) or getattr(resumen, "validar_sin_movimientos", False)):
         return validar_movimientos(
             movimientos=estado_cuenta.movimientos,
             resumen=estado_cuenta.resumen_financiero,

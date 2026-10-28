@@ -817,7 +817,7 @@ def render_primary_validations(result) -> None:
                     st.caption(item.mensaje)
                 elif item.correcto:
                     st.markdown(f'### ✅ Validación {short}')
-                    st.caption('Conciliación correcta')
+                    st.caption(item.mensaje if getattr(result, 'bank_key', None) == 'nu' else 'Conciliación correcta')
                 else:
                     st.markdown(f'### ❌ Validación {short}')
                     st.caption(
@@ -1224,7 +1224,7 @@ def render_header() -> None:
                     st.success('Guardado')
             with st.popover('❔', help='Ayuda'):
                 st.markdown(
-                    '**Validaciones**  \nLas columnas Abonos y Cargos muestran las conciliaciones principales sin abreviaturas.'
+                    '**Validaciones**  \nLas columnas Abonos y Cargos muestran las conciliaciones principales sin abreviaturas. En Nu, los totales del detalle conservan todas las operaciones; la conciliación distingue los traspasos de Cajitas y considera rendimientos y comisiones en el balance.'
                 )
                 st.markdown(
                     '**Motor OCR activo**  \nLos PDFs escaneados se procesan exclusivamente con el motor seleccionado en Configuración; no existe fallback automático al segundo motor.'
