@@ -168,7 +168,7 @@ def _validation_results(estado) -> list:
     """Obtiene las validaciones financieras actuales sin inventar resultados."""
     movimientos = getattr(estado, 'movimientos', None) or []
     resumen = getattr(estado, 'resumen_financiero', None)
-    if not movimientos or resumen is None:
+    if resumen is None or (not movimientos and not getattr(resumen, 'validar_sin_movimientos', False)):
         return []
     try:
         return validar_movimientos(

@@ -23,7 +23,7 @@ def _cancel_requested(cancel_event: Any | None) -> bool:
 def _validations(estado_cuenta) -> list:
     movimientos = getattr(estado_cuenta, "movimientos", None) or []
     resumen = getattr(estado_cuenta, "resumen_financiero", None)
-    if not movimientos or resumen is None:
+    if resumen is None or (not movimientos and not getattr(resumen, "validar_sin_movimientos", False)):
         return []
     return validar_movimientos(
         movimientos=movimientos,
