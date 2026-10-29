@@ -69,6 +69,8 @@ class PaddleOCRPDFReader:
         text_pages: list[str] = []
         doctop_offset = 0.0
         backend_recovered = False
+        banamex_cover = False
+        rescued_cells = 0
 
         for physical_index in range(start_page, len(pdf)):
             page = pdf[physical_index]
@@ -93,6 +95,24 @@ class PaddleOCRPDFReader:
                 config = {**config, "enable_mkldnn": False}
                 backend_recovered = True
 
+            from readers.banamex_money_rescue import is_banamex_cover, rescue_money_cells
+
+            banamex_cover = banamex_cover or is_banamex_cover(words)
+            recognizer = getattr(getattr(engine, "paddlex_pipeline", None), "text_rec_model", None)
+            if banamex_cover and callable(recognizer):
+                def recognize(crops):
+                    import numpy as np
+
+                    with cls._predict_lock:
+                        results = list(recognizer([np.asarray(crop) for crop in crops]))
+                    return [(cls._result_field(r, "rec_text", ""), cls._result_field(r, "rec_score", 0))
+                            for r in results]
+
+                words, corrected = rescue_money_cells(image, words, page_width, recognize)
+                rescued_cells += corrected
+                if corrected:
+                    page_text = " ".join(str(w["text"]) for w in words)
+
             all_words.extend(words)
             if logical_page <= cls.MAX_TEXT_PAGES:
                 text_pages.append(page_text)
@@ -108,6 +128,7 @@ class PaddleOCRPDFReader:
                 "source_path": str(file_path.resolve()),
                 "reader": "paddleocr",
                 "ocr": True,
+                **({"financial_crop_rescue": rescued_cells} if rescued_cells else {}),
                 "dpi": dpi,
                 "language": config["language"],
                 "device": config["device"],

@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "5.0.0",
+    [string]$Version = "6.0.0",
     [switch]$SkipTests,
     [switch]$PortableOffline,
     [switch]$IncludePaddleModels,

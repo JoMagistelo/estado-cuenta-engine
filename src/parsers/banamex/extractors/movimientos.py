@@ -505,9 +505,22 @@ def detect_header(
 # ============================================================
 
 
+def _normalized_money(text: str) -> str:
+    value = normalize_text(text)
+    # Sólo corregir separadores cuando están presentes todos los dígitos y
+    # la estructura completa de millares y dos decimales es inequívoca.
+    match = re.fullmatch(r"([($+\-−]*)(\d{1,3}(?:[.,]\d{3})+)[.,](\d{2})([)\-]?)", value)
+    if match:
+        return match[1] + re.sub(r"[.,]", "", match[2]) + "." + match[3] + match[4]
+    match = re.fullmatch(r"([($+\-−]*)(\d+),(\d{2})([)\-]?)", value)
+    if match:
+        return match[1] + match[2] + "." + match[3] + match[4]
+    return value
+
+
 def is_money(text: str) -> bool:
     return bool(
-        MONEY_PATTERN.fullmatch(normalize_text(text))
+        MONEY_PATTERN.fullmatch(_normalized_money(text))
     )
 
 
@@ -517,7 +530,7 @@ def parse_amount(text: str) -> float:
     if not text:
         return 0.0
 
-    value = normalize_text(text)
+    value = _normalized_money(text)
     negative = False
 
     if value.startswith("(") and value.endswith(")"):
@@ -562,6 +575,7 @@ def build_default_config() -> ColumnConfig:
 
 def build_config_from_header(
     header: Dict[str, Dict[str, float]],
+    fallback: Optional[ColumnConfig] = None,
 ) -> ColumnConfig:
     """
     Construye una primera configuración desde la cabecera.
@@ -571,7 +585,7 @@ def build_config_from_header(
     bordes x1 reales de los importes de la página.
     """
 
-    fallback = build_default_config()
+    fallback = fallback or build_default_config()
 
     fecha = fallback.fecha
     concepto = fallback.concepto
@@ -789,6 +803,7 @@ def build_page_configs(
 
     detected: Dict[int, ColumnConfig] = {}
 
+    previous_header_config = None
     for page, current_lines in page_lines.items():
         for line in current_lines:
             header = detect_header(line)
@@ -796,12 +811,13 @@ def build_page_configs(
             if header is None:
                 continue
 
-            initial = build_config_from_header(header)
+            initial = build_config_from_header(header, previous_header_config)
             detected[page] = _calibrate_config_from_amounts(
                 page_lines=current_lines,
                 config=initial,
                 header_y=line_center_y(line),
             )
+            previous_header_config = detected[page]
             break
 
     pages = sorted(page_lines)
@@ -956,7 +972,21 @@ def extract_amount_from_block(
         config = get_config(word_page(line[0]), configs)
         current_column = getattr(config, column_name)
 
-        for word in line:
+        row_words = [w for w in line if money_word_inside_column(w, current_column)]
+        row_words.sort(key=lambda w: _safe_float(w.get("x0", 0)))
+        if len(row_words) > 1:
+            pieces = [normalize_text(w.get("text", "")) for w in row_words]
+            gap_limit = max(word_height(w) for w in row_words)
+            nearby = all(_safe_float(b.get("x0")) - word_x1(a) <= gap_limit
+                         for a, b in zip(row_words, row_words[1:]))
+            joined = "".join(pieces)
+            if (nearby and len(pieces) == 2 and re.fullmatch(r"\d{1,3}(?:,\d{3})+", pieces[0])
+                    and re.fullmatch(r"\d{2}", pieces[1])):
+                joined = pieces[0] + "." + pieces[1]
+            if nearby and is_money(joined) and "." in _normalized_money(joined):
+                row_words = [{**row_words[0], "text": joined, "x1": row_words[-1]["x1"]}]
+
+        for word in row_words:
             text = normalize_text(word.get("text", ""))
 
             if (
@@ -971,7 +1001,9 @@ def extract_amount_from_block(
     if not candidates:
         return 0.0
 
-    _, word = candidates[-1]
+    decimal_candidates = [candidate for candidate in candidates
+                          if re.search(r"\.\d{2}(?:\)|-)?$", _normalized_money(candidate[1]["text"]))]
+    _, word = (decimal_candidates or candidates)[-1]
 
     return parse_amount(word.get("text", ""))
 
@@ -1025,6 +1057,10 @@ def normalize_movement_date_text(text: str) -> str:
     normalized = normalize_upper(text)
     if not normalized:
         return ""
+
+    # Ruido de reglas y subrayados en la celda FECHA de una tabla escaneada.
+    normalized = " ".join(normalized.replace("_", " ").strip(" -.,|*").split())
+    normalized = re.sub(r"\bN[0Q]V\b", "NOV", normalized)
 
     normalized = re.sub(r"\s*[|*]+\s*$", "", normalized).strip()
     normalized = re.sub(r"\s+-\s*$", "", normalized).strip()
@@ -2236,6 +2272,8 @@ def _extract_movimientos_cuenta_priority(
 
 def extract_movimientos_words(
     words: List[Dict[str, Any]],
+    *,
+    recover_missing_dates: bool = False,
 ) -> List[Movimiento]:
     """Extrae movimientos Banamex de forma multi-layout."""
 
@@ -2255,14 +2293,25 @@ def extract_movimientos_words(
 
     configs = build_page_configs(lines)
     blocks = build_blocks(lines, configs)
+    if recover_missing_dates:
+        blocks = [segment for block in blocks
+                  for segment in split_mixed_financial_block(block, configs)]
 
     movimientos: List[Movimiento] = []
 
+    inherited_date = ""
     for block in blocks:
         movimiento = build_movimiento(block, configs)
 
         if movimiento is None:
             continue
+
+        if recover_missing_dates:
+            date = normalize_movement_date_text(movimiento.fecha_operacion or "")
+            if is_date_text(date):
+                inherited_date = date
+            elif inherited_date:
+                movimiento.fecha_operacion = inherited_date
 
         if movimiento.cargo != 0.0 and movimiento.abono != 0.0:
             repaired_blocks = split_mixed_financial_block(block, configs)

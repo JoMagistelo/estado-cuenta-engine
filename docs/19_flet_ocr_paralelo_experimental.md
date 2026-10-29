@@ -27,7 +27,7 @@ La prueba de 19 archivos terminó en **11:28** y el PDF individual más lento en
 
 El build ejecuta además `--self-test-parallel-runtime` dentro del EXE final: inicia dos procesos independientes y bloquea la entrega si el mecanismo multiproceso no funciona. Se mantienen las autopruebas de PaddleX, inferencia PaddleOCR real, modelos embebidos y operación offline.
 
-## Construcción de la versión 5.0.0
+## Construcción de la versión 6.0.0
 
 Después de fusionar el PR:
 
@@ -38,7 +38,7 @@ git pull --ff-only origin master
 
 python -m pip install -e ".[desktop,paddleocr]"
 
-.\scripts\build_windows_release.ps1 -Version "5.0.0" -PortableOffline
+.\scripts\build_windows_release.ps1 -Version "6.0.0" -PortableOffline
 
 Get-ChildItem .\dist
 ```

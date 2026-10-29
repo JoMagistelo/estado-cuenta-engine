@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_release_version_is_5_0_0_across_app_package_and_windows_build():
+def test_release_version_is_6_0_0_across_app_package_and_windows_build():
     main_desktop = (ROOT / "app" / "main_desktop.py").read_text(encoding="utf-8")
     main_flet = (ROOT / "app" / "main_flet.py").read_text(encoding="utf-8")
     main_streamlit = (ROOT / "app" / "main_streamlit.py").read_text(encoding="utf-8")
@@ -15,14 +15,14 @@ def test_release_version_is_5_0_0_across_app_package_and_windows_build():
     )
     verifier = (ROOT / "scripts" / "verify_windows_release.py").read_text(encoding="utf-8")
 
-    assert 'RELEASE_VERSION = "5.0.0"' in main_desktop
+    assert 'RELEASE_VERSION = "6.0.0"' in main_desktop
     assert "ui.APP_VERSION = RELEASE_VERSION" in main_desktop
-    assert "APP_VERSION = '5.0.0'" in main_flet
-    assert "APP_VERSION = '5.0.0'" in main_streamlit
-    assert 'version = "5.0.0"' in pyproject
-    assert "APP_VERSION = (5, 0, 0, 0)" in spec
-    assert '[string]$Version = "5.0.0"' in build_script
-    assert 'parser.add_argument("--version", default="5.0.0")' in verifier
+    assert "APP_VERSION = '6.0.0'" in main_flet
+    assert "APP_VERSION = '6.0.0'" in main_streamlit
+    assert 'version = "6.0.0"' in pyproject
+    assert "APP_VERSION = (6, 0, 0, 0)" in spec
+    assert '[string]$Version = "6.0.0"' in build_script
+    assert 'parser.add_argument("--version", default="6.0.0")' in verifier
     assert '"--self-test-parallel-runtime"' in build_script
 
 

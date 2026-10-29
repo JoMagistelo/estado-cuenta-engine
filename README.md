@@ -148,40 +148,29 @@ python -m pip install --group dev
 
 ## 6. Ejecución
 
-### Empaquetar y ejecutar la versión 5.0.0 en Windows
+### Empaquetar y ejecutar la versión 6.0.0 en Windows
 
 Después de fusionar el PR, desde PowerShell con el entorno virtual de build
-ya preparado y activo, actualizar el repositorio:
+ya preparado y activo:
 
 ```powershell
 Set-Location C:\Proyectos\estado-cuenta-engine
 git switch master
 git pull --ff-only origin master
-```
-
-La corrección de conciliación de Nu también requiere [Pillow 13](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html), que corrige
-los hallazgos de la auditoría de dependencias. Si el entorno todavía tiene
-Pillow 12, sincronizar las dependencias una vez antes de empaquetar:
-
-```powershell
-python -m pip install -e ".[desktop,paddleocr]"
-```
-
-La instalación se repite cuando cambian las dependencias declaradas en
-`pyproject.toml`. Para actualizaciones posteriores que sólo cambian código,
-basta con actualizar el repositorio y ejecutar el build habitual:
-
-```powershell
-.\scripts\build_windows_release.ps1 -Version "5.0.0" -PortableOffline
+.\scripts\build_windows_release.ps1 -Version "6.0.0" -PortableOffline
 Get-Content .\dist\release-manifest.json
 .\dist\Extractor_de_Movimientos_Financieros.exe
 ```
 
+Esta versión fortalece Banamex y Santander y conserva las dependencias de la
+versión anterior, incluido Pillow 13. Un entorno de build ya actualizado no
+requiere repetir la instalación por estos cambios de código.
+
 El script ejecuta las pruebas, limpia `build`, `dist` y `.packaging`, y verifica
 el ejecutable portable con sus modelos PaddleOCR y cliente Flet embebidos.
-El manifiesto debe indicar `5.0.0`; las propiedades del EXE usan `5.0.0.0`.
-La interfaz muestra `Versión 5.0.0` y el modal «Información y ayuda» incluye
-Santander como «Digital · Escaneado (cuenta de cheques)».
+El manifiesto debe indicar `6.0.0`; las propiedades del EXE usan `6.0.0.0`.
+La interfaz muestra `Versión 6.0.0` y el modal «Información y ayuda» conserva
+el listado de bancos y tipos de estado de cuenta admitidos.
 
 ### Streamlit
 
@@ -323,6 +312,7 @@ El proceso técnico se documenta en [`docs/09_verificacion_tecnica_version.md`](
 - [`14_paddleocr_fallback.md`](docs/14_paddleocr_fallback.md): política OCR de producción, trazabilidad, capacidad secundaria explícita y ruta de evolución arquitectónica.
 - [`15_parser_santander.md`](docs/15_parser_santander.md): cobertura, contrato, extensión de layouts y validación local de Santander.
 - [`nu_conciliacion.md`](docs/nu_conciliacion.md): conciliación de Cajitas, rendimientos y comisiones de Nu conservando el detalle original.
+- [`banamex_santander_layouts.md`](docs/banamex_santander_layouts.md): portadas, límites del detalle, lectura OCR y conciliación de varios periodos en Banamex y Santander.
 
 ## 12. Responsabilidades de entrega
 
