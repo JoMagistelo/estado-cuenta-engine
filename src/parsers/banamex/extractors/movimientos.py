@@ -1086,9 +1086,13 @@ def is_date_text(text: str) -> bool:
         return False
 
     if DATE_PATTERN.fullmatch(normalized):
-        return True
-
-    parts = normalized.split()
+        # La forma «número + letras» no basta para abrir un movimiento. Por
+        # ejemplo, la etiqueta «Otros» puede normalizarse a «0 TROS» y traer
+        # importes del resumen de portada al detalle. Validar día y mes también
+        # para fechas con separador o año, antes de aceptar el inicio de bloque.
+        parts = re.split(r"[\s/-]+", normalized)[:2]
+    else:
+        parts = normalized.split()
 
     if len(parts) != 2:
         return False
