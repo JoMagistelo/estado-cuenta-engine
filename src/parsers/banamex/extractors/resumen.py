@@ -1147,6 +1147,12 @@ def extract_resumen_financiero_words(
         - Cuenta Priority
     """
 
+    from .anchored_header import extract_cover_summary
+
+    anchored = extract_cover_summary(words)
+    if anchored is not None:
+        return anchored
+
     layout = detect_resumen_layout(words)
 
     return ResumenFinanciero(

@@ -995,6 +995,12 @@ def extract_datos_cuenta_words(
         - Cuenta Priority
     """
 
+    from .anchored_header import extract_cover_account
+
+    anchored = extract_cover_account(words)
+    if anchored is not None:
+        return anchored
+
     layout = detect_datos_cuenta_layout(words)
 
     return DatosCuenta(

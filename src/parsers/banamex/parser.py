@@ -3,15 +3,18 @@ from __future__ import annotations
 from readers.models.document_data import DocumentData
 
 from models.estado_cuenta import EstadoCuenta
+from parsers.periods import combine_periods, split_word_periods
 
 from .beneficiary_enrichment import enrich_banamex_beneficiaries
 from .extractors.datos import extract_datos_cuenta_words
 from .extractors.resumen import extract_resumen_financiero_words
 from .extractors.productos import extract_otros_productos_words
 from .extractors.movimientos import extract_movimientos_words
+from .extractors.anchored_header import is_cover_page
+from .utils.cover_words import align_table_words
 
 
-def parse_banamex(document: DocumentData) -> EstadoCuenta:
+def _parse_banamex_words(spatial_words: list[dict]) -> EstadoCuenta:
     """
     Parser principal de estados de cuenta Banamex.
 
@@ -44,7 +47,9 @@ def parse_banamex(document: DocumentData) -> EstadoCuenta:
     # Todos los extractores trabajan sobre las mismas palabras
     # espaciales obtenidas por PDFWordReader.
     #
-    spatial_words = document.spatial_words
+    cover_layout = is_cover_page([w for w in spatial_words if int(w.get("page") or 1) == 1])
+    if cover_layout:
+        spatial_words = align_table_words(spatial_words)
 
     # ============================================================
     # DATOS DE CUENTA
@@ -78,9 +83,8 @@ def parse_banamex(document: DocumentData) -> EstadoCuenta:
     # metadatos del tipo «PAGO RECIBIDO DE [BANCO] POR ORDEN DE [ORDENANTE]».
     #
 
-    movimientos = extract_movimientos_words(
-        spatial_words
-    )
+    movimientos = (extract_movimientos_words(spatial_words, recover_missing_dates=True)
+                   if cover_layout else extract_movimientos_words(spatial_words))
     enrich_banamex_beneficiaries(movimientos)
 
     # ============================================================
@@ -93,3 +97,8 @@ def parse_banamex(document: DocumentData) -> EstadoCuenta:
         otros_productos=otros_productos,
         movimientos=movimientos,
     )
+
+
+def parse_banamex(document: DocumentData) -> EstadoCuenta:
+    sections = split_word_periods(document.spatial_words, is_cover_page)
+    return combine_periods([_parse_banamex_words(words) for words in sections])

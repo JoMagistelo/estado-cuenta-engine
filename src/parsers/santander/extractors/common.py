@@ -7,9 +7,17 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 
+# Algunos PDF bancarios conservan vocales acentuadas en el área privada de
+# Unicode. La sustitución sólo reconoce letras y signos; nunca adivina cifras.
+FONT_LETTERS = str.maketrans({
+    "\ue092": "A", "\ue09a": "E", "\ue09e": "I", "\ue0a4": "O",
+    "\ue0ab": "U", "\ue084": "O", "\ue024": "$", "\ue026": "=",
+})
+
+
 def normalized(text: str) -> str:
     # Mantener los índices del original al reconocer etiquetas con acentos.
-    return text.upper().translate(str.maketrans("ÁÉÍÓÚÜ", "AEIOUU"))
+    return text.translate(FONT_LETTERS).upper().translate(str.maketrans("ÁÉÍÓÚÜ", "AEIOUU"))
 
 
 @dataclass
@@ -31,6 +39,21 @@ def group_lines(words: list[dict]) -> list[Line]:
             pages.setdefault(int(word.get("page") or 1), []).append(word)
     result = []
     for page, items in sorted(pages.items()):
+        # Las pasadas superpuestas de una misma fuente PDF no son dos
+        # operaciones. La deduplicación exige texto y cajas coincidentes y
+        # permanece confinada a cada página.
+        unique = []
+        seen: dict[str, list[dict]] = {}
+        for word in items:
+            key = normalized(str(word["text"]))
+            height = float(word.get("bottom", word["top"])) - float(word["top"])
+            tolerance = max(height * 0.12, 0.4)
+            if any(all(abs(float(word.get(k, 0)) - float(other.get(k, 0))) <= tolerance
+                       for k in ("x0", "x1", "top", "bottom")) for other in seen.get(key, [])):
+                continue
+            unique.append(word)
+            seen.setdefault(key, []).append(word)
+        items = unique
         heights = [float(w.get("bottom", w["top"])) - float(w["top"]) for w in items]
         heights = [h for h in heights if h > 0]
         tolerance = statistics.median(heights) * 0.3 if heights else 3.0
@@ -81,7 +104,7 @@ def dates(text: str) -> list[str]:
 
 
 def money(text: str) -> float | None:
-    value = text.strip().replace(" ", "").replace("$", "").replace(",", "").replace("−", "-")
+    value = text.translate(FONT_LETTERS).strip().replace(" ", "").replace("$", "").replace(",", "").replace("−", "-")
     negative = value.startswith("(") and value.endswith(")")
     if negative:
         value = value[1:-1]

@@ -188,7 +188,9 @@ def _line_text(line: List[Dict[str, Any]]) -> str:
 def _is_stop_line(line: List[Dict[str, Any]]) -> bool:
     text = _line_text(line)
 
-    return any(
+    return bool(re.match(
+        r"^RESUMEN(?: DE)? OPERACIONES(?: DE)? TARJETAS?\b", text
+    )) or any(
         marker in text
         for marker in STOP_LINE_MARKERS
     )
@@ -201,8 +203,19 @@ def find_banamex_movements_cut(
 
     candidates: List[tuple[int, float]] = []
 
-    for line in _group_words_into_lines(words):
-        if not line or not _is_stop_line(line):
+    lines = _group_words_into_lines(words)
+    for index, line in enumerate(lines):
+        wrapped = False
+        if line and index + 1 < len(lines):
+            following = lines[index + 1]
+            height = max(float(w.get("bottom", 0)) - float(w.get("top", 0)) for w in line)
+            if (_word_page(following[0]) == _word_page(line[0])
+                    and _word_center_y(following[0]) - _word_center_y(line[0]) <= height * 3):
+                wrapped = bool(re.fullmatch(
+                    r"RESUMEN(?: DE)? OPERACIONES(?: DE)? TARJETAS?",
+                    _line_text(line) + " " + _line_text(following),
+                ))
+        if not line or not (_is_stop_line(line) or wrapped):
             continue
 
         candidates.append(
