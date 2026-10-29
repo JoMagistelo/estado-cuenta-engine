@@ -16,6 +16,11 @@ etiquetado permite separar filas financieras consecutivas cuando el OCR pierde
 una fecha, conservando los importes y la fecha disponible. Los formatos
 históricos conservan su ruta habitual.
 
+El inicio de cada movimiento requiere un día entre 1 y 31 y un mes reconocido,
+también cuando la fecha lleva separadores o año. Una etiqueta como «Otros» no
+se convierte en fecha por una sustitución OCR de la letra O: los importes de
+la portada permanecen fuera del detalle aunque coincidan con sus columnas.
+
 El título «Resumen de Operaciones de Tarjeta», incluidas sus variantes y el
 título partido en dos líneas, termina el detalle. Las cifras de ese resumen,
 sus contadores y las páginas posteriores no son movimientos de la cuenta.
