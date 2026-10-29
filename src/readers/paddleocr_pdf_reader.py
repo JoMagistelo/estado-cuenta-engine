@@ -98,7 +98,8 @@ class PaddleOCRPDFReader:
             from readers.banamex_money_rescue import is_banamex_cover, rescue_money_cells
 
             banamex_cover = banamex_cover or is_banamex_cover(words)
-            recognizer = getattr(getattr(engine, "paddlex_pipeline", None), "text_rec_model", None)
+            recognizer = (getattr(getattr(engine, "paddlex_pipeline", None), "text_rec_model", None)
+                          if banamex_cover else None)
             if banamex_cover and callable(recognizer):
                 def recognize(crops):
                     import numpy as np

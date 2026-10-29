@@ -46,6 +46,8 @@ def test_consensus_recovers_a_clipped_prefix_from_expanded_image_cells():
         [("25.00", 0.99), ("25.00", 0.99)],
         [("-125.00", 0.99), ("-125.00", 0.99)],
         [("ABONO", 0.99), ("ABONO", 0.99)],
+        [("125.00", float("nan")), ("125.00", 0.99)],
+        [("125.00", None), ("125.00", 0.99)],
         [],
     ],
 )

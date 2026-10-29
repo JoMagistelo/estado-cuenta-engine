@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import math
 import unicodedata
 from collections.abc import Callable
 
@@ -99,11 +100,16 @@ def rescue_money_cells(
     changes = {}
     for i, word in enumerate(candidates):
         first, second = readings[2 * i : 2 * i + 2]
+        try:
+            scores = [float(first[1]), float(second[1])]
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(score) and 0.97 <= score <= 1 for score in scores):
+            continue
         text = str(first[0]).strip()
         original, proposed = _amount(str(word["text"])), _amount(text)
         if (
             text != str(second[0]).strip()
-            or min(float(first[1]), float(second[1])) < 0.97
             or proposed is None
             or original is None
             or proposed[1] != original[1]
@@ -119,6 +125,6 @@ def rescue_money_cells(
             "text": text,
             "x0": max(0, float(word["x0"]) - height * 0.9),
             "width": float(word["x1"]) - max(0, float(word["x0"]) - height * 0.9),
-            "confidence": min(float(first[1]), float(second[1])) * 100,
+            "confidence": min(scores) * 100,
         }
     return [changes.get(id(w), w) for w in words], len(changes)

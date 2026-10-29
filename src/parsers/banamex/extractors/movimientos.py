@@ -983,7 +983,9 @@ def extract_amount_from_block(
             if (nearby and len(pieces) == 2 and re.fullmatch(r"\d{1,3}(?:,\d{3})+", pieces[0])
                     and re.fullmatch(r"\d{2}", pieces[1])):
                 joined = pieces[0] + "." + pieces[1]
-            if nearby and is_money(joined) and "." in _normalized_money(joined):
+            complete_amounts = sum(bool(re.search(r"\.\d{2}(?:\)|-)?$", _normalized_money(piece)))
+                                   for piece in pieces)
+            if nearby and complete_amounts <= 1 and is_money(joined) and "." in _normalized_money(joined):
                 row_words = [{**row_words[0], "text": joined, "x1": row_words[-1]["x1"]}]
 
         for word in row_words:

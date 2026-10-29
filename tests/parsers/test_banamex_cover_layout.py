@@ -180,6 +180,15 @@ def test_implicit_initial_year_can_cross_the_calendar_boundary():
     assert result.datos_cuenta.periodo_fin == "15/01/2030"
 
 
+def test_two_complete_amounts_are_never_concatenated_into_a_larger_number():
+    words = cover_words() + line("0.00", 275, 380, 2)
+    result = parse(words)
+    assert result.movimientos[-1].cargo == 0
+    assert not all(
+        v.correcto for v in validar_movimientos(result.movimientos, result.resumen_financiero)
+    )
+
+
 @pytest.mark.parametrize(
     "value,expected", [("_17 NOV", "17 NOV"), ("-27 NOV", "27 NOV"), ("21 _NQV", "21 NOV")]
 )
