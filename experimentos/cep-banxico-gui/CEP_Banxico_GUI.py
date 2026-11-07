@@ -125,8 +125,11 @@ class Aplicacion(tk.Tk):
             messagebox.showerror('No se pudo procesar ZIP', str(e)); return
         self.carpeta = salida
         r = info['resumen']
-        self.resumen.set(f"XML: {r['XML procesados']} | PDF: {r['PDF renombrados']} | Coinciden: {r['Coincidencias con Excel']} | Revisar: {r['Requieren revisión']}")
+        self.resumen.set(f"Datos CEP: {r['Registros en Datos CEP']} | Con PDF: {r['Registros con PDF']} | Sin PDF: {r['XML sin PDF']} | Revisar: {r['Requieren revisión']}")
         messagebox.showinfo('CEP organizados',
+            f"Filas Datos CEP: {r['Registros en Datos CEP']}\n"
+            f"Con PDF (SÍ): {r['Registros con PDF']}\n"
+            f"Sin PDF (NO): {r['XML sin PDF']}\n"
             f"PDF copiados y renombrados: {r['PDF renombrados']}\n"
             f"XML procesados: {r['XML procesados']}\n"
             f"Coincidencias verificables con Excel: {r['Coincidencias con Excel']}\n"
