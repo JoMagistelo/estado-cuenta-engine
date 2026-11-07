@@ -87,6 +87,15 @@ class Tests(unittest.TestCase):
             res=exportar([r1,r2,r3],p/'salida')
             self.assertEqual((res['lotes'],res['listos'],res['pendientes']), (1,2,1))
             self.assertEqual(len((p/'salida'/'lote_001.txt').read_text().splitlines()),2)
+            alternativas = (p/'salida'/'reintento_fecha_001.txt').read_text().splitlines()
+            self.assertEqual(len(alternativas),4)
+            self.assertTrue(all(len(linea.split(',')) == 6 for linea in alternativas))
+            fechas = [linea.split(',')[0] for linea in alternativas]
+            self.assertEqual(set(fechas),{'2025-04-27','2025-04-29'})
+            # Los bancos no son omitidos: el 3.º y 4.º campo son códigos oficiales.
+            self.assertEqual((alternativas[0].split(',')[2], alternativas[0].split(',')[3]),
+                             ('40002','40012'))
+            self.assertEqual(res['reintentos'],1)
             self.assertEqual(len(list((p/'salida').glob('*.xlsx'))),1)
             self.assertFalse(list((p/'salida').glob('*.csv')))
             sheets=xlsx_hojas(p/'salida'/'resultado_CEP.xlsx')
