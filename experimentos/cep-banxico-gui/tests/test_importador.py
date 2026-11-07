@@ -82,7 +82,52 @@ class TestImportador(unittest.TestCase):
             with zipfile.ZipFile(d/'z.zip','w') as z:z.writestr('../comprobante.pdf',b'%PDF-1.4')
             r=procesar_zip(d/'z.zip',d/'c.csv',d/'salida')
             self.assertEqual(r['resumen']['PDF sin XML'],1)
-            self.assertTrue(next((d/'salida'/'PDF').glob('SIN_XML_*.pdf')).is_file())
+            self.assertTrue(next((d/'salida'/'REVISION').glob('SIN_XML_*.pdf')).is_file())
             self.assertFalse((d/'comprobante.pdf').exists())
+
+
+    def test_unica_hoja_pdf_si_no_y_datos_solo_xml(self):
+        from xml.etree import ElementTree as ET
+        with tempfile.TemporaryDirectory() as d:
+            d=Path(d); self.consultas(d/'c.csv')
+            distinto = XML.replace(b'PRUEBA-123456789',b'PRUEBA-987654321')
+            distinto = distinto.replace(b'10000.00',b'500.00')
+            with zipfile.ZipFile(d/'z.zip','w') as z:
+                z.writestr('001.xml', XML)
+                z.writestr('001.pdf', b'%PDF-1.4\\nPrueba')
+                z.writestr('002.xml', distinto)
+            r=procesar_zip(d/'z.zip',d/'c.csv',d/'out')
+            self.assertEqual(r['resumen']['Registros en Datos CEP'],2)
+            self.assertEqual(r['resumen']['Registros con PDF'],1)
+            self.assertEqual(len(list((d/'out'/'PDF').glob('*.pdf'))),1)
+            self.assertEqual(len(list((d/'out'/'XML').glob('*.xml'))),2)
+            with zipfile.ZipFile(d/'out'/'resultado_CEP.xlsx') as book:
+                workbook=book.read('xl/workbook.xml')
+                self.assertIn(b'Datos CEP',workbook)
+                self.assertNotIn(b'CEP solo XML',workbook)
+                sheet=ET.fromstring(book.read('xl/worksheets/sheet2.xml'))
+                ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+                rows=sheet.findall('./s:sheetData/s:row',ns)
+                self.assertEqual(len(rows),3)
+                def ctext(c): return ''.join(c.itertext())
+                titles=[ctext(c) for c in rows[0].findall('s:c',ns)]
+                self.assertIn('tiene_pdf',titles)
+                self.assertNotIn('beneficiario_estado_cuenta',titles)
+                ix=titles.index('tiene_pdf')
+                vals=[ctext(row.findall('s:c',ns)[ix]) for row in rows[1:]]
+                self.assertEqual(sorted(vals),['NO','SÍ'])
+                self.assertIn(b'BETX010101XXX',book.read('xl/worksheets/sheet2.xml'))
+
+    def test_pdf_invalido_no_cuenta_como_pdf_oficial(self):
+        with tempfile.TemporaryDirectory() as d:
+            d=Path(d); self.consultas(d/'c.csv')
+            with zipfile.ZipFile(d/'z.zip','w') as z:
+                z.writestr('001.xml',XML)
+                z.writestr('001.pdf',b'NO ES PDF')
+            r=procesar_zip(d/'z.zip',d/'c.csv',d/'out')
+            self.assertEqual(r['resumen']['Registros en Datos CEP'],1)
+            self.assertEqual(r['resumen']['Registros con PDF'],0)
+            self.assertEqual(len(list((d/'out'/'PDF').glob('*.pdf'))),0)
+            self.assertEqual(len(list((d/'out'/'REVISION').glob('*.pdf'))),1)
 
 if __name__=='__main__': unittest.main()
