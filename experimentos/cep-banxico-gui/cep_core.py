@@ -29,6 +29,11 @@ BANCOS = {'BANAMEX':'40002','CITIBANAMEX':'40002','CITI MEXICO':'40124',
 CLABE_BANCO = {'002':'40002','012':'40012','014':'40014','072':'40072',
  '021':'40021','044':'40044','127':'40127','137':'40137','036':'40036',
  '030':'40030','062':'40062','058':'40058','042':'40042','646':'90646'}
+# Participantes oficiales adicionales, sin eliminar alias históricos de los parsers.
+from banxico_catalogo import BANXICO_INSTITUCIONES, BANXICO_CLABE
+BANCOS.update(BANXICO_INSTITUCIONES)
+CLABE_BANCO.update(BANXICO_CLABE)
+
 MESES = {'ENE':1,'FEB':2,'MAR':3,'ABR':4,'MAY':5,'JUN':6,'JUL':7,'AGO':8,
          'SEP':9,'SEPT':9,'OCT':10,'NOV':11,'DIC':12}
 CAMPOS = ['fila_excel','id_estado','num_movimiento','tipo','fecha','clave_rastreo',

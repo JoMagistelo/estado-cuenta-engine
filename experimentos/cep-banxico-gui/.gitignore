@@ -10,3 +10,12 @@ pendientes_revision.csv
 *.xlsx
 *.xls
 *.zip
+# Evidencia privada CEP: nunca subir al repositorio publico
+*.pdf
+*.xml
+*.csv
+*.xlsm
+CEP_RECUPERADOS_*/
+PDF/
+XML/
+resumen_original_banxico.txt

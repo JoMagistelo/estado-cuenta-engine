@@ -10,6 +10,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from cep_core import INDIVIDUAL, LOTES, analizar, exportar, diagnostico_web
+from cep_importador import procesar_zip
 
 
 class Aplicacion(tk.Tk):
@@ -42,13 +43,14 @@ class Aplicacion(tk.Tk):
         ttk.Button(config, text='Analizar movimientos', command=self.analizar).pack(side='left', padx=(2, 8))
         ttk.Button(config, text='Generar archivos', command=self.guardar).pack(side='left')
         ttk.Label(area, textvariable=self.resumen, foreground='#0d6374', font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(6, 10))
+        ttk.Button(area, text='IMPORTAR ZIP DE BANXICO → PDF RENOMBRADOS + EXCEL CON NOMBRES', command=self.importar_zip).pack(anchor='w', pady=(0, 8))
         tb = ttk.Frame(area); tb.pack(fill='x', pady=(0, 8))
         for label, fun in [('Abrir CEP individual', lambda: webbrowser.open(INDIVIDUAL)),
                            ('Abrir CEP por lotes', lambda: webbrowser.open(LOTES)),
                            ('Probar acceso Banxico', self.diagnosticar),
                            ('Copiar fila seleccionada', self.copiar),
                            ('Abrir carpeta de resultados', self.abrir_carpeta)]:
-            ttk.Button(tb, text=label, command=fun).pack(side='left', padx=(0, 7))
+            ttk.Button(tb, text=label, command=fun).pack(side='left', padx=(0, 5))
         cols = ('fila_excel', 'tipo', 'fecha', 'monto', 'clave_rastreo',
                 'referencia', 'emisor', 'receptor', 'cuenta_beneficiaria', 'estado', 'observacion')
         self.cols = cols
@@ -67,7 +69,7 @@ class Aplicacion(tk.Tk):
         vs.pack(side='right', fill='y'); self.tabla.configure(yscrollcommand=vs.set)
         hs = ttk.Scrollbar(area, orient='horizontal', command=self.tabla.xview)
         hs.pack(fill='x'); self.tabla.configure(xscrollcommand=hs.set)
-        ttk.Label(area, text='Piloto local: no solicita ni descarga CEP automáticamente. No resuelve ni omite CAPTCHA.', style='Sub.TLabel').pack(anchor='w', pady=(10, 0))
+        ttk.Label(area, text='Paso 1: genera TXT. Paso 2: descarga ZIP oficial de Banxico (PDF y XML). Paso 3: impórtalo aquí para renombrar y crear el Excel.', style='Sub.TLabel').pack(anchor='w', pady=(10, 0))
 
     def seleccionar(self):
         filename = filedialog.askopenfilename(title='Selecciona Excel de Estado Cuenta Engine',
@@ -102,6 +104,37 @@ class Aplicacion(tk.Tk):
         self.carpeta = carpeta
         messagebox.showinfo('Archivos preparados',
           f"Listos: {info['listos']} | Revisión: {info['pendientes']} | Lotes TXT: {info['lotes']}\n\n{carpeta}\n\nLos TXT deben cargarse manualmente en Banxico; no son CEP descargados.")
+
+    def importar_zip(self):
+        ruta = filedialog.askopenfilename(title='Selecciona ZIP de resultados descargado de Banxico',
+                                          filetypes=[('Archivo ZIP', '*.zip')])
+        if not ruta: return
+        consultas = self.carpeta / 'consultas_individuales.csv' if self.carpeta else None
+        if not consultas or not consultas.is_file():
+            ruta_csv = filedialog.askopenfilename(title='Selecciona consultas_individuales.csv generado con este Excel',
+                                                   filetypes=[('CSV', '*.csv')])
+            consultas = Path(ruta_csv) if ruta_csv else None
+        if not consultas or not consultas.is_file():
+            messagebox.showwarning('Falta CSV', 'Selecciona consultas_individuales.csv para vincular los nombres con el estado de cuenta.'); return
+        destino = filedialog.askdirectory(title='Elige la carpeta donde guardar los CEP organizados')
+        if not destino: return
+        salida = Path(destino) / ('CEP_RECUPERADOS_' + datetime.now().strftime('%Y%m%d_%H%M%S'))
+        try:
+            info = procesar_zip(ruta, consultas, salida)
+        except Exception as e:
+            messagebox.showerror('No se pudo procesar ZIP', str(e)); return
+        self.carpeta = salida
+        r = info['resumen']
+        self.resumen.set(f"Datos CEP: {r['Registros en Datos CEP']} | Con PDF: {r['Registros con PDF']} | Sin PDF: {r['XML sin PDF']} | Revisar: {r['Requieren revisión']}")
+        messagebox.showinfo('CEP organizados',
+            f"Filas Datos CEP: {r['Registros en Datos CEP']}\n"
+            f"Con PDF (SÍ): {r['Registros con PDF']}\n"
+            f"Sin PDF (NO): {r['XML sin PDF']}\n"
+            f"PDF copiados y renombrados: {r['PDF renombrados']}\n"
+            f"XML procesados: {r['XML procesados']}\n"
+            f"Coincidencias verificables con Excel: {r['Coincidencias con Excel']}\n"
+            f"Pendientes de revisión: {info['pendientes']}\n\n"
+            f"Excel generado: {info['excel']}\n\nNo se modificó el ZIP original.")
 
     def copiar(self):
         seleccion = self.tabla.selection()
