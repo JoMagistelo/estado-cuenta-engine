@@ -316,12 +316,30 @@ def preparar(row, cols, fila, meta, clabe_manual=''):
         problemas.append('formato de rastreo inválido')
     if x['emisor'] and x['emisor'] == x['receptor']: problemas.append('bancos emisor/receptor iguales')
     obligatorios = ('fecha','clave_rastreo','emisor','receptor','cuenta_beneficiaria','monto')
-    if not problemas and all(x[k] for k in obligatorios):
+    # Distinguir un dato no corroborado de uno materialmente inválido.
+    # Para no rechazar todo un lote, jamás fabricar campos ausentes o CLABE incorrecta.
+    fatales = (
+        'cargo/abono ambiguos', 'CLABE destino falla dígito verificador',
+        'CLABE destino contradice banco receptor',
+        'CLABE propia contradice banco receptor',
+        'bancos emisor/receptor iguales', 'cuenta de tercero con longitud inválida',
+        'formato de rastreo inválido',
+    )
+    completos = all(x[k] for k in obligatorios)
+    formato_ok = bool(
+        completos and re.fullmatch(r'20\d{2}-\d{2}-\d{2}', x['fecha'])
+        and re.fullmatch(r'[A-Za-z0-9-]{8,40}', x['clave_rastreo'])
+        and re.fullmatch(r'\d{5}', x['emisor'])
+        and re.fullmatch(r'\d{5}', x['receptor'])
+        and re.fullmatch(r'\d{10}|\d{16}|\d{18}', x['cuenta_beneficiaria'])
+        and Decimal(x['monto']) > 0
+    )
+    if formato_ok and not any(p.startswith(f) for f in fatales for p in problemas):
         x['linea_lote'] = ','.join(x[k] for k in obligatorios)
-        x['estado'] = 'LISTO'
-        x['observacion'] = 'Datos preparados; CEP todavía no descargado'
+        x['estado'] = 'LISTO' if not problemas else 'LISTO_CON_ALERTAS'
+        x['observacion'] = '; '.join(dict.fromkeys(problemas)) if problemas else 'Datos suficientes para solicitar CEP; no confirmado'
     else:
-        x['observacion'] = '; '.join(dict.fromkeys(problemas))
+        x['observacion'] = '; '.join(dict.fromkeys(problemas)) or 'No tiene los seis datos válidos para lote'
     return x
 
 
@@ -352,28 +370,89 @@ def analizar(path, clabe_manual=''):
     return registros, movimiento_total
 
 
+def _guardar_archivos_txt(lineas, carpeta, prefijo):
+    """Escribe lotes de 2 a 500 líneas; deduplica solicitudes idénticas."""
+    lineas = list(dict.fromkeys(lineas))
+    if len(lineas) < 2:
+        return []
+    archivos = []
+    i = 0
+    while i < len(lineas):
+        restantes = len(lineas) - i
+        tam = 499 if restantes == 501 else min(restantes, 500)
+        if tam < 2:
+            raise ValueError('Quedó un lote incompleto de sólo una operación')
+        archivo = Path(carpeta) / f'{prefijo}_{len(archivos)+1:03d}.txt'
+        archivo.write_text('\n'.join(lineas[i:i+tam]) + '\n', encoding='utf-8')
+        archivos.append(archivo)
+        i += tam
+    return archivos
+
+
 def exportar(registros, carpeta):
-    carpeta = Path(carpeta); carpeta.mkdir(parents=True, exist_ok=True)
-    def csv_out(nombre, data):
-        with (carpeta / nombre).open('w', encoding='utf-8-sig', newline='') as f:
-            w = csv.DictWriter(f, CAMPOS, extrasaction='ignore'); w.writeheader(); w.writerows(data)
-    csv_out('consultas_individuales.csv', registros)
-    pendientes = [r for r in registros if r['estado'] != 'LISTO']
-    csv_out('pendientes_revision.csv', pendientes)
-    listos = [r for r in registros if r['estado'] == 'LISTO']
-    lotes = []
-    if len(listos) > 1:
-        i = 0
-        while i < len(listos):
-            resto = len(listos) - i
-            tamaño = 499 if resto == 501 else min(resto, 500)
-            if tamaño < 2: break
-            grupo = listos[i:i+tamaño]; i += tamaño
-            fn = carpeta / f'lote_{len(lotes)+1:03d}.txt'
-            fn.write_text('\n'.join(r['linea_lote'] for r in grupo) + '\n', encoding='utf-8')
-            lotes.append(fn)
-    return {'total':len(registros),'listos':len(listos),'pendientes':len(pendientes),
-            'lotes':len(lotes),'salida':str(carpeta)}
+    """Sólo un Excel y archivos TXT principales y de fechas alternativas."""
+    from cep_importador import crear_excel_sin_dependencias
+    carpeta = Path(carpeta)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    validos = [r for r in registros if r.get('linea_lote')]
+    principales = _guardar_archivos_txt(
+        [r['linea_lote'] for r in validos], carpeta, 'lote')
+    # Alternativas: estrictamente +1/-1 sobre la fecha real, no sustituyen
+    # ni falsifican el dato del estado de cuenta. Se usan sólo tras fallar
+    # la consulta original. Dos variantes por cada operación elegible.
+    alternativas = []
+    if principales:
+        for r in validos:
+            campos = r['linea_lote'].split(',')
+            if len(campos) != 6:
+                raise ValueError('Línea TXT con número inesperado de campos')
+            base = date.fromisoformat(campos[0])
+            for diferencia in (-1, 1):
+                propuesta = base + timedelta(days=diferencia)
+                # Banxico sólo genera CEP SPEI desde el 16 de marzo de 2018.
+                if date(2018, 3, 16) <= propuesta <= date.today():
+                    alternativas.append(','.join([propuesta.isoformat()] + campos[1:]))
+    reintentos = _guardar_archivos_txt(
+        alternativas, carpeta, 'reintento_fecha') if alternativas else []
+
+    datos = []
+    for r in registros:
+        registro = dict(r)
+        if r.get('linea_lote') and principales:
+            registro['resultado_cep'] = 'PENDIENTE_BANXICO'
+            registro['resultado_detalle'] = 'TXT original preparado; aún sin resultados de Banxico'
+        elif r.get('linea_lote'):
+            registro['resultado_cep'] = 'SIN_LOTE'
+            registro['resultado_detalle'] = 'El servicio por lotes requiere de 2 a 500 transferencias'
+        else:
+            registro['resultado_cep'] = 'NO_CONSULTABLE'
+            registro['resultado_detalle'] = r.get('observacion', '')
+        registro['tiene_pdf'] = 'NO'
+        registro['archivo_pdf'] = ''
+        registro['archivo_xml'] = ''
+        registro['fecha_cep_encontrada'] = ''
+        registro['diferencia_dias_fecha'] = ''
+        datos.append(registro)
+
+    resumen = {
+        'SPEI candidatos': len(registros),
+        'Preparados en TXT principal': sum(len(
+            f.read_text(encoding='utf-8').splitlines()) for f in principales),
+        'No consultables': len(registros)-len(validos),
+        'Lotes TXT originales': len(principales),
+        'Lotes TXT alternativos (±1 día)': len(reintentos),
+        'Consultas con fecha alternativa': len(alternativas),
+        'CEP descargados': 0,
+    }
+    crear_excel_sin_dependencias(carpeta/'resultado_CEP.xlsx',
+                                 resumen, [], [], registros=datos)
+    return {
+        'total': len(registros), 'listos': len(validos),
+        'pendientes': len(registros)-len(validos),
+        'lotes': len(principales), 'reintentos': len(reintentos),
+        'salida': str(carpeta),
+        'excel': str(carpeta/'resultado_CEP.xlsx'),
+    }
 
 
 def diagnostico_web():

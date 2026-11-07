@@ -4,6 +4,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from cep_importador import datos_cep_xml, procesar_zip
+from cep_core import xlsx_hojas
 
 
 XML = b'''<?xml version="1.0" encoding="UTF-8"?>
@@ -129,5 +130,24 @@ class TestImportador(unittest.TestCase):
             self.assertEqual(r['resumen']['Registros con PDF'],0)
             self.assertEqual(len(list((d/'out'/'PDF').glob('*.pdf'))),0)
             self.assertEqual(len(list((d/'out'/'REVISION').glob('*.pdf'))),1)
+
+
+    def test_fecha_alternativa_un_dia_preserva_fecha_original(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t)
+            self.consultas(p/'consultas.csv')
+            alternativa = XML.replace(b'2025-04-28', b'2025-04-29')
+            with zipfile.ZipFile(p/'banxico.zip', 'w') as z:
+                z.writestr('001.xml', alternativa)
+                z.writestr('001.pdf', b'%PDF-1.4\nPRUEBA')
+            resultado = procesar_zip(p/'banxico.zip', p/'consultas.csv', p/'out')
+            self.assertEqual(resultado['resumen']['SPEI CEP encontrados con fecha alternativa'],1)
+            hojas=xlsx_hojas(p/'out'/'resultado_CEP.xlsx')
+            encabezado=hojas['SPEI'][0]
+            fila=hojas['SPEI'][1]
+            self.assertEqual(fila[encabezado.index('resultado_cep')], 'EXITO_FECHA_ALTERNATIVA')
+            self.assertEqual(fila[encabezado.index('fecha')], '2025-04-28')
+            self.assertEqual(fila[encabezado.index('fecha_cep_encontrada')], '2025-04-29')
+            self.assertEqual(str(fila[encabezado.index('diferencia_dias_fecha')]), '1')
 
 if __name__=='__main__': unittest.main()
