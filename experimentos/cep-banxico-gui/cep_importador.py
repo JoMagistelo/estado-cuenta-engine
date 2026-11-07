@@ -38,14 +38,19 @@ CAMPOS_XML = {
     'emisor': ['institucionemisora', 'bancoemisor', 'institucionordenante', 'bancoordenante'],
     'receptor': ['institucionreceptora', 'bancoreceptor', 'bancobeneficiario'],
 }
+# Datos CEP: sólo valores del XML oficial, más indicadores documentales.
 COLUMNAS = [
-    'estado', 'fecha_cep', 'nombre_beneficiario_cep', 'nombre_ordenante_cep',
-    'rfc_beneficiario_cep', 'rfc_ordenante_cep', 'cuenta_beneficiaria_cep',
-    'cuenta_ordenante_cep', 'banco_emisor_cep', 'banco_receptor_cep', 'monto_cep',
-    'clave_rastreo_cep', 'referencia_cep', 'concepto_cep', 'tipo_movimiento',
+    'nombre_beneficiario_cep', 'rfc_beneficiario_cep',
+    'nombre_ordenante_cep', 'rfc_ordenante_cep',
+    'cuenta_beneficiaria_cep', 'cuenta_ordenante_cep',
+    'banco_emisor_cep', 'banco_receptor_cep', 'fecha_cep', 'monto_cep',
+    'clave_rastreo_cep', 'referencia_cep', 'concepto_cep',
+    'tiene_pdf', 'archivo_pdf', 'archivo_xml',
+]
+CRUCE_COLUMNAS = [
+    'archivo_xml', 'archivo_pdf', 'clave_rastreo_cep', 'estado', 'tipo_movimiento',
     'beneficiario_estado_cuenta', 'fecha_estado_cuenta', 'monto_estado_cuenta',
-    'clave_rastreo_estado_cuenta', 'fila_excel', 'id_estado',
-    'archivo_pdf', 'archivo_xml', 'observaciones'
+    'clave_rastreo_estado_cuenta', 'fila_excel', 'id_estado', 'observaciones',
 ]
 
 
@@ -153,6 +158,7 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes):
     sheets = [
         ('Resumen', ['Indicador', 'Valor'], [[a, str(b)] for a, b in resumen.items()]),
         ('Datos CEP', COLUMNAS, [[f.get(c, '') for c in COLUMNAS] for f in fichas]),
+        ('Cruce Estado Cuenta', CRUCE_COLUMNAS, [[f.get(c, '') for c in CRUCE_COLUMNAS] for f in fichas]),
         ('Pendientes', ['clave_rastreo', 'fecha', 'monto', 'motivo', 'fila_excel'],
          [[p.get(c, '') for c in ('clave_rastreo','fecha','monto','motivo','fila_excel')] for p in pendientes]),
     ]
@@ -160,10 +166,10 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes):
     ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
     def q(t): return '{'+ns+'}'+t
     with zipfile.ZipFile(destino, 'w', zipfile.ZIP_DEFLATED) as z:
-        z.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' + ''.join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for i in range(1,4)) + '</Types>')
+        z.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' + ''.join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for i in range(1,len(sheets)+1)) + '</Types>')
         z.writestr('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
         z.writestr('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + ''.join(f'<sheet name="{name}" sheetId="{i}" r:id="rId{i}"/>' for i,(name,_,__) in enumerate(sheets,1)) + '</sheets></workbook>')
-        z.writestr('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + ''.join(f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in range(1,4)) + '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
+        z.writestr('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + ''.join(f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in range(1,len(sheets)+1)) + f'<Relationship Id="rId{len(sheets)+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
         z.writestr('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="10"/><name val="Aptos"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF164675"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf xfId="0" fontId="0" fillId="0" borderId="0"/><xf xfId="0" fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1"/><xf xfId="0" numFmtId="2" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs></styleSheet>')
         for i, (nombre, headers, body) in enumerate(sheets, 1):
             root = ET2.Element(q('worksheet'))
@@ -241,8 +247,8 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
     for r in rows:
         if r.get('clave_rastreo'): csv_map[_identificador(r['clave_rastreo'])].append(r)
     salida.mkdir(parents=True, exist_ok=True)
-    pdf_dir = salida / 'PDF'; xml_dir = salida / 'XML'
-    pdf_dir.mkdir(exist_ok=True); xml_dir.mkdir(exist_ok=True)
+    pdf_dir = salida / 'PDF'; xml_dir = salida / 'XML'; revision_dir = salida / 'REVISION'
+    for carpeta in (pdf_dir, xml_dir, revision_dir): carpeta.mkdir(exist_ok=True)
     resumen = {'XML procesados':0,'PDF encontrados':0,'PDF renombrados':0,
                'Coincidencias con Excel':0,'Requieren revisión':0,'PDF sin XML':0,
                'Sin CEP encontrado':0, 'XML sin PDF':0}
@@ -269,7 +275,20 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
             resumen['XML procesados'] += 1
             try: xd = datos_cep_xml(z.read(info))
             except (ET.ParseError, ValueError) as e:
+                revision = revision_dir / ('INVALIDO_' + _seguro_nombre(Path(info.filename).stem) + '.xml')
+                n = 2
+                while revision.exists():
+                    revision = revision_dir / f'INVALIDO_{_seguro_nombre(Path(info.filename).stem)}_{n}.xml'; n += 1
+                revision.write_bytes(z.read(info))
                 pendientes.append({'motivo':f'XML inválido {Path(info.filename).name}: {str(e)[:120]}'})
+                continue
+            if not xd['rastreo'] and not (xd['nombre_beneficiario'] and xd['nombre_ordenante'] and xd['monto']):
+                revision = revision_dir / ('NO_CEP_' + _seguro_nombre(Path(info.filename).stem) + '.xml')
+                n = 2
+                while revision.exists():
+                    revision = revision_dir / f'NO_CEP_{_seguro_nombre(Path(info.filename).stem)}_{n}.xml'; n += 1
+                revision.write_bytes(z.read(info))
+                pendientes.append({'motivo':'XML sin campos CEP suficientes: ' + Path(info.filename).name})
                 continue
             reg, nota = _encontrar_movimiento(xd, csv_map)
             problemas = _validacion(xd, reg) if reg else []
@@ -289,6 +308,9 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                 asociados = [p for p in pdfs if p.filename not in usados_pdf]
             pdf = asociados[0] if len(asociados)==1 else None
             if len(asociados)>1: problemas.append('PDF ambiguos para XML')
+            if pdf and not z.read(pdf).lstrip().startswith(b'%PDF-'):
+                problemas.append('Archivo PDF inválido')
+                pdf = None
             if not pdf: resumen['XML sin PDF'] += 1
             tipo = reg.get('tipo', '') if reg else ''
             # Contraparte real: salidas -> beneficiario, entradas -> ordenante.
@@ -327,15 +349,16 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                 'clave_rastreo_estado_cuenta':reg.get('clave_rastreo','') if reg else '',
                 'fila_excel':reg.get('fila_excel','') if reg else '',
                 'id_estado':reg.get('id_estado','') if reg else '',
+                'tiene_pdf':'SÍ' if destino_pdf else 'NO',
                 'archivo_pdf':destino_pdf, 'archivo_xml':str(Path('XML')/destino_xml.name),
                 'observaciones':'; '.join(problemas)})
         for info in pdfs:
             if info.filename in usados_pdf: continue
             # Preserve unknown PDFs separately; never assign an unverified identity.
-            destino = pdf_dir / ('SIN_XML_' + _seguro_nombre(Path(info.filename).stem) + '.pdf')
+            destino = revision_dir / ('SIN_XML_' + _seguro_nombre(Path(info.filename).stem) + '.pdf')
             i=2
             while destino.exists():
-                destino=pdf_dir / f'SIN_XML_{_seguro_nombre(Path(info.filename).stem)}_{i}.pdf'; i+=1
+                destino=revision_dir / f'SIN_XML_{_seguro_nombre(Path(info.filename).stem)}_{i}.pdf'; i+=1
             destino.write_bytes(z.read(info))
             resumen['PDF sin XML']+=1
             pendientes.append({'motivo':'PDF sin XML asociado: '+destino.name})
@@ -356,6 +379,13 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                                'fecha':reg.get('fecha',''),'monto':reg.get('monto',''),
                                'fila_excel':reg.get('fila_excel',''),
                                'motivo':'Sin XML vinculado en el ZIP; verificar resumen de Banxico'})
+    resumen['Registros en Datos CEP'] = len(fichas)
+    resumen['Registros con PDF'] = sum(f['tiene_pdf'] == 'SÍ' for f in fichas)
+    if (len(list(pdf_dir.glob('*.pdf'))) != resumen['Registros con PDF'] or
+        len(list(xml_dir.glob('*.xml'))) != len(fichas) or
+        any(not (salida / f['archivo_xml']).is_file() for f in fichas) or
+        any(f['tiene_pdf'] == 'SÍ' and not (salida / f['archivo_pdf']).is_file() for f in fichas)):
+        raise RuntimeError('Invariante documental: cada PDF/ debe corresponder a una fila SÍ en Datos CEP')
     crear_excel_sin_dependencias(salida/'resultado_CEP.xlsx', resumen, fichas, pendientes)
     return {'resumen':resumen,'excel':str(salida/'resultado_CEP.xlsx'), 'carpeta':str(salida),
             'fichas':len(fichas),'pendientes':len(pendientes)}
