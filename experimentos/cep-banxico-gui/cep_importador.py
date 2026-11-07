@@ -52,7 +52,8 @@ SPEI_COLUMNAS = [
     'fila_excel', 'id_estado', 'num_movimiento', 'tipo', 'fecha', 'monto',
     'clave_rastreo', 'referencia', 'emisor', 'receptor', 'cuenta_beneficiaria',
     'nombre_beneficiario', 'estado', 'observacion',
-    'resultado_cep', 'resultado_detalle', 'tiene_pdf', 'archivo_pdf',
+    'resultado_cep', 'resultado_detalle', 'fecha_cep_encontrada',
+    'diferencia_dias_fecha', 'tiene_pdf', 'archivo_pdf',
     'archivo_xml', 'linea_lote',
 ]
 
@@ -250,6 +251,26 @@ def _encontrar_movimiento(xml, csv_map):
         if xml['cuenta_beneficiaria'] and _identificador(xml['cuenta_beneficiaria']) != _identificador(r.get('cuenta_beneficiaria')): continue
         filtrados.append(r)
     if len(filtrados)==1: return filtrados[0], ''
+    # Un mismo rastreo puede repetirse, pero un XML con fecha +/-1 puede
+    # relacionarse si monto, cuenta y la cercanía de fecha son inequívocos.
+    cercanos = []
+    for r in candidatos:
+        try:
+            delta = (datetime.fromisoformat(xml['fecha']) -
+                     datetime.fromisoformat(r['fecha'])).days
+        except (ValueError, TypeError, KeyError):
+            continue
+        if abs(delta) != 1:
+            continue
+        if xml['monto'] and _dinero(xml['monto']) != _dinero(r.get('monto')):
+            continue
+        if (xml['cuenta_beneficiaria'] and
+                _identificador(xml['cuenta_beneficiaria']) !=
+                _identificador(r.get('cuenta_beneficiaria'))):
+            continue
+        cercanos.append(r)
+    if len(cercanos) == 1:
+        return cercanos[0], ''
     return None, 'Múltiples movimientos con el mismo rastreo; relación ambigua'
 
 
@@ -321,6 +342,19 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                 continue
             reg, nota = _encontrar_movimiento(xd, csv_map)
             problemas = _validacion(xd, reg) if reg else []
+            diferencia_fecha = None
+            fecha_alternativa = False
+            if reg and xd.get('fecha') and reg.get('fecha'):
+                try:
+                    diferencia_fecha = (datetime.fromisoformat(xd['fecha']) -
+                                        datetime.fromisoformat(reg['fecha'])).days
+                except ValueError:
+                    pass
+            if diferencia_fecha in (-1, 1):
+                # No se sustituye silenciosamente la fecha original: el
+                # comprobante existe, pero se registra la diferencia.
+                fecha_alternativa = True
+                problemas = [p for p in problemas if p != 'Fecha XML distinta']
             if nota and rows: problemas.append(nota)
             if reg and not all(xd.get(c) for c in ('rastreo', 'fecha', 'monto')):
                 problemas.append('XML sin rastreo/fecha/monto suficientes para validar coincidencia')
@@ -361,15 +395,22 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                 ruta_pdf.write_bytes(z.read(pdf))
                 destino_pdf = str(Path('PDF')/ruta_pdf.name)
                 resumen['PDF renombrados'] += 1
-            estado = ('COINCIDE' if reg and not problemas else
+            estado = ('COINCIDE_FECHA_ALTERNATIVA' if reg and not problemas and fecha_alternativa else
+                      'COINCIDE' if reg and not problemas else
                       'SIN_CRUCE' if not rows and not problemas else 'REVISAR')
             if reg:
-                reg['resultado_cep'] = 'EXITO' if not problemas else 'REVISAR'
-                reg['resultado_detalle'] = '; '.join(problemas) if problemas else 'XML oficial localizado y cotejado'
+                reg['resultado_cep'] = ('EXITO_FECHA_ALTERNATIVA' if estado == 'COINCIDE_FECHA_ALTERNATIVA'
+                                        else 'EXITO' if estado == 'COINCIDE' else 'REVISAR')
+                reg['fecha_cep_encontrada'] = xd.get('fecha', '')
+                reg['diferencia_dias_fecha'] = str(diferencia_fecha) if diferencia_fecha is not None else ''
+                reg['resultado_detalle'] = ('Fecha oficial CEP +/-1 día respecto del Excel'
+                                            if fecha_alternativa and not problemas else
+                                            '; '.join(problemas) if problemas else
+                                            'XML oficial localizado y cotejado')
                 reg['tiene_pdf'] = 'SÍ' if destino_pdf else 'NO'
                 reg['archivo_pdf'] = destino_pdf
                 reg['archivo_xml'] = str(Path('XML') / destino_xml.name)
-            if estado=='COINCIDE': resumen['Coincidencias con Excel']+=1
+            if estado in ('COINCIDE', 'COINCIDE_FECHA_ALTERNATIVA'): resumen['Coincidencias con Excel']+=1
             else: resumen['Requieren revisión']+=1
             fichas.append({
                 'estado':estado, 'fecha_cep':xd['fecha'], 'nombre_beneficiario_cep':xd['nombre_beneficiario'],
@@ -433,7 +474,8 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
         any(f['tiene_pdf'] == 'SÍ' and not (salida / f['archivo_pdf']).is_file() for f in fichas)):
         raise RuntimeError('Invariante documental: cada PDF/ debe corresponder a una fila SÍ en Datos CEP')
     resumen['SPEI en bitácora'] = len(rows)
-    resumen['SPEI con XML vinculado'] = sum(r.get('resultado_cep') in ('EXITO', 'REVISAR') for r in rows)
+    resumen['SPEI con XML vinculado'] = sum(r.get('resultado_cep') in ('EXITO', 'EXITO_FECHA_ALTERNATIVA', 'REVISAR') for r in rows)
+    resumen['SPEI CEP encontrados con fecha alternativa'] = sum(r.get('resultado_cep') == 'EXITO_FECHA_ALTERNATIVA' for r in rows)
     resumen['SPEI sin XML en ZIP'] = sum(r.get('resultado_cep') == 'NO_APARECE_EN_ZIP' for r in rows)
     resumen['Fallos reportados en resumen.txt'] = sum(r.get('resultado_cep') == 'FALLO_BUSQUEDA_CEP' for r in rows)
     crear_excel_sin_dependencias(salida/'resultado_CEP.xlsx', resumen, fichas, pendientes, registros=rows)
