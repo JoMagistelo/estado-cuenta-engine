@@ -321,7 +321,7 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                 continue
             reg, nota = _encontrar_movimiento(xd, csv_map)
             problemas = _validacion(xd, reg) if reg else []
-            if nota: problemas.append(nota)
+            if nota and rows: problemas.append(nota)
             if reg and not all(xd.get(c) for c in ('rastreo', 'fecha', 'monto')):
                 problemas.append('XML sin rastreo/fecha/monto suficientes para validar coincidencia')
             if not xd.get('nombre_beneficiario'):
@@ -361,7 +361,8 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                 ruta_pdf.write_bytes(z.read(pdf))
                 destino_pdf = str(Path('PDF')/ruta_pdf.name)
                 resumen['PDF renombrados'] += 1
-            estado = 'COINCIDE' if reg and not problemas else 'REVISAR'
+            estado = ('COINCIDE' if reg and not problemas else
+                      'SIN_CRUCE' if not rows and not problemas else 'REVISAR')
             if reg:
                 reg['resultado_cep'] = 'EXITO' if not problemas else 'REVISAR'
                 reg['resultado_detalle'] = '; '.join(problemas) if problemas else 'XML oficial localizado y cotejado'
@@ -406,6 +407,16 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                     if 'no se pudo localizar' in _normal(ln).lower():
                         resumen['Sin CEP encontrado']+=1
                         pendientes.append({'motivo':_texto(ln)[:200]})
+                        # Un resultado negativo de Banxico es un fallo de búsqueda,
+                        # NO una afirmación de que la transferencia haya fallado.
+                        rastreos = [r for r in rows
+                                   if r.get('clave_rastreo')
+                                   and re.search(r'(?<![A-Za-z0-9])' +
+                                                 re.escape(r['clave_rastreo']) +
+                                                 r'(?![A-Za-z0-9])', ln, re.IGNORECASE)]
+                        if len(rastreos) == 1 and rastreos[0].get('resultado_cep') == 'NO_APARECE_EN_ZIP':
+                            rastreos[0]['resultado_cep'] = 'FALLO_BUSQUEDA_CEP'
+                            rastreos[0]['resultado_detalle'] = _texto(ln)[:200]
         # Do not label absence in ZIP as definitely absent in Banxico.
     coincididos={_identificador(r['clave_rastreo_estado_cuenta']) for r in fichas if r.get('clave_rastreo_estado_cuenta')}
     for reg in rows:
@@ -424,6 +435,7 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
     resumen['SPEI en bitácora'] = len(rows)
     resumen['SPEI con XML vinculado'] = sum(r.get('resultado_cep') in ('EXITO', 'REVISAR') for r in rows)
     resumen['SPEI sin XML en ZIP'] = sum(r.get('resultado_cep') == 'NO_APARECE_EN_ZIP' for r in rows)
+    resumen['Fallos reportados en resumen.txt'] = sum(r.get('resultado_cep') == 'FALLO_BUSQUEDA_CEP' for r in rows)
     crear_excel_sin_dependencias(salida/'resultado_CEP.xlsx', resumen, fichas, pendientes, registros=rows)
     return {'resumen':resumen,'excel':str(salida/'resultado_CEP.xlsx'), 'carpeta':str(salida),
             'fichas':len(fichas),'pendientes':len(pendientes)}
