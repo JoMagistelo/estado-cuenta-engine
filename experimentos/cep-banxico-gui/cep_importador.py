@@ -169,7 +169,15 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes, registros
     ]
     import xml.etree.ElementTree as ET2
     ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    ET2.register_namespace('', ns)
     def q(t): return '{'+ns+'}'+t
+
+    def xml_valido(valor):
+        # XML 1.0: no incluir controles/surrogates ilegales en datos externos.
+        return ''.join(c for c in str(valor if valor is not None else '')
+                       if c in '\t\n\r' or 0x20 <= ord(c) <= 0xD7FF
+                       or 0xE000 <= ord(c) <= 0xFFFD
+                       or 0x10000 <= ord(c) <= 0x10FFFF)
     with zipfile.ZipFile(destino, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' + ''.join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for i in range(1,len(sheets)+1)) + '</Types>')
         z.writestr('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
@@ -178,11 +186,20 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes, registros
         z.writestr('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="10"/><name val="Aptos"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF164675"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf xfId="0" fontId="0" fillId="0" borderId="0"/><xf xfId="0" fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1"/><xf xfId="0" numFmtId="2" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs></styleSheet>')
         for i, (nombre, headers, body) in enumerate(sheets, 1):
             root = ET2.Element(q('worksheet'))
+            # Orden obligatorio en OOXML: dimension, sheetViews, sheetFormatPr, cols, sheetData.
+            # Cols antes de sheetViews producía la reparación de hojas en Microsoft Excel.
+            ET2.SubElement(root, q('dimension'), {
+                'ref': f'A1:{_col_name(len(headers))}{len(body)+1}'})
+            views = ET2.SubElement(root, q('sheetViews'))
+            view = ET2.SubElement(views, q('sheetView'), {'workbookViewId':'0'})
+            ET2.SubElement(view, q('pane'), {
+                'ySplit':'1', 'topLeftCell':'A2', 'activePane':'bottomLeft', 'state':'frozen'})
+            ET2.SubElement(root, q('sheetFormatPr'), {'defaultRowHeight':'15'})
             widths = ET2.SubElement(root, q('cols'))
             for j, h in enumerate(headers, 1):
-                ET2.SubElement(widths, q('col'), {'min':str(j), 'max':str(j), 'width':str(min(41,max(13,len(str(h))+3))), 'customWidth':'1'})
-            views = ET2.SubElement(root,q('sheetViews')); view = ET2.SubElement(views,q('sheetView'), {'workbookViewId':'0'})
-            ET2.SubElement(view,q('pane'), {'ySplit':'1','topLeftCell':'A2','activePane':'bottomLeft','state':'frozen'})
+                ET2.SubElement(widths, q('col'), {
+                    'min':str(j), 'max':str(j),
+                    'width':str(min(41,max(13,len(str(h))+3))), 'customWidth':'1'})
             data = ET2.SubElement(root, q('sheetData'))
             for rowno, vals in enumerate([headers]+body, 1):
                 rr = ET2.SubElement(data, q('row'), {'r':str(rowno), 'ht':'22' if rowno==1 else '18', 'customHeight':'1'})
@@ -194,7 +211,7 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes, registros
                         ET2.SubElement(c,q('v')).text = f'{importe:.2f}'
                     else:
                         c = ET2.SubElement(rr,q('c'), {'r':f'{_col_name(j)}{rowno}', 't':'inlineStr', 's':'1' if rowno==1 else '0'})
-                        ET2.SubElement(ET2.SubElement(c,q('is')),q('t')).text = ''.join(ch for ch in str(val or '') if ch in '\t\n\r' or ord(ch)>=32)
+                        ET2.SubElement(ET2.SubElement(c,q('is')),q('t')).text = xml_valido(val)
             if body:
                 ET2.SubElement(root, q('autoFilter'), {'ref':f'A1:{_col_name(len(headers))}{len(body)+1}'})
             z.writestr(f'xl/worksheets/sheet{i}.xml', ET2.tostring(root, encoding='utf-8', xml_declaration=True))
