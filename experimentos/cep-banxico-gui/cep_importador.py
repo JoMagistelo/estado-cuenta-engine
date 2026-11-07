@@ -164,7 +164,7 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes):
         z.writestr('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
         z.writestr('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + ''.join(f'<sheet name="{name}" sheetId="{i}" r:id="rId{i}"/>' for i,(name,_,__) in enumerate(sheets,1)) + '</sheets></workbook>')
         z.writestr('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + ''.join(f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>' for i in range(1,4)) + '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
-        z.writestr('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="10"/><name val="Aptos"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF164675"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf xfId="0" fontId="0" fillId="0" borderId="0"/><xf xfId="0" fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1"/></cellXfs></styleSheet>')
+        z.writestr('xl/styles.xml', '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="10"/><name val="Aptos"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF164675"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf xfId="0" fontId="0" fillId="0" borderId="0"/><xf xfId="0" fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1"/><xf xfId="0" numFmtId="2" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs></styleSheet>')
         for i, (nombre, headers, body) in enumerate(sheets, 1):
             root = ET2.Element(q('worksheet'))
             widths = ET2.SubElement(root, q('cols'))
@@ -177,8 +177,13 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes):
                 rr = ET2.SubElement(data, q('row'), {'r':str(rowno), 'ht':'22' if rowno==1 else '18', 'customHeight':'1'})
                 for j, val in enumerate(vals, 1):
                     # Inline strings are never interpreted as formulas.
-                    c = ET2.SubElement(rr,q('c'), {'r':f'{_col_name(j)}{rowno}', 't':'inlineStr', 's':'1' if rowno==1 else '0'})
-                    ET2.SubElement(ET2.SubElement(c,q('is')),q('t')).text = ''.join(ch for ch in str(val or '') if ch in '\t\n\r' or ord(ch)>=32)
+                    importe = _dinero(val) if rowno>1 and headers[j-1] in ('monto_cep','monto_estado_cuenta') else None
+                    if importe is not None:
+                        c = ET2.SubElement(rr,q('c'), {'r':f'{_col_name(j)}{rowno}', 's':'2'})
+                        ET2.SubElement(c,q('v')).text = f'{importe:.2f}'
+                    else:
+                        c = ET2.SubElement(rr,q('c'), {'r':f'{_col_name(j)}{rowno}', 't':'inlineStr', 's':'1' if rowno==1 else '0'})
+                        ET2.SubElement(ET2.SubElement(c,q('is')),q('t')).text = ''.join(ch for ch in str(val or '') if ch in '\t\n\r' or ord(ch)>=32)
             if body:
                 ET2.SubElement(root, q('autoFilter'), {'ref':f'A1:{_col_name(len(headers))}{len(body)+1}'})
             z.writestr(f'xl/worksheets/sheet{i}.xml', ET2.tostring(root, encoding='utf-8', xml_declaration=True))
@@ -273,6 +278,8 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
                 problemas.append('XML sin rastreo/fecha/monto suficientes para validar coincidencia')
             if not xd.get('nombre_beneficiario'):
                 problemas.append('XML no aporta nombre de beneficiario reconocible')
+            if reg and reg.get('tipo') == 'RECIBIDO' and not xd.get('nombre_ordenante'):
+                problemas.append('SPEI recibido: nombre de ordenante no reconocido en XML')
             # An XML without identifiable core fields is not a verified extracted CEP.
             if not any(xd.get(k) for k in ('rastreo','nombre_beneficiario','nombre_ordenante')):
                 problemas.append('XML sin campos CEP reconocibles')
@@ -283,10 +290,14 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
             pdf = asociados[0] if len(asociados)==1 else None
             if len(asociados)>1: problemas.append('PDF ambiguos para XML')
             if not pdf: resumen['XML sin PDF'] += 1
-            nombre = _seguro_nombre(xd['nombre_beneficiario'] or xd['nombre_ordenante'])
+            tipo = reg.get('tipo', '') if reg else ''
+            # Contraparte real: salidas -> beneficiario, entradas -> ordenante.
+            nombre_contraparte = xd['nombre_ordenante'] if tipo == 'RECIBIDO' else xd['nombre_beneficiario']
+            nombre = _seguro_nombre(nombre_contraparte)
             periodo = xd['fecha'] or (reg.get('fecha') if reg else '') or 'SIN_FECHA'
+            monto_nombre = _seguro_nombre(xd['monto'] or (reg.get('monto') if reg else '') or 'SIN_MONTO')
             rastreo = _seguro_nombre(xd['rastreo'] or (reg.get('clave_rastreo') if reg else '') or Path(info.filename).stem)[-26:]
-            base = f'{periodo}__{nombre}__{rastreo}'
+            base = f'{periodo}__{tipo or "TIPO_INCIERTO"}__{nombre}__{monto_nombre}__{rastreo}'
             destino_xml = xml_dir / (base + '.xml')
             contador = 2
             while destino_xml.exists():
