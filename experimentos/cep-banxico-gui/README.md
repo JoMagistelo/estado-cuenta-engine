@@ -67,3 +67,24 @@ La carpeta **PDF/** guarda exclusivamente PDFs emparejados con XML: su cantidad 
 La hoja **Cruce Estado Cuenta** contiene exclusivamente metadatos de cotejo y los campos del estado bancario, incluido cualquier alias. **No se mezclan aliases con los nombres oficiales** de la hoja **Datos CEP**. Otra hoja **Pendientes** informa registros sin comprobante identificable y los casos a revisar.
 
 El sistema **no realiza una validación criptográfica del sello** ni recupera aún automáticamente los comprobantes del servidor Banxico. Sólo organiza los archivos obtenidos mediante el servicio oficial.
+
+## Obtener CEP y exportar ZIP final (flujo guiado)
+La ventana ahora muestra **OBTENER CEP EN BANXICO Y EXPORTAR ZIP FINAL** como acción principal.
+Selecciona tu Excel y pulsa ese botón. El programa identifica los SPEI y guarda el TXT
+para la consulta por lotes. Abre el portal oficial https://www.banxico.org.mx/cep-scl/inicio.do
+y carga allí el TXT, escribe tu correo y solicita **PDF y XML**. Completa personalmente
+las verificaciones que aparezcan. Conserva el token y recupera el ZIP oficial en
+https://www.banxico.org.mx/cep-scl/inicio2.do. Al regresar a la aplicación,
+selecciona el ZIP descargado.
+
+La aplicación creará un **CEP_BANXICO_FINAL_*.zip** que contiene **PDF/**,
+**XML/**, **resultado_CEP.xlsx**, el resumen oficial y **REVISION/** si corresponde.
+Verifica que cada PDF en PDF/ tenga una fila marcada SÍ y que cada XML corresponda
+a una fila en Datos CEP. Si solamente recuperó un XML, lo conserva y marca NO.
+El ZIP oficial original NO se modifica.
+
+**Límite confirmado:** Banxico exige correo y token; su portal puede exigir CAPTCHA.
+La aplicación todavía NO completa esa interacción de manera automática ni elude
+controles. El botón inicia un flujo guiado y empaqueta los resultados oficiales
+una vez que se descargaron. Para más de 500 operaciones se generan varios TXT
+y esta versión procesa un ZIP de Banxico por vez.
