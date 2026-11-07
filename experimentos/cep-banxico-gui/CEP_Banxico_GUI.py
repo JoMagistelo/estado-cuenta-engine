@@ -18,7 +18,7 @@ from cep_paquete import exportar_zip_cep
 class Aplicacion(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('CEP Banxico | Consulta paso a paso')
+        self.title('CEP Banxico | Consulta paso a paso | Excel corregido')
         self.geometry('1200x825')
         self.minsize(930, 690)
         self.configure(bg='#f4f7fb')
