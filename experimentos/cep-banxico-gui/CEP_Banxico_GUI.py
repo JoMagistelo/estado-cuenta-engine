@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from cep_core import INDIVIDUAL, LOTES, analizar, exportar, diagnostico_web
 from cep_importador import procesar_zip
+from cep_paquete import exportar_zip_cep
 
 
 class Aplicacion(tk.Tk):
@@ -41,9 +42,10 @@ class Aplicacion(tk.Tk):
         ttk.Label(config, text='CLABE del evaluado (opcional; usa la hoja Datos de la Cuenta cuando existe):').pack(side='left')
         ttk.Entry(config, textvariable=self.clabe, width=25).pack(side='left', padx=10)
         ttk.Button(config, text='Analizar movimientos', command=self.analizar).pack(side='left', padx=(2, 8))
-        ttk.Button(config, text='Generar archivos', command=self.guardar).pack(side='left')
+        ttk.Button(config, text='Preparar TXT (opcional)', command=self.guardar).pack(side='left')
         ttk.Label(area, textvariable=self.resumen, foreground='#0d6374', font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(6, 10))
-        ttk.Button(area, text='IMPORTAR ZIP DE BANXICO → PDF RENOMBRADOS + EXCEL CON NOMBRES', command=self.importar_zip).pack(anchor='w', pady=(0, 8))
+        ttk.Button(area, text='OBTENER CEP EN BANXICO Y EXPORTAR ZIP FINAL', command=self.obtener_y_exportar_zip).pack(anchor='w', pady=(0, 8))
+        ttk.Button(area, text='Finalizar ZIP oficial ya descargado', command=self.importar_zip).pack(anchor='w', pady=(0, 8))
         tb = ttk.Frame(area); tb.pack(fill='x', pady=(0, 8))
         for label, fun in [('Abrir CEP individual', lambda: webbrowser.open(INDIVIDUAL)),
                            ('Abrir CEP por lotes', lambda: webbrowser.open(LOTES)),
@@ -69,7 +71,7 @@ class Aplicacion(tk.Tk):
         vs.pack(side='right', fill='y'); self.tabla.configure(yscrollcommand=vs.set)
         hs = ttk.Scrollbar(area, orient='horizontal', command=self.tabla.xview)
         hs.pack(fill='x'); self.tabla.configure(xscrollcommand=hs.set)
-        ttk.Label(area, text='Paso 1: genera TXT. Paso 2: descarga ZIP oficial de Banxico (PDF y XML). Paso 3: impórtalo aquí para renombrar y crear el Excel.', style='Sub.TLabel').pack(anchor='w', pady=(10, 0))
+        ttk.Label(area, text='Salida: ZIP final con PDF + XML + resultado_CEP.xlsx. Banxico requiere correo, token y posiblemente CAPTCHA.', style='Sub.TLabel').pack(anchor='w', pady=(10, 0))
 
     def seleccionar(self):
         filename = filedialog.askopenfilename(title='Selecciona Excel de Estado Cuenta Engine',
@@ -105,9 +107,51 @@ class Aplicacion(tk.Tk):
         messagebox.showinfo('Archivos preparados',
           f"Listos: {info['listos']} | Revisión: {info['pendientes']} | Lotes TXT: {info['lotes']}\n\n{carpeta}\n\nLos TXT deben cargarse manualmente en Banxico; no son CEP descargados.")
 
-    def importar_zip(self):
-        ruta = filedialog.askopenfilename(title='Selecciona ZIP de resultados descargado de Banxico',
-                                          filetypes=[('Archivo ZIP', '*.zip')])
+    def obtener_y_exportar_zip(self):
+        """Asistente guiado: prepara lote, abre Banxico y empaqueta el ZIP oficial descargado."""
+        if not self.resultados:
+            self.analizar()
+            if not self.resultados:
+                return
+        listos = sum(reg.get('estado') == 'LISTO' for reg in self.resultados)
+        if listos < 2:
+            messagebox.showwarning('Sin lote suficiente',
+                'Banxico solicita entre 2 y 500 movimientos por lote. No hay suficientes operaciones listas.')
+            return
+        destino = filedialog.askdirectory(title='Elige la carpeta para guardar tu ZIP final de CEP')
+        if not destino: return
+        carpeta = Path(destino) / ('CEP_PREPARADOS_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
+        try:
+            info = exportar(self.resultados, carpeta)
+        except Exception as e:
+            messagebox.showerror('No se pudo preparar el lote', str(e)); return
+        self.carpeta = carpeta
+        lotes = sorted(carpeta.glob('lote_*.txt'))
+        if not lotes:
+            messagebox.showwarning('No se generó lote', 'No hay suficientes operaciones válidas.')
+            return
+        if len(lotes) > 1:
+            messagebox.showwarning('Varios lotes',
+                f'Se generaron {len(lotes)} archivos TXT. Esta prueba guiada procesará un ZIP de Banxico por vez. '
+                'Los demás lotes quedan en la carpeta PREPARADOS para procesarlos después.')
+        messagebox.showinfo('Consultar CEP oficiales — paso 1',
+            f'Se prepararon {info["listos"]} transferencias.\\n\\n'
+            f'Archivo a cargar en Banxico:\\n{lotes[0]}\\n\\n'
+            'En Banxico selecciona PDF y XML (AMBOS), indica tu correo, '
+            'carga el TXT y guarda el token. El ZIP lo emite Banxico, no esta aplicación.')
+        webbrowser.open(LOTES)
+        messagebox.showinfo('Consultar CEP oficiales — paso 2',
+            'Completa los pasos en Banxico, consulta el resultado con tu correo y token '
+            'y descarga el ZIP oficial. Si aparece CAPTCHA, resuélvelo personalmente.\\n\\n'
+            'Cuando el ZIP esté descargado, vuelve a esta ventana y pulsa Aceptar '
+            'para seleccionar el archivo y exportar el ZIP final.')
+        self.importar_zip(destino_base=destino)
+
+    def importar_zip(self, destino_base=None):
+        descargas = Path.home() / 'Downloads'
+        ruta = filedialog.askopenfilename(title='Selecciona el ZIP OFICIAL de Banxico que acabas de descargar',
+                                          initialdir=str(descargas if descargas.is_dir() else Path.home()),
+                                          filetypes=[('ZIP oficial de Banxico', '*.zip')])
         if not ruta: return
         consultas = self.carpeta / 'consultas_individuales.csv' if self.carpeta else None
         if not consultas or not consultas.is_file():
@@ -116,17 +160,24 @@ class Aplicacion(tk.Tk):
             consultas = Path(ruta_csv) if ruta_csv else None
         if not consultas or not consultas.is_file():
             messagebox.showwarning('Falta CSV', 'Selecciona consultas_individuales.csv para vincular los nombres con el estado de cuenta.'); return
-        destino = filedialog.askdirectory(title='Elige la carpeta donde guardar los CEP organizados')
+        destino = destino_base or filedialog.askdirectory(title='Dónde guardar el ZIP final con PDF, XML y Excel')
         if not destino: return
-        salida = Path(destino) / ('CEP_RECUPERADOS_' + datetime.now().strftime('%Y%m%d_%H%M%S'))
+        fecha = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        salida = Path(destino) / ('CEP_RECUPERADOS_' + fecha)
+        paquete = Path(destino) / ('CEP_BANXICO_FINAL_' + fecha + '.zip')
         try:
             info = procesar_zip(ruta, consultas, salida)
+            paquete_info = exportar_zip_cep(salida, paquete)
         except Exception as e:
-            messagebox.showerror('No se pudo procesar ZIP', str(e)); return
+            messagebox.showerror('No se pudo exportar ZIP final', str(e)); return
         self.carpeta = salida
         r = info['resumen']
         self.resumen.set(f"Datos CEP: {r['Registros en Datos CEP']} | Con PDF: {r['Registros con PDF']} | Sin PDF: {r['XML sin PDF']} | Revisar: {r['Requieren revisión']}")
-        messagebox.showinfo('CEP organizados',
+        messagebox.showinfo('ZIP final exportado',
+            f"Archivo ZIP final: {paquete_info['zip']}\n"
+            f"PDF vinculados: {paquete_info['pdf_vinculados']}\n"
+            f"XML sin PDF: {paquete_info['xml_sin_pdf']}\n"
+            f"Filas de Datos CEP: {paquete_info['registros_cep']}\n\n"
             f"Filas Datos CEP: {r['Registros en Datos CEP']}\n"
             f"Con PDF (SÍ): {r['Registros con PDF']}\n"
             f"Sin PDF (NO): {r['XML sin PDF']}\n"
