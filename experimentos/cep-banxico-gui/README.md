@@ -31,3 +31,25 @@ Los códigos bancarios incluidos son un catálogo inicial, no una enumeración e
 `python -m unittest discover -s tests -v`
 
 Sitios oficiales: https://www.banxico.org.mx/cep/ y https://www.banxico.org.mx/cep-scl/inicio.do
+
+## Nuevo: Importar ZIP de Banxico y generar Excel de CEP
+
+**Importante:** este software **no fabrica ni descarga automáticamente** los CEP. El botón «Generar archivos» prepara el TXT para que realices la consulta oficial en Banxico, donde se requiere correo y token. Consulta por lotes: https://www.banxico.org.mx/cep-scl/ ; consulta de resultados: https://www.banxico.org.mx/cep-scl/inicio2.do. Pide formato **PDF y XML** y conserva el ZIP original. Sólo los CEP localizados por Banxico vendrán en él.
+
+1. Abre `CEP_Banxico_GUI.py`, selecciona el Excel y pulsa «Analizar movimientos» → «Generar archivos».
+2. En «Abrir CEP por lotes», carga `lote_001.txt`, indica tu correo, elige **ambos formatos (PDF y XML)** y anota el token.
+3. Obtén el ZIP de resultados por el correo/token en la página oficial.
+4. En la aplicación pulsa **«Importar ZIP con PDF + XML»**. Selecciona el ZIP, después `consultas_individuales.csv` generado por el programa (si es necesario) y la carpeta de destino.
+5. La aplicación crea una carpeta `CEP_RECUPERADOS_...` con `PDF/`, `XML/`, `resultado_CEP.xlsx` (hojas `Resumen`, `Datos CEP`, `Pendientes`) y la copia del `resumen.txt` original de Banxico cuando está presente.
+
+**Criterios de integridad documental:** nombres de `nombre_beneficiario_cep` y `nombre_ordenante_cep` se extraen del XML, **nunca se inventan a partir del estado**; el nombre del estado original se conserva en otra columna. La coincidencia exige clave de rastreo, fecha y monto reconocibles; cuando los datos disponibles contradicen al estado, se marca `REVISAR`. El XML no sustituye la validación criptográfica oficial del sello; esta utilidad hace conciliación, no certificación legal. Los PDF sin XML se conservan con prefijo `SIN_XML_`, sin atribuirles un nombre. Los documentos originales de Banxico **no son alterados**. Si algún XML tiene un formato no reconocido, se etiqueta para revisión y hace falta una muestra despersonalizada para agregar soporte seguro.
+
+**Límites:** no garantiza encontrar 92 comprobantes; las 92 filas listas son sólo consultas preparadas, no respuestas. Se requiere correo/token y supervisión del usuario para descargar el ZIP oficial, sin eludir captchas. No debe subirse a GitHub ninguna descarga real, CLABE, XLSX del expediente, PDF ni XML.
+
+## Pruebas técnicas
+
+```powershell
+py -m unittest discover -s tests -v
+```
+
+Se incluyen pruebas con comprobantes sintéticos (sin datos de personas reales) para comprobar extracción de XML, copia renombrada PDF, generación de Excel, conciliación monto/fecha/rastreo, protección de rutas y ausencia de XML.
