@@ -45,6 +45,27 @@ class TestImportador(unittest.TestCase):
                 self.assertIn('xl/worksheets/sheet2.xml', book.namelist())
                 self.assertIn(b'Beneficiario',book.read('xl/worksheets/sheet2.xml'))
             self.assertEqual(original,(d/'descarga.zip').read_bytes())
+            self.assertIn('ENVIADO',pdfs[0].name)
+            self.assertIn('10000.00',pdfs[0].name)
+
+    def test_recibido_se_nombra_con_ordenante_no_titular(self):
+        with tempfile.TemporaryDirectory() as d:
+            d=Path(d)
+            self.consultas(d/'c.csv')
+            # La cuenta/beneficiario puede ser la persona evaluada que recibió el SPEI.
+            with (d/'c.csv').open('r',encoding='utf-8-sig',newline='') as f:
+                rows=list(csv.DictReader(f))
+            rows[0]['tipo']='RECIBIDO'
+            with (d/'c.csv').open('w',encoding='utf-8-sig',newline='') as f:
+                w=csv.DictWriter(f,fieldnames=rows[0].keys());w.writeheader();w.writerows(rows)
+            with zipfile.ZipFile(d/'z.zip','w') as z:
+                z.writestr('001.xml', XML);z.writestr('001.pdf',b'%PDF-1.4')
+            result=procesar_zip(d/'z.zip',d/'c.csv', d/'out')
+            nombres=[x.name for x in (d/'out'/'PDF').glob('*.pdf')]
+            self.assertEqual(len(nombres),1)
+            self.assertIn('REMITENTE_DE_PRUEBA', nombres[0])
+            self.assertNotIn('BENEFICIARIO_COMPANIA', nombres[0])
+            self.assertEqual(result['resumen']['Coincidencias con Excel'],1)
 
     def test_monto_distinto_marca_revision(self):
         with tempfile.TemporaryDirectory() as d:
