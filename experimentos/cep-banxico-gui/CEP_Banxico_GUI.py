@@ -199,7 +199,7 @@ class Aplicacion(tk.Tk):
         self.carpeta_solicitud = carpeta
         self.carpeta = carpeta
         lotes = sorted(carpeta.glob('lote_*.txt'))
-        self.ruta_lote.set(f'{len(lotes)} TXT + 1 Excel en: {carpeta}')
+        self.ruta_lote.set(f"1 Excel, {len(lotes)} TXT principales y {info['reintentos']} TXT ±1 día")
         self._actualizar_botones()
         if not lotes:
             messagebox.showwarning('Sin archivo TXT', 'No hay al menos 2 SPEI completos. '
@@ -207,10 +207,12 @@ class Aplicacion(tk.Tk):
             return
         messagebox.showinfo('Paso 3 completado',
             f"Listos: {info['listos']}  |  Revisión: {info['pendientes']}\n"
-            f"TXT generados: {len(lotes)}\n\n"
+            f"TXT principales: {len(lotes)}  |  TXT de reintento ±1 día: {info['reintentos']}\n\n"
             f'Archivo para Banxico:\n{lotes[0]}\n\n'
             'También se creó un solo resultado_CEP.xlsx, con todos los SPEI.\n\n'
-            'Banxico acepta el TXT, NO el ZIP final. Ahora usa el botón 4.')
+            'IMPORTANTE: carga primero lote_001.txt; los reintento_fecha_*.txt son OPCIONALES '\
+            'y sólo deben utilizarse si no se encuentra algún CEP con la fecha original.\n\n'
+            'Banxico acepta TXT, NO el ZIP final. Ahora usa el botón 4.')
 
     def abrir_carga_banxico(self):
         carpeta = self.carpeta_solicitud
@@ -220,8 +222,10 @@ class Aplicacion(tk.Tk):
             return
         messagebox.showinfo('Paso 4: subir TXT en Banxico',
             f'Selecciona este archivo en Banxico:\n{lotes[0]}\n\n'
-            'Elige ambos formatos: PDF + XML. Ingresa tu correo y guarda el token. '
-            'Si aparece CAPTCHA, complétalo en el navegador.')
+            'Carga primero el TXT original, no el de reintentos. Elige PDF + XML. '
+            'Ingresa tu correo y guarda el token. Si falla la fecha del estado, '
+            'puedes probar reintento_fecha_*.txt (−1/+1 día) en otra consulta. '
+            'Cada carga tendrá su propio token. Si aparece CAPTCHA, complétalo manualmente.')
         webbrowser.open(LOTES)
 
     def abrir_descarga_banxico(self):
