@@ -53,3 +53,7 @@ py -m unittest discover -s tests -v
 ```
 
 Se incluyen pruebas con comprobantes sintéticos (sin datos de personas reales) para comprobar extracción de XML, copia renombrada PDF, generación de Excel, conciliación monto/fecha/rastreo, protección de rutas y ausencia de XML.
+
+### Nombres de los archivos y múltiples bancos
+
+Los PDF se nombran con `FECHA__TIPO__CONTRAPARTE__MONTO__RASTREO.pdf`. En un **cargo/enviado**, contraparte es el **beneficiario del XML**; en un **abono/recibido**, es el **ordenante del XML**, evitando crear cientos de PDF con el nombre repetido del evaluado. Si no hay nombre verificable en el XML se indica `SIN_NOMBRE_XML`. Ambos nombres del CEP se guardan por separado en el Excel. El catálogo local de instituciones está en `banxico_catalogo.py` y se nutre de la [lista oficial de participantes](https://www.banxico.org.mx/cep-scl/listaInstituciones.do); se ampliará por pruebas de cada parser de Estado Cuenta Engine, no por suposiciones.
