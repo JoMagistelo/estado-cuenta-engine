@@ -26,9 +26,9 @@ class TestExcelValido(unittest.TestCase):
                      'monto_cep': '55.30', 'tiene_pdf': 'NO',
                      'archivo_xml': 'XML/otro.xml'},
                 ],
+                [{'clave_rastreo': 'FALLIDO', 'motivo': 'No encontrado'}],
                 [{'clave_rastreo': 'ABCDEF', 'estado': 'LISTO',
-                  'monto': '1000.20', 'beneficiario': 'ALIAS NO OFICIAL'}],
-                [{'clave_rastreo': 'FALLIDO', 'motivo': 'No encontrado'}]
+                  'monto': '1000.20', 'nombre_beneficiario': 'ALIAS NO OFICIAL'}]
             )
             self.assertTrue(zipfile.is_zipfile(archivo))
             with zipfile.ZipFile(archivo) as z:
