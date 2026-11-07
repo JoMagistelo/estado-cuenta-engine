@@ -66,7 +66,7 @@ class Aplicacion(tk.Tk):
 
         fila3 = ttk.Frame(pasos)
         fila3.pack(fill='x', pady=4)
-        self.btn_txt = ttk.Button(fila3, text='3. Generar TXT para Banxico', command=self.guardar)
+        self.btn_txt = ttk.Button(fila3, text='3. Generar TXT + Excel SPEI', command=self.guardar)
         self.btn_txt.pack(side='left')
         ttk.Label(fila3, textvariable=self.ruta_lote, style='Sub.TLabel').pack(side='left', padx=12)
         ttk.Button(fila3, text='Abrir carpeta', command=self.abrir_carpeta).pack(side='right')
@@ -178,7 +178,7 @@ class Aplicacion(tk.Tk):
             self.tabla.insert('', 'end', iid=str(i),
                               values=[r.get(c, '') for c in self.cols],
                               tags=('listo' if r['estado'] == 'LISTO' else 'pendiente',))
-        listos = sum(r.get('estado') == 'LISTO' for r in registros)
+        listos = sum(bool(r.get('linea_lote')) for r in registros)
         self.resumen.set(f'Movimientos: {total}  |  SPEI candidatos: {len(registros)}  |  '
                          f'Listos: {listos}  |  Por revisar: {len(registros)-listos}')
         self._actualizar_botones()
@@ -199,7 +199,7 @@ class Aplicacion(tk.Tk):
         self.carpeta_solicitud = carpeta
         self.carpeta = carpeta
         lotes = sorted(carpeta.glob('lote_*.txt'))
-        self.ruta_lote.set(f'{len(lotes)} TXT en: {carpeta}')
+        self.ruta_lote.set(f'{len(lotes)} TXT + 1 Excel en: {carpeta}')
         self._actualizar_botones()
         if not lotes:
             messagebox.showwarning('Sin archivo TXT', 'No hay al menos 2 SPEI completos. '
@@ -209,6 +209,7 @@ class Aplicacion(tk.Tk):
             f"Listos: {info['listos']}  |  Revisión: {info['pendientes']}\n"
             f"TXT generados: {len(lotes)}\n\n"
             f'Archivo para Banxico:\n{lotes[0]}\n\n'
+            'También se creó un solo resultado_CEP.xlsx, con todos los SPEI.\n\n'
             'Banxico acepta el TXT, NO el ZIP final. Ahora usa el botón 4.')
 
     def abrir_carga_banxico(self):
@@ -246,7 +247,7 @@ class Aplicacion(tk.Tk):
         # El cotejo bancario es opcional. Ningún nombre/RFC se toma del CSV.
         consultas = None
         if not independiente and self.carpeta_solicitud:
-            candidato = self.carpeta_solicitud / 'consultas_individuales.csv'
+            candidato = self.carpeta_solicitud / 'resultado_CEP.xlsx'
             if candidato.is_file():
                 consultas = candidato
         nombre = 'CEP_BANXICO_FINAL_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f') + '.zip'
