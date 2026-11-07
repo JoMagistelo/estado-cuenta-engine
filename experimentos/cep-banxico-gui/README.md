@@ -57,3 +57,13 @@ Se incluyen pruebas con comprobantes sintéticos (sin datos de personas reales) 
 ### Nombres de los archivos y múltiples bancos
 
 Los PDF se nombran con `FECHA__TIPO__CONTRAPARTE__MONTO__RASTREO.pdf`. En un **cargo/enviado**, contraparte es el **beneficiario del XML**; en un **abono/recibido**, es el **ordenante del XML**, evitando crear cientos de PDF con el nombre repetido del evaluado. Si no hay nombre verificable en el XML se indica `SIN_NOMBRE_XML`. Ambos nombres del CEP se guardan por separado en el Excel. El catálogo local de instituciones está en `banxico_catalogo.py` y se nutre de la [lista oficial de participantes](https://www.banxico.org.mx/cep-scl/listaInstituciones.do); se ampliará por pruebas de cada parser de Estado Cuenta Engine, no por suposiciones.
+
+## Una sola hoja de datos CEP (PDF SÍ/NO)
+
+El Excel de resultados incluye una hoja **Datos CEP** (una fila por XML de CEP interpretable), con los **nombres y RFC provenientes únicamente del XML de Banxico**. La columna `tiene_pdf` indica **SÍ** cuando se conservó un PDF vinculado a ese XML y **NO** cuando sólo se recuperó el XML. De ese modo, ninguna información oficial del XML se pierde por no tener PDF.
+
+La carpeta **PDF/** guarda exclusivamente PDFs emparejados con XML: su cantidad debe coincidir con las filas `tiene_pdf = SÍ`. La carpeta **XML/** conserva un XML por cada fila de **Datos CEP**, sea SÍ o NO. Los PDF sin XML válido y documentos ilegibles se conservan por separado en **REVISION/**, para no adjudicarles nombres o RFC sin sustento.
+
+La hoja **Cruce Estado Cuenta** contiene exclusivamente metadatos de cotejo y los campos del estado bancario, incluido cualquier alias. **No se mezclan aliases con los nombres oficiales** de la hoja **Datos CEP**. Otra hoja **Pendientes** informa registros sin comprobante identificable y los casos a revisar.
+
+El sistema **no realiza una validación criptográfica del sello** ni recupera aún automáticamente los comprobantes del servidor Banxico. Sólo organiza los archivos obtenidos mediante el servicio oficial.
