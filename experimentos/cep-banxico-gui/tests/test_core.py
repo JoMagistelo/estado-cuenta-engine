@@ -2,7 +2,7 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
-from cep_core import analizar, clabe_valida, fecha_operacion, exportar, preparar, clave
+from cep_core import analizar, clabe_valida, fecha_operacion, exportar, preparar, clave, xlsx_hojas
 from datetime import date
 
 
@@ -66,6 +66,33 @@ class Tests(unittest.TestCase):
             self.assertEqual((num,len(registros),registros[0]['estado']),(1,1,'LISTO'))
             out=exportar(registros,Path(d)/'salida')
             self.assertEqual(out['lotes'],0)
-            self.assertTrue((Path(d)/'salida'/'consultas_individuales.csv').exists())
+            libro = Path(d)/'salida'/'resultado_CEP.xlsx'
+            self.assertTrue(libro.exists())
+            hojas = xlsx_hojas(libro)
+            self.assertIn('SPEI', hojas)
+            self.assertIn('Datos CEP', hojas)
+            self.assertEqual(len(hojas['SPEI'])-1, 1)
+            self.assertEqual(hojas['SPEI'][1][hojas['SPEI'][0].index('resultado_cep')], 'SIN_LOTE')
+            self.assertFalse(list((Path(d)/'salida').glob('*.csv')))
+
+    def test_exportar_un_excel_dos_spei_a_txt_y_pendiente_a_bitacora(self):
+        with tempfile.TemporaryDirectory() as t:
+            p=Path(t)
+            r1=preparar(self.fila(), self.cols, 2, self.meta)
+            r2=preparar(self.fila(**{'Clave de Rastreo':'PRUEBASINTETICA0002', 'Cargo':300}),
+                         self.cols, 3, self.meta)
+            r3=preparar(self.fila(**{'CLABE del Beneficiario':'', 'Clave de Rastreo':'PRUEBASINTETICA0003'}),
+                         self.cols, 4, self.meta)
+            self.assertEqual(r3['estado'], 'PENDIENTE')
+            res=exportar([r1,r2,r3],p/'salida')
+            self.assertEqual((res['lotes'],res['listos'],res['pendientes']), (1,2,1))
+            self.assertEqual(len((p/'salida'/'lote_001.txt').read_text().splitlines()),2)
+            self.assertEqual(len(list((p/'salida').glob('*.xlsx'))),1)
+            self.assertFalse(list((p/'salida').glob('*.csv')))
+            sheets=xlsx_hojas(p/'salida'/'resultado_CEP.xlsx')
+            self.assertEqual(len(sheets['SPEI'])-1,3)
+            col=sheets['SPEI'][0].index('resultado_cep')
+            states=[r[col] for r in sheets['SPEI'][1:]]
+            self.assertEqual(states,['PENDIENTE_BANXICO','PENDIENTE_BANXICO','NO_CONSULTABLE'])
 
 if __name__=='__main__': unittest.main()
