@@ -215,6 +215,25 @@ def crear_excel_sin_dependencias(destino, resumen, fichas, pendientes, registros
             if body:
                 ET2.SubElement(root, q('autoFilter'), {'ref':f'A1:{_col_name(len(headers))}{len(body)+1}'})
             z.writestr(f'xl/worksheets/sheet{i}.xml', ET2.tostring(root, encoding='utf-8', xml_declaration=True))
+    # Bloquear un XLSX mal estructurado antes de entregarlo: una hoja mal
+    # ordenada puede parsearse como XML pero Excel la elimina al reparar.
+    with zipfile.ZipFile(destino, 'r') as libro:
+        archivo_malo = libro.testzip()
+        if archivo_malo:
+            raise ValueError(f'Excel generado con error ZIP: {archivo_malo}')
+        rel = ET2.fromstring(libro.read('xl/workbook.xml'))
+        lista_hojas = rel.find(q('sheets'))
+        if lista_hojas is None or len(lista_hojas) != len(sheets):
+            raise ValueError('Excel generado con estructura de hojas incorrecta')
+        for numero in range(1, len(sheets) + 1):
+            nombre_xml = f'xl/worksheets/sheet{numero}.xml'
+            hoja = ET2.fromstring(libro.read(nombre_xml))
+            orden = [n.tag.rsplit('}', 1)[-1] for n in hoja]
+            obligatorios = ['dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData']
+            if orden[:5] != obligatorios:
+                raise ValueError(f'Excel no válido: orden OOXML incorrecto en {nombre_xml}')
+            if 'autoFilter' in orden and orden.index('autoFilter') < orden.index('sheetData'):
+                raise ValueError(f'Excel no válido: autoFilter fuera de orden en {nombre_xml}')
     return Path(destino)
 
 
