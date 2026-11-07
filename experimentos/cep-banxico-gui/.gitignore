@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+SALIDA*/
+CEP_20*/
+lote_*.txt
+consultas_individuales.csv
+pendientes_revision.csv
+*.xlsx
+*.xls
+*.zip
