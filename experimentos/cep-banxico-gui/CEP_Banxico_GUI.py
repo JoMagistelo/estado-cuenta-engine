@@ -135,14 +135,14 @@ class Aplicacion(tk.Tk):
                 f'Se generaron {len(lotes)} archivos TXT. Esta prueba guiada procesará un ZIP de Banxico por vez. '
                 'Los demás lotes quedan en la carpeta PREPARADOS para procesarlos después.')
         messagebox.showinfo('Consultar CEP oficiales — paso 1',
-            f'Se prepararon {info["listos"]} transferencias.\\n\\n'
-            f'Archivo a cargar en Banxico:\\n{lotes[0]}\\n\\n'
+            f'Se prepararon {info["listos"]} transferencias.\n\n'
+            f'Archivo a cargar en Banxico:\n{lotes[0]}\n\n'
             'En Banxico selecciona PDF y XML (AMBOS), indica tu correo, '
             'carga el TXT y guarda el token. El ZIP lo emite Banxico, no esta aplicación.')
         webbrowser.open(LOTES)
         messagebox.showinfo('Consultar CEP oficiales — paso 2',
             'Completa los pasos en Banxico, consulta el resultado con tu correo y token '
-            'y descarga el ZIP oficial. Si aparece CAPTCHA, resuélvelo personalmente.\\n\\n'
+            'y descarga el ZIP oficial. Si aparece CAPTCHA, resuélvelo personalmente.\n\n'
             'Cuando el ZIP esté descargado, vuelve a esta ventana y pulsa Aceptar '
             'para seleccionar el archivo y exportar el ZIP final.')
         self.importar_zip(destino_base=destino)
@@ -174,18 +174,13 @@ class Aplicacion(tk.Tk):
         r = info['resumen']
         self.resumen.set(f"Datos CEP: {r['Registros en Datos CEP']} | Con PDF: {r['Registros con PDF']} | Sin PDF: {r['XML sin PDF']} | Revisar: {r['Requieren revisión']}")
         messagebox.showinfo('ZIP final exportado',
-            f"Archivo ZIP final: {paquete_info['zip']}\n"
-            f"PDF vinculados: {paquete_info['pdf_vinculados']}\n"
+            f"ZIP guardado:\n{paquete_info['zip']}\n\n"
+            f"PDF con XML: {paquete_info['pdf_vinculados']}\n"
             f"XML sin PDF: {paquete_info['xml_sin_pdf']}\n"
-            f"Filas de Datos CEP: {paquete_info['registros_cep']}\n\n"
-            f"Filas Datos CEP: {r['Registros en Datos CEP']}\n"
-            f"Con PDF (SÍ): {r['Registros con PDF']}\n"
-            f"Sin PDF (NO): {r['XML sin PDF']}\n"
-            f"PDF copiados y renombrados: {r['PDF renombrados']}\n"
-            f"XML procesados: {r['XML procesados']}\n"
-            f"Coincidencias verificables con Excel: {r['Coincidencias con Excel']}\n"
-            f"Pendientes de revisión: {info['pendientes']}\n\n"
-            f"Excel generado: {info['excel']}\n\nNo se modificó el ZIP original.")
+            f"Registros en Datos CEP: {paquete_info['registros_cep']}\n\n"
+            "Nombres y RFC proceden del XML oficial. "
+            "Los archivos incompletos se conservan en REVISION. "
+            "Banxico puede no localizar todas las transferencias.")
 
     def copiar(self):
         seleccion = self.tabla.selection()
