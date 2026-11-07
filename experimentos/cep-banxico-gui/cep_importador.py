@@ -420,7 +420,7 @@ def procesar_zip(ruta_zip, consultas_csv, salida):
         # Do not label absence in ZIP as definitely absent in Banxico.
     coincididos={_identificador(r['clave_rastreo_estado_cuenta']) for r in fichas if r.get('clave_rastreo_estado_cuenta')}
     for reg in rows:
-        if reg.get('estado')=='LISTO' and _identificador(reg.get('clave_rastreo')) not in coincididos:
+        if reg.get('linea_lote') and _identificador(reg.get('clave_rastreo')) not in coincididos:
             pendientes.append({'clave_rastreo':reg.get('clave_rastreo',''),
                                'fecha':reg.get('fecha',''),'monto':reg.get('monto',''),
                                'fila_excel':reg.get('fila_excel',''),
