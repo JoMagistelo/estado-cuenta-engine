@@ -102,3 +102,7 @@ candidatos SPEI quedan documentados, aunque algunos no puedan entrar en TXT.
 Consulta por lotes: https://www.banxico.org.mx/cep-scl/inicio.do
 
 Recuperar por correo y token: https://www.banxico.org.mx/cep-scl/inicio2.do
+
+
+## Reparación del generador XLSX (PR #90)
+Si Excel muestra **Reparaciones en resultado_CEP.xlsx**, el archivo que Excel reparó no debe reutilizarse: puede haber perdido datos. Actualiza a esta rama y usa **Procesar ZIP existente (sin Excel ni TXT)** para generar un nuevo ZIP final desde el ZIP oficial original de Banxico. La corrección ordena `dimension`, `sheetViews`, `sheetFormatPr`, `cols`, `sheetData` y `autoFilter` según OOXML; filtra caracteres XML ilegales y valida internamente todas las hojas antes de guardar. El título de la ventana contiene **Excel corregido** para verificar la versión. Esta revisión no vuelve a consultar Banxico.
