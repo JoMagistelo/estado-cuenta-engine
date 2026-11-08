@@ -37,10 +37,38 @@ def amount(value) -> Decimal | None:
         return None
 
 
+def _valid_card16(value: str) -> bool:
+    """Check a 16-digit card identifier without treating it as an 18-digit CLABE."""
+    if not re.fullmatch(r"[0-9]{16}", value) or len(set(value)) < 2:
+        return False
+    total = 0
+    for index, char in enumerate(value):
+        digit = int(char)
+        if index % 2 == 0:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return total % 10 == 0
+
+
 def _destination(value):
+    """Select only a supported Banxico account identifier, without modifying Excel.
+
+    Some bank statements print a debit-card number as 00 + its 16 digits.
+    Strip 00 only when the 18-digit value is NOT a valid CLABE and the
+    remaining 16 digits pass the Luhn checksum. Do not guess any other digits.
+    """
     s = account_identifier(value)
     if len(s) == 18:
-        return s if valid_clabe(s) else ""
+        # All-zero placeholders can satisfy the CLABE checksum by accident.
+        if len(set(s)) == 1:
+            return ""
+        if valid_clabe(s):
+            return s
+        if s.startswith("00") and _valid_card16(s[2:]):
+            return s[2:]
+        return ""
     return s if re.fullmatch(r"[0-9]{10}|[0-9]{16}", s) else ""
 
 
@@ -78,6 +106,7 @@ class CepQuery:
     issuer: str = ""
     receiver: str = ""
     destination: str = ""
+    destination_format: str = ""
     destination_aliases: tuple[str, ...] = ()
     owner_aliases: tuple[str, ...] = ()
     origin_aliases: tuple[str, ...] = ()
@@ -102,6 +131,7 @@ class CepQuery:
             "Clave de Rastreo": self.tracking, "Referencia": self.reference,
             "Banco Emisor": self.issuer, "Banco Receptor": self.receiver,
             "Cuenta Beneficiaria Consulta": self.destination,
+            "Formato Cuenta Consulta": self.destination_format,
             "Monto": float(self.value) if self.value is not None else None,
             "Estado": "LISTO" if self.ready else "NO_CONSULTABLE" if self.candidate else "SIN_INDICIOS_SPEI",
             "Detalle": "; ".join(self.issues),
@@ -118,7 +148,8 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
     for row in rows_from_sheet(workbook["Movimientos"]):
         text = text_key(str(get(row, "Concepto", "")) + " " + str(get(row, "Concepto Original", "")))
         tracking = identifier(get(row, "Clave de Rastreo")).upper()
-        candidate = bool(tracking or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
+        classified_spei = text_key(get(row, "Tipo de Operación")) == "SPEI"
+        candidate = bool(classified_spei or tracking or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
         q = CepQuery(row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
                      identifier(get(row, "No. de Movimiento")), candidate, tracking=tracking,
                      reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")))
@@ -150,6 +181,19 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
             ) if v))
             q.destination_aliases = destinations
             q.destination = destinations[0] if destinations else ""
+            raw_beneficiary = account_identifier(get(row, "CLABE del Beneficiario"))
+            raw_account = account_identifier(get(row, "Cuenta del Beneficiario"))
+            if q.destination and any(
+                raw.startswith("00") and len(raw) == 18 and q.destination == raw[2:]
+                for raw in (raw_beneficiary, raw_account)
+            ):
+                q.destination_format = "TARJETA_16_DESDE_00"
+            elif len(q.destination) == 18:
+                q.destination_format = "CLABE_18"
+            elif len(q.destination) == 16:
+                q.destination_format = "TARJETA_16"
+            elif len(q.destination) == 10:
+                q.destination_format = "CELULAR_10"
             inferred = clabe_bank(q.destination)
             explicit = q.receiver or bank_code(get(row, "Banco del Beneficiario")) or bank_code(get(row, "Sucursal"))
             if inferred and explicit and inferred != explicit:
@@ -161,6 +205,9 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
             q.receiver = q.receiver or owner_bank
             q.destination_aliases = own
             q.destination = next((v for v in own if _destination(v)), "")
+            q.destination_format = ("CLABE_18" if len(q.destination) == 18
+                                    else "TARJETA_16" if len(q.destination) == 16
+                                    else "CELULAR_10" if len(q.destination) == 10 else "")
             inferred = clabe_bank(identifier(get(row, "CLABE del Ordenante")))
             if inferred and q.issuer and inferred != q.issuer:
                 q.issues.append("CLABE ordenante contradice banco emisor")

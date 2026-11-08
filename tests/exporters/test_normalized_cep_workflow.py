@@ -359,3 +359,89 @@ def test_bbva_statement_reference_and_payment_reference_are_distinct_and_audited
     })]))
     assert get(rows(conflict.improved)[0], "Referencia") == "0000001234 014"
     assert "no concordante" in get(rows(conflict.improved)[0], "Revisión Normalización")
+
+
+@pytest.mark.parametrize("card", ["4111111111111111", "5555555555554444"])
+def test_padded_debit_card_is_queried_as_16_digits_only_after_excel_export(card):
+    """Real-world bank layouts can label 00 + card as CLABE; original is sacred."""
+    padded = "00" + card
+    original = excel(
+        accounts=[account_row(own=clabe("002", "12345678901")) | {"Banco": "banamex"}],
+        movements=[movement_row(**{
+            "Banco": "banamex", "CLABE del Beneficiario": padded,
+            "Cuenta del Beneficiario": padded, "Sucursal": "BBVA MEXICO",
+            "Concepto": "PAGO INTERBANCARIO A BBVA MEXICO CLAVE DE RASTREO: PRUEBASINTETICA001",
+            "Concepto Original": "PAGO INTERBANCARIO A BBVA MEXICO",
+            "Tipo de Operación": "SPEI",
+        })],
+    )
+    bundle = WorkbookBundle.from_excel(original)
+    assert bundle.original == original
+    normalized = rows(bundle.improved)[0]
+    assert get(normalized, "CLABE del Beneficiario") == padded
+    assert get(normalized, "Cuenta del Beneficiario") == padded
+    q = queries_from_workbook(bundle.improved)[0]
+    assert q.ready, q.issues
+    assert q.destination == card
+    assert q.destination_format == "TARJETA_16_DESDE_00"
+    assert q.receiver == "40012" and q.issuer == "40002"
+    assert q.audit()["Cuenta Beneficiaria Consulta"] == card
+    txt = batch_texts([q], adjacent_days=True)
+    assert txt["lote_001.txt"].decode().splitlines() == [
+        f"2026-01-03,PRUEBASINTETICA001,40002,40012,{card},125.25",
+        f"2026-01-02,PRUEBASINTETICA001,40002,40012,{card},125.25",
+        f"2026-01-04,PRUEBASINTETICA001,40002,40012,{card},125.25",
+    ]
+
+
+def test_invalid_padded_digits_are_not_reinterpreted_as_a_debit_card():
+    from cep.queries import _destination
+    assert _destination("004111111111111113") == ""
+    assert _destination(OWN) == OWN
+    assert _destination("00" + "0000000000000000") == ""
+
+
+def test_card_without_receiver_bank_remains_pending_not_guessed():
+    original = excel(movements=[movement_row(**{
+        "CLABE del Beneficiario": "004111111111111111",
+        "Cuenta del Beneficiario": None,
+        "Sucursal": "",
+        "Concepto": "TRANSFERENCIA SPEI CLAVE DE RASTREO PRUEBASINTETICA001",
+        "Concepto Original": "TRANSFERENCIA SPEI",
+    })])
+    q = queries_from_workbook(WorkbookBundle.from_excel(original).improved)[0]
+    assert q.destination == "4111111111111111"
+    assert not q.ready
+    assert "Falta banco receptor" in q.issues
+
+
+def test_zero_amount_remains_in_review_even_with_tracking_and_valid_card():
+    original = excel(movements=[movement_row(**{
+        "CLABE del Beneficiario": "004111111111111111",
+        "Cuenta del Beneficiario": None, "Cargo": 0, "Abono": 0,
+        "Concepto": "SPEI ENVIADO BANORTE CLAVE DE RASTREO PRUEBASINTETICA001",
+    })])
+    q = queries_from_workbook(WorkbookBundle.from_excel(original).improved)[0]
+    assert not q.ready
+    assert any("Cargo/abono ambiguos" in issue for issue in q.issues)
+
+
+def test_normalize_joined_month_pago_only_when_month_and_cutoff_are_unambiguous():
+    assert resolve_date("02 ENEPAGO", cutoff="05/01/2024").value == date(2024, 1, 2)
+    assert resolve_date("02 ENEPAGOS", cutoff="05/01/2024").value is None
+    original = excel(
+        accounts=[account_row() | {
+            "Periodo de Inicio": "05/12/2023",
+            "Periodo de Fin": "05/01/2024",
+            "Fecha de Corte": "05/01/2024",
+        }],
+        movements=[movement_row(**{
+            "Fecha de Operación": "02 ENEPAGO",
+            "Fecha de Corte": "05/01/2024",
+            "Concepto": "PAGO INTERBANCARIO A BANORTE",
+        })],
+    )
+    bundle = WorkbookBundle.from_excel(original)
+    assert bundle.original == original
+    assert get(rows(bundle.improved)[0], "Fecha de Operación") == datetime(2024, 1, 2)
+    assert queries_from_workbook(bundle.improved)[0].ready

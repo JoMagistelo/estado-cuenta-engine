@@ -23,7 +23,7 @@ from engine.ocr_reprocessing import reprocess_with_secondary_ocr
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
-from utils.windows_pdf_drop import WindowsPdfDropZone, pdf_drop_paths
+from utils.windows_pdf_drop import PDF_DROP_HEIGHT_DIP, WindowsPdfDropZone, pdf_drop_paths
 from cep_panel import CepPanel
 from utils.result_state import (
     movement_matches_kind,
@@ -31,7 +31,7 @@ from utils.result_state import (
     replace_result_reference,
 )
 
-APP_VERSION = '6.0.0'
+APP_VERSION = '7.0.0'
 PROCESSING_UI_POLL_INTERVAL = 0.2
 TIMER_REFRESH_SECONDS = 1.0
 SELECTOR_ENGINE_WIDTH = 150
@@ -151,6 +151,7 @@ def main(page: ft.Page):
     page.window.prevent_close = True
     page.padding = 14
     page.theme_mode = ft.ThemeMode.LIGHT
+    page.bgcolor = ft.Colors.SURFACE
     page.scroll = None
 
     artifact_session = tempfile.TemporaryDirectory(prefix='estado_cuenta_engine_ocr_')
@@ -2967,19 +2968,24 @@ def main(page: ft.Page):
             ft.Divider(),
             ft.Row(
                 [
-                    ft.Text('📤 Exportación', size=13, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        'Conserva el formato original y el resultado OCR elegido de cada archivo.',
-                        size=8,
-                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ft.Column(
+                        [
+                            ft.Text('📤 Exportación · Excel original', size=13, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                'Conserva los movimientos y el resultado OCR original, sin cambios del módulo CEP.',
+                                size=9,
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                        ],
+                        spacing=2,
                     ),
                     ft.Container(expand=True),
                     export_button,
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                wrap=True,
+                wrap=False,
             ),
-            ft.Container(height=18),
+            ft.Container(height=6),
         ],
         spacing=3,
         visible=False,
@@ -3027,18 +3033,23 @@ def main(page: ft.Page):
         spacing=0,
     )
 
-    extraction_content = ft.Column(app_content.controls[3:], spacing=0,
+    # Los resultados se desplazan; la exportación permanece fija y siempre visible.
+    # No volver a incluir export_section dentro de la columna desplazable.
+    extraction_content = ft.Column(app_content.controls[3:5], spacing=0,
                                    scroll=ft.ScrollMode.AUTO, expand=True)
+    extraction_workspace = ft.Column([extraction_content, export_section],
+                                     spacing=0, expand=True)
     drop_footer = ft.Container(
         content=ft.Text('Arrastra aquí tus estados de cuenta PDF · Se añadirán al lote actual',
                         size=12, text_align=ft.TextAlign.CENTER),
-        height=50, alignment=ft.Alignment.CENTER, bgcolor=GOB_GREEN_LIGHT, border_radius=7,
+        height=PDF_DROP_HEIGHT_DIP, alignment=ft.Alignment.CENTER,
+        bgcolor=GOB_GREEN_LIGHT, border_radius=7,
         visible=False,
     )
 
     def workspace_changed(e):
         active = workspaces.selected_index == 0
-        extraction_content.visible = active
+        extraction_workspace.visible = active
         cep_panel.control.visible = not active
         drop_footer.visible = bool(active and state.get('drop_zone') and state['drop_zone'].ready)
         if state.get('drop_zone'):
@@ -3052,7 +3063,7 @@ def main(page: ft.Page):
                       indicator_color=GOB_GREEN, label_color=GOB_GREEN))
     # Both workspaces stay mounted; only the active one participates in layout.
     # This also keeps live extraction updates valid while viewing CEP.
-    workspace_body = ft.Column([extraction_content, cep_panel.control], expand=True, spacing=0)
+    workspace_body = ft.Column([extraction_workspace, cep_panel.control], expand=True, spacing=0)
     app_content = ft.Column([*app_content.controls[:3], workspaces, workspace_body, drop_footer],
                             spacing=5, expand=True)
     page.run_task(poller)

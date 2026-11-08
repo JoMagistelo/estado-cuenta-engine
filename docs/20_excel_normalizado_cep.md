@@ -1,6 +1,63 @@
 # Excel mejorado y CEP integrado
 
+## Contrato de la versión 7.0.0
+
+- **Extracción:** parsers y procesador bancario sin modificaciones. `Generar Excel` sigue descargando
+  `reporte_estados_de_cuenta.xlsx`, con la misma estructura y los valores originales.
+- **Interfaz Windows:** exportación fija, fuera de la columna desplazable de resultados;
+  zona independiente de arrastre PDF de 96 DIP al pie de la ventana, con margen DPI
+  calculado por una única función y sin superponerse al botón de exportación.
+- **CEP:** pestaña y pasos completos conservados. Recupera metadatos y homologa fechas
+  **únicamente a partir del Excel exportado**, en su copia normalizada.
+- **Cobertura progresiva:** el módulo muestra cuántos candidatos están listos y cuáles
+  requieren revisión manual. Los patrones documentados de nuevos bancos se incorporarán
+  en futuras versiones a la normalización, no a los parsers; no se inventan claves,
+  CLABE, cuentas ni bancos faltantes.
+- **Control de calidad:** no se fusiona hasta comprobar en Windows el botón de
+  descarga, arrastre de varios PDF, navegación de las pestañas, integridad del Excel
+  original y validación del TXT/ZIP con casos autorizados.
+
+Para probar la rama antes del merge:
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+git fetch origin
+git switch -c release/7.0.0-cep-ui-estable --track origin/release/7.0.0-cep-ui-estable
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q
+.\.venv\Scripts\python.exe app\main_desktop.py
+```
+
+
 El experimento `experimentos/cep-banxico-gui` se conserva intacto. La integración usa módulos independientes en `src/cep` y el exportador existente para conservar el formato del Excel original.
+
+## Cobertura de identificadores CEP en 7.0.0
+
+La Cuenta Beneficiaria exigida por Banxico puede ser una **CLABE de 18 dígitos**,
+una **tarjeta de débito de 16 dígitos** o un **número de celular de 10 dígitos**.
+No asumir que la columna denominada `CLABE del Beneficiario` contiene siempre
+una CLABE: algunos bancos imprimen `00` seguido de los 16 dígitos de tarjeta.
+
+**Regla de consulta segura:**
+1. Una CLABE de 18 dígitos con checksum válido se conserva íntegra.
+2. Sólo cuando el valor de 18 dígitos **no** es CLABE válida, empieza por
+   `00` y los otros 16 dígitos superan Luhn, el TXT usa los **16 dígitos**
+   como identificador de tarjeta. La columna original del Excel no se modifica.
+3. La institución receptora debe proceder de la evidencia bancaria existente
+   (institución del estado, columna de banco o concepto), **no de los primeros
+   dígitos de la tarjeta**.
+4. No se reparan automáticamente montos vacíos/cero ni fechas ambiguas: esas
+   operaciones permanecen pendientes. Sólo se admite reparar el formato OCR
+   exacto `DD ENEPAGO` (o abreviaturas equivalentes) si el periodo del estado
+   permite fijar una fecha única.
+
+La hoja **Control CEP** incluye `Cuenta Beneficiaria Consulta` y
+`Formato Cuenta Consulta`, incluyendo `TARJETA_16_DESDE_00`, para auditar
+la diferencia entre el valor del Excel y el enviado al TXT.
+
+**Prueba antes de merge:** se añadieron casos sintéticos para tarjetas de
+16 dígitos con prefijo `00`, CLABE válida que inicia con `00`,
+tarjeta con checksum inválido, ausencia de banco receptor, importe cero y
+`02 ENEPAGO`. Los movimientos y los parsers siguen intactos.
 
 ## Flujo de uso
 

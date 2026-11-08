@@ -4,7 +4,12 @@ import sys
 
 import pytest
 
-from utils.windows_pdf_drop import WindowsPdfDropZone, pdf_drop_paths
+from utils.windows_pdf_drop import (
+    PDF_DROP_HEIGHT_DIP,
+    WindowsPdfDropZone,
+    drop_window_geometry,
+    pdf_drop_paths,
+)
 
 
 def test_drop_accepts_existing_pdf_files_and_unicode_without_duplicates(tmp_path):
@@ -13,6 +18,23 @@ def test_drop_accepts_existing_pdf_files_and_unicode_without_duplicates(tmp_path
     other = tmp_path / "other.txt"
     other.write_text("not PDF")
     assert pdf_drop_paths([pdf, pdf, other, tmp_path, tmp_path / "missing.pdf"]) == [str(pdf.resolve())]
+
+
+def test_dpi_drop_receiver_fits_the_reserved_footer_and_never_covers_export():
+    for scale in (1.0, 1.25, 1.5, 2.0):
+        width, height = 1400, 830
+        x, y = 50, 40
+        left, top, actual_width, actual_height = drop_window_geometry(
+            width, height, x, y, scale
+        )
+        assert actual_height == round(PDF_DROP_HEIGHT_DIP * scale)
+        assert actual_height >= 96
+        assert left > x
+        assert top >= y
+        assert left + actual_width <= x + width
+        assert top + actual_height < y + height
+        # Exportación is outside the reserved native footer.
+        assert top == y + height - round(14 * scale) - actual_height
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Native Windows Explorer drop lane")
