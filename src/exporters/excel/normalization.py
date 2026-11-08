@@ -337,11 +337,14 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
                     report.dates_resolved += 1
             if field_name == "Fecha de Operación":
                 values["Estado de Fecha"] = resolution.status
+                if resolution.status == "VACIA":
+                    report.dates_review += 1
+                    notes.append("Fecha de Operación: no se extrajo fecha; requiere revisión")
             if resolution.status in {"REVISAR", "FUERA_DE_PERIODO", "POR_ARCHIVO"}:
                 notes.append(f"{field_name}: {resolution.detail}")
                 if field_name == "Fecha de Operación":
                     report.dates_review += 1
-            if resolution.value and not isinstance(old, (date, datetime)) or resolution.status == "REVISAR":
+            if (resolution.value and not isinstance(old, (date, datetime))) or resolution.status == "REVISAR":
                 record(row, field_name, old, resolution.value or old, resolution.status + ": " + resolution.detail)
         for field_name, value in list(values.items()):
             if field_name in {"Clave de Rastreo", "Referencia", "Cuenta del Beneficiario", "CLABE del Beneficiario", "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Banco del Beneficiario", "Cuenta Titular", "CLABE Titular"}:

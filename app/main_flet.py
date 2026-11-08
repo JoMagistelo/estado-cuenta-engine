@@ -2803,10 +2803,6 @@ def main(page: ft.Page):
     async def export_excel(e, *, variant='original'):
         if not results:
             return
-        if state['running']:
-            status_text.value = 'Espera a que termine la extracción antes de exportar.'
-            status_text.update()
-            return
         if state['reprocess_cancel_events']:
             status_text.value = (
                 'Espera a que termine el reprocesado OCR antes de generar el Excel.'

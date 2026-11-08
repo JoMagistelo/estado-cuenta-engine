@@ -62,7 +62,10 @@ def identifier(value: object) -> str:
         if not float(value).is_integer() or len(str(int(value))) > 15:
             return ""
         return str(int(value))
-    return re.sub(r"\s+", "", str(value)).strip().lstrip("'")
+    result = re.sub(r"\s+", "", str(value)).strip().lstrip("'")
+    if text_key(result) in {"N/A", "NA", "NONE", "NULL", "SINDATO", "SININFORMACION", "NOIDENTIFICADO"}:
+        return ""
+    return result
 
 
 def valid_clabe(value: object) -> bool:

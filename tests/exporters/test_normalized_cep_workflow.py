@@ -154,6 +154,13 @@ def test_catalogue_checksum_unknown_prefix_and_precision_loss():
     assert all(bank_code(code) == code for code in INSTITUTIONS)
 
 
+def test_missing_date_and_placeholder_tracking_are_reviewed():
+    bundle = WorkbookBundle.from_excel(excel(movements=[movement_row(**{"Fecha de Operación": None, "Clave de Rastreo": "N/A"})]))
+    assert bundle.report.dates_review == 1
+    query = queries_from_workbook(bundle.improved)[0]
+    assert not query.ready and not query.tracking
+
+
 def test_txt_uses_improved_date_and_three_variants_without_bom():
     bundle = WorkbookBundle.from_excel(excel())
     queries = queries_from_workbook(bundle.improved)
