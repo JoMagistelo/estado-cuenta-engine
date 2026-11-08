@@ -1,0 +1,107 @@
+import csv
+import tempfile
+import unittest
+from pathlib import Path
+from cep_core import analizar, clabe_valida, fecha_operacion, exportar, preparar, clave, xlsx_hojas
+from datetime import date
+
+
+def clabe_ejemplo(pref='012', n='12345678901234'):
+    c = pref + n
+    assert len(c) == 17
+    return c + str((10 - sum((int(v) * (3,7,1)[i % 3]) % 10 for i,v in enumerate(c)) % 10) % 10)
+
+
+class Tests(unittest.TestCase):
+    def setUp(self):
+        self.destino = clabe_ejemplo()
+        self.propia = clabe_ejemplo('002', '98765432101234')
+        self.headers = ['id_estado','Nombre del Archivo','Banco','Fecha de Corte','No. de Movimiento',
+                        'Fecha de Operación','Concepto','Cargo','Abono','Clave de Rastreo','Referencia',
+                        'CLABE del Beneficiario','Tipo de Operación']
+        self.cols = {clave(v):i for i,v in enumerate(self.headers)}
+        self.meta = {'1': {'inicio':date(2025,4,8),'fin':date(2025,5,7),'clabe':self.propia}}
+
+    def fila(self, **kw):
+        obj = {'id_estado':1, 'Nombre del Archivo':'Banamex_Abr25.pdf','Banco':'banamex',
+               'Fecha de Corte':'07/MAY/2025','No. de Movimiento':83,'Fecha de Operación':'28 ABR',
+               'Concepto':'PAGO INTERBANCARIO A BBVA MEXICO RASTREO PRUEBASINTETICA0001',
+               'Cargo':10000,'Abono':0,'Clave de Rastreo':'PRUEBASINTETICA0001',
+               'Referencia':'0280425','CLABE del Beneficiario':self.destino, 'Tipo de Operación':''}
+        obj.update(kw)
+        return [obj[h] for h in self.headers]
+
+    def test_sin_tipo_cargo(self):
+        x = preparar(self.fila(),self.cols,2,self.meta)
+        self.assertEqual((x['tipo'],x['estado'],x['fecha'],x['monto']),
+                         ('ENVIADO','LISTO','2025-04-28','10000.00'))
+        self.assertIn(',40002,40012,',x['linea_lote'])
+
+    def test_sin_tipo_abono_usa_clabe_propia(self):
+        x = preparar(self.fila(Cargo=0, Abono=220, Concepto='SPEI DE BBVA MEXICO RASTREO PRUEBASINTETICA0001',
+                 **{'CLABE del Beneficiario':''}), self.cols,2,self.meta)
+        self.assertEqual((x['tipo'],x['estado'],x['cuenta_beneficiaria']),('RECIBIDO','LISTO',self.propia))
+        self.assertEqual((x['emisor'],x['receptor']),('40012','40002'))
+
+    def test_fecha_cruce_anio(self):
+        d=fecha_operacion('31 DIC',date(2023,12,8),date(2024,1,7),'Dic23.pdf')
+        self.assertEqual(d,date(2023,12,31))
+
+    def test_ignora_gasto(self):
+        x=preparar(self.fila(Concepto='RETIRO EN CAJERO',**{'Clave de Rastreo':''}),self.cols,2,self.meta)
+        self.assertIsNone(x)
+
+    def test_excluye_clabe_invalida(self):
+        x=preparar(self.fila(**{'CLABE del Beneficiario':self.destino[:-1]+'9'}),self.cols,2,self.meta)
+        if self.destino[-1]!='9': self.assertEqual(x['estado'],'PENDIENTE')
+
+    def test_csv_realista_sin_columna_tipo(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'movimientos.csv'
+            h=[v for v in self.headers if v != 'Tipo de Operación']
+            with p.open('w',newline='',encoding='utf-8') as f:
+                w=csv.writer(f); w.writerow(h)
+                w.writerow([v for n,v in zip(self.headers,self.fila()) if n!='Tipo de Operación'])
+            registros,num=analizar(p)
+            self.assertEqual((num,len(registros),registros[0]['estado']),(1,1,'LISTO'))
+            out=exportar(registros,Path(d)/'salida')
+            self.assertEqual(out['lotes'],0)
+            libro = Path(d)/'salida'/'resultado_CEP.xlsx'
+            self.assertTrue(libro.exists())
+            hojas = xlsx_hojas(libro)
+            self.assertIn('SPEI', hojas)
+            self.assertIn('Datos CEP', hojas)
+            self.assertEqual(len(hojas['SPEI'])-1, 1)
+            self.assertEqual(hojas['SPEI'][1][hojas['SPEI'][0].index('resultado_cep')], 'SIN_LOTE')
+            self.assertFalse(list((Path(d)/'salida').glob('*.csv')))
+
+    def test_exportar_un_excel_dos_spei_a_txt_y_pendiente_a_bitacora(self):
+        with tempfile.TemporaryDirectory() as t:
+            p=Path(t)
+            r1=preparar(self.fila(), self.cols, 2, self.meta)
+            r2=preparar(self.fila(**{'Clave de Rastreo':'PRUEBASINTETICA0002', 'Cargo':300}),
+                         self.cols, 3, self.meta)
+            r3=preparar(self.fila(**{'CLABE del Beneficiario':'', 'Clave de Rastreo':'PRUEBASINTETICA0003'}),
+                         self.cols, 4, self.meta)
+            self.assertEqual(r3['estado'], 'PENDIENTE')
+            res=exportar([r1,r2,r3],p/'salida')
+            self.assertEqual((res['lotes'],res['listos'],res['pendientes']), (1,2,1))
+            self.assertEqual(len((p/'salida'/'lote_001.txt').read_text().splitlines()),2)
+            alternativas = (p/'salida'/'reintento_fecha_001.txt').read_text().splitlines()
+            self.assertEqual(len(alternativas),4)
+            self.assertTrue(all(len(linea.split(',')) == 6 for linea in alternativas))
+            fechas = [linea.split(',')[0] for linea in alternativas]
+            self.assertEqual(set(fechas),{'2025-04-27','2025-04-29'})
+            # Los bancos no son omitidos: el 3.º y 4.º campo son códigos oficiales.
+            self.assertEqual((alternativas[0].split(',')[2], alternativas[0].split(',')[3]),
+                             ('40002','40012'))
+            self.assertEqual(res['reintentos'],1)
+            self.assertEqual(len(list((p/'salida').glob('*.xlsx'))),1)
+            self.assertFalse(list((p/'salida').glob('*.csv')))
+            sheets=xlsx_hojas(p/'salida'/'resultado_CEP.xlsx')
+            self.assertEqual(len(sheets['SPEI'])-1,3)
+            col=sheets['SPEI'][0].index('resultado_cep')
+            states=[r[col] for r in sheets['SPEI'][1:]]
+            self.assertEqual(states,['PENDIENTE_BANXICO','PENDIENTE_BANXICO','NO_CONSULTABLE'])
+
+if __name__=='__main__': unittest.main()

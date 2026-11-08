@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+from datetime import date, datetime
 
 from openpyxl.utils import get_column_letter
 
@@ -87,6 +88,8 @@ def write_table_sheet(
             cell.font = BODY_FONT
             cell.alignment = BODY_ALIGNMENT
             cell.border = BODY_BORDER
+            if isinstance(cell.value, (date, datetime)):
+                cell.number_format = "dd/mm/yyyy"
             if row_index % 2 == 0:
                 cell.fill = ALT_ROW_FILL
 
