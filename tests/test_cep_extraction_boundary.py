@@ -67,3 +67,18 @@ def test_banxico_txt_is_six_fields_utf8_and_2_to_500_lines():
             assert parts[4] == "0123456789"
             assert parts[5] == "123.45"
     assert count == 501
+
+
+def test_original_excel_download_button_remains_in_extraction_tab():
+    desktop = (ROOT / "app/main_flet.py").read_text(encoding="utf-8")
+    streamlit = (ROOT / "app/main_streamlit.py").read_text(encoding="utf-8")
+    assert "content='Generar Excel'" in desktop
+    assert "file_name='reporte_estados_de_cuenta.xlsx'" in desktop
+    assert "export_batch_excel(snapshot, path)" in desktop
+    assert "Descargar Excel original" in streamlit
+
+
+def test_native_pdf_drop_does_not_disappear_when_explorer_has_focus():
+    source = (ROOT / "src/utils/windows_pdf_drop.py").read_text(encoding="utf-8")
+    assert "GetForegroundWindow" not in source
+    assert "self.visible and self.enabled and u.IsWindowVisible(parent)" in source
