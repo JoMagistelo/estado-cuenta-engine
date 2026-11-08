@@ -23,7 +23,7 @@ from engine.ocr_reprocessing import reprocess_with_secondary_ocr
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
-from utils.windows_pdf_drop import WindowsPdfDropZone, pdf_drop_paths
+from utils.windows_pdf_drop import PDF_DROP_HEIGHT_DIP, WindowsPdfDropZone, pdf_drop_paths
 from cep_panel import CepPanel
 from utils.result_state import (
     movement_matches_kind,
@@ -3042,7 +3042,8 @@ def main(page: ft.Page):
     drop_footer = ft.Container(
         content=ft.Text('Arrastra aquí tus estados de cuenta PDF · Se añadirán al lote actual',
                         size=12, text_align=ft.TextAlign.CENTER),
-        height=96, alignment=ft.Alignment.CENTER, bgcolor=GOB_GREEN_LIGHT, border_radius=7,
+        height=PDF_DROP_HEIGHT_DIP, alignment=ft.Alignment.CENTER,
+        bgcolor=GOB_GREEN_LIGHT, border_radius=7,
         visible=False,
     )
 
