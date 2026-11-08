@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
 from exporters.excel.writer import write_table_sheet
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
-from utils.spei_metadata import extract_spei_metadata, valid_tracking
+from utils.spei_metadata import extract_spei_metadata, metadata_search_text, valid_tracking
 
 
 def header_key(value: object) -> str:
@@ -154,7 +154,7 @@ _ROLE = r"(?:DEL?\s+)?(?:BENEFICIARI[AO]|DESTINO|RECEPTOR[AO]?)"
 
 def recover_fields(row: dict) -> tuple[dict, list[str]]:
     """Repair labelled identifiers; never pick an arbitrary long concept number."""
-    text = text_key(str(get(row, "Concepto", "")) + " " + str(get(row, "Concepto Original", "")))
+    text = metadata_search_text(str(get(row, "Banco", "")), get(row, "Concepto"), get(row, "Concepto Original"))
     changes, notes = {}, []
     found = extract_spei_metadata(str(get(row, "Banco", "")), get(row, "Concepto"), get(row, "Concepto Original"))
     notes.extend(found.notes)

@@ -63,15 +63,28 @@ def _labelled_tracking(text: str) -> set[str]:
     return values
 
 
+def metadata_search_text(bank: str, concept: str | None, original: str | None = None) -> str:
+    """Exclude the free-form payment memo from bank-labelled field recovery."""
+    text = text_key(concept if concept else original)
+    if bank_code(bank) == "40012":
+        lines = [s.strip() for s in text.splitlines() if s.strip()]
+        if lines and re.match(r"^SPEI\s+(ENVIADO|RECIBIDO)", lines[0]) and len(lines) >= 4:
+            # Line 2 is authored by the sender; line 5 is a person's name.
+            text = "\n".join((lines[0], lines[2], lines[3]))
+    return re.split(r"\bCONCEPTO(?:\s+DE[L]?\s+PAGO)?\s*:", text, maxsplit=1)[0]
+
+
 def extract_spei_metadata(bank: str, concept: str | None, original: str | None = None) -> SpeiMetadata:
+    bank = str(bank or "").lower().strip()
     result = SpeiMetadata()
     sources = list(dict.fromkeys(str(s) for s in (concept, original) if s))
     # Keep newlines: in BBVA their position identifies the field, not its shape.
     texts = [text_key(s) for s in sources]
-    tracking = set().union(*(_labelled_tracking(t) for t in texts)) if texts else set()
+    labelled_text = metadata_search_text(bank, concept, original)
+    tracking = _labelled_tracking(labelled_text)
     references = set()
+    references.update(re.findall(r"\b(?:REFERENCIA(?:\s+NUMERICA)?|REF\.?)\s*[:#=-]?\s*([0-9]{1,20})(?![0-9])", labelled_text))
     for text in texts:
-        references.update(re.findall(r"\b(?:REFERENCIA(?:\s+NUMERICA)?|REF\.?)\s*[:#=-]?\s*([0-9]{1,20})(?![0-9])", text))
         if bank in {"banorte", "banorte_ocr"}:
             match = re.search(r"^\s*([A-Z0-9][A-Z0-9._/-]{3,39})\s+SPEI\s+RECIBIDO\b", text)
             if match and valid_tracking(match[1]):

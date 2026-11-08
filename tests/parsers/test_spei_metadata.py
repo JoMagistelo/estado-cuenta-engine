@@ -72,6 +72,17 @@ def test_conflicting_evidence_never_overwrites_confirmed_metadata_or_money():
     assert not found.tracking and found.notes
 
 
+def test_sender_memo_cannot_supply_bank_tracking_or_accounts():
+    memo = "RASTREO: MEMOSYNTHETIC001 REF: 9876543"
+    found = extract_spei_metadata("santander", "SPEI ENVIADO CONCEPTO: " + memo, memo)
+    assert not found.tracking and not found.reference
+    text = f"SPEI ENVIADO BANORTE\n0000007{memo}\n00{synthetic_clabe()}\nMBAN20260103000000000001\nPERSONA SINTETICA"
+    found = extract_spei_metadata("BBVA", text, memo)
+    assert found.tracking == "MBAN20260103000000000001"
+    assert found.reference == "0000007"
+    assert extract_spei_metadata("BANORTE", "SYNTHETIC001 SPEI RECIBIDO").tracking == "SYNTHETIC001"
+
+
 @pytest.mark.parametrize("bank", list(statement_processor.PARSER_REGISTRY))
 @pytest.mark.parametrize("ocr", [False, True])
 def test_shared_recovery_runs_on_every_registered_digital_and_ocr_route(monkeypatch, bank, ocr):
