@@ -30,6 +30,35 @@ git switch -c release/7.0.0-cep-ui-estable --track origin/release/7.0.0-cep-ui-e
 
 El experimento `experimentos/cep-banxico-gui` se conserva intacto. La integración usa módulos independientes en `src/cep` y el exportador existente para conservar el formato del Excel original.
 
+## Cobertura de identificadores CEP en 7.0.0
+
+La Cuenta Beneficiaria exigida por Banxico puede ser una **CLABE de 18 dígitos**,
+una **tarjeta de débito de 16 dígitos** o un **número de celular de 10 dígitos**.
+No asumir que la columna denominada `CLABE del Beneficiario` contiene siempre
+una CLABE: algunos bancos imprimen `00` seguido de los 16 dígitos de tarjeta.
+
+**Regla de consulta segura:**
+1. Una CLABE de 18 dígitos con checksum válido se conserva íntegra.
+2. Sólo cuando el valor de 18 dígitos **no** es CLABE válida, empieza por
+   `00` y los otros 16 dígitos superan Luhn, el TXT usa los **16 dígitos**
+   como identificador de tarjeta. La columna original del Excel no se modifica.
+3. La institución receptora debe proceder de la evidencia bancaria existente
+   (institución del estado, columna de banco o concepto), **no de los primeros
+   dígitos de la tarjeta**.
+4. No se reparan automáticamente montos vacíos/cero ni fechas ambiguas: esas
+   operaciones permanecen pendientes. Sólo se admite reparar el formato OCR
+   exacto `DD ENEPAGO` (o abreviaturas equivalentes) si el periodo del estado
+   permite fijar una fecha única.
+
+La hoja **Control CEP** incluye `Cuenta Beneficiaria Consulta` y
+`Formato Cuenta Consulta`, incluyendo `TARJETA_16_DESDE_00`, para auditar
+la diferencia entre el valor del Excel y el enviado al TXT.
+
+**Prueba antes de merge:** se añadieron casos sintéticos para tarjetas de
+16 dígitos con prefijo `00`, CLABE válida que inicia con `00`,
+tarjeta con checksum inválido, ausencia de banco receptor, importe cero y
+`02 ENEPAGO`. Los movimientos y los parsers siguen intactos.
+
 ## Flujo de uso
 
 1. **Extracción de movimientos:** cargar o arrastrar los PDF, procesarlos y descargar el **Excel original**, con sus hojas y formato habituales. El arrastre usa una franja de 44 píxeles lógicos que sólo aparece cuando el receptor nativo está disponible; no inserta una ventana hija en el renderizador Flutter ni deja un aviso permanente si falla.
