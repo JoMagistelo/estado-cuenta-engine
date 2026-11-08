@@ -396,7 +396,7 @@ def test_padded_debit_card_is_queried_as_16_digits_only_after_excel_export(card)
 
 def test_invalid_padded_digits_are_not_reinterpreted_as_a_debit_card():
     from cep.queries import _destination
-    assert _destination("004111111111111112") == ""
+    assert _destination("004111111111111113") == ""
     assert _destination(OWN) == OWN
     assert _destination("00" + "0000000000000000") == ""
 
