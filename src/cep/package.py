@@ -22,6 +22,15 @@ def append_cep(source: bytes, matches: dict[int, dict], queries: list[CepQuery],
     ws = workbook["Movimientos"]
     for row_number, values in matches.items():
         put_columns(ws, row_number, values)
+    columns = {cell.value: cell.column for cell in ws[1]}
+    for row_number, values in matches.items():
+        for field in ("CEP Archivo PDF", "CEP Archivo XML"):
+            if values[field]:
+                cell = ws.cell(row_number, columns[field])
+                # Relative to either XLSX at the root of the final ZIP. After
+                # extracting the whole package, Excel opens the local evidence.
+                cell.hyperlink = values[field]
+                cell.style = "Hyperlink"
     for name in ("Control CEP", "Datos CEP", "Revisión CEP"):
         if name in workbook:
             del workbook[name]

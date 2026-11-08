@@ -26,8 +26,9 @@ def run_excel_cep_self_test():
                     "15/12/2025", "14/01/2026", "14/01/2026"])
     movements = workbook.create_sheet("Movimientos")
     movements.append(["id_estado", "Nombre del Archivo", "Banco", "Fecha de Corte", "No. de Movimiento",
-                      "Fecha de Operación", "Cargo", "Abono", "Clave de Rastreo", "CLABE del Beneficiario"])
-    movements.append([1, "SINTETICO.pdf", "banamex", "14/01/2026", 1, "03 ENE", 1.25, 0, "SYNTHETIC001", holder])
+                      "Fecha de Operación", "Cargo", "Abono", "Clave de Rastreo", "CLABE del Beneficiario", "Concepto"])
+    movements.append([1, "SINTETICO.pdf", "banamex", "14/01/2026", 1, "03 ENE", 1.25, 0, None, holder,
+                      "SPEI ENVIADO CVE RAST: SYNTHETIC001"])
     content = BytesIO()
     workbook.save(content)
     workbook.close()
@@ -56,4 +57,8 @@ def run_excel_cep_self_test():
                 raise RuntimeError("El EXE no guardó una fecha real de Excel con año correcto")
             if get(row, "CEP Archivo PDF") not in archive.namelist():
                 raise RuntimeError("El EXE perdió el PDF vinculado al movimiento")
+            ws = check["Movimientos"]
+            column = next(c.column for c in ws[1] if c.value == "CEP Archivo PDF")
+            if ws.cell(2, column).hyperlink.target != get(row, "CEP Archivo PDF"):
+                raise RuntimeError("El EXE no conservó el enlace al PDF CEP")
             check.close()

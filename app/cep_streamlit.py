@@ -12,36 +12,53 @@ import streamlit as st
 
 from cep.evidence import CepEvidence, match_evidence
 from cep.package import append_cep, export_cep_zip
-from cep.queries import BANXICO_BATCH_URL, queries_from_workbook, txt_zip
-from exporters.excel.workbook_bundle import WorkbookBundle
+from cep.queries import BANXICO_BATCH_URL, batch_texts, queries_from_workbook
+from exporters.excel.workbook_bundle import WorkbookBundle, original_from_results
 
 
 def set_cep_bundle(bundle):
-    for key in ('cep_txt_zip', 'cep_final_zip', 'cep_enriched_pair', 'cep_txt_adjacent'):
+    for key in ('cep_txt_files', 'cep_final_zip', 'cep_enriched_pair', 'cep_txt_adjacent'):
         st.session_state.pop(key, None)
     st.session_state.cep_bundle = bundle
     st.session_state.cep_queries = queries_from_workbook(bundle.improved)
     st.session_state.cep_evidence = CepEvidence()
 
 
+def set_cep_source(source, name="movimientos.xlsx"):
+    for key in ('cep_bundle', 'cep_queries', 'cep_txt_files', 'cep_final_zip', 'cep_enriched_pair', 'cep_txt_adjacent'):
+        st.session_state.pop(key, None)
+    st.session_state.cep_source = source
+    st.session_state.cep_source_name = name
+    st.session_state.cep_evidence = CepEvidence()
+
+
 def render_cep_workspace(results, busy=False):
     st.subheader("CEP Banxico")
-    st.caption("Carga un Excel original o mejorado. El TXT siempre usa la copia mejorada con fechas homologadas.")
+    st.caption("Carga un Excel y pulsa Normalizar Excel. El original se descarga en Extracción de movimientos.")
     uploaded = st.file_uploader("Excel de movimientos", type=["xlsx"], key="cep_excel_upload")
     if uploaded:
         data = uploaded.getvalue()
         token = hashlib.sha256(data).hexdigest()
         if st.session_state.get("cep_excel_token") != token:
             try:
-                with st.spinner("Homologando y comprobando el Excel…"):
-                    set_cep_bundle(WorkbookBundle.from_excel(data, source_name=uploaded.name))
+                set_cep_source(data, uploaded.name)
                 st.session_state.cep_excel_token = token
             except Exception as error:
                 st.error(str(error))
     if st.button("Usar extracción actual", key="cep_use_current", disabled=busy or not results):
         try:
-            with st.spinner("Preparando ambos Excel…"):
-                set_cep_bundle(WorkbookBundle.from_results(list(results)))
+            with st.spinner("Cargando los movimientos…"):
+                set_cep_source(original_from_results(list(results)))
+        except Exception as error:
+            st.error(str(error))
+    source = st.session_state.get("cep_source")
+    if source is None:
+        return
+    st.write(st.session_state.cep_source_name)
+    if st.button("Normalizar Excel", type="primary", key="cep_normalize"):
+        try:
+            with st.spinner("Homologando fechas y recuperando datos SPEI…"):
+                set_cep_bundle(WorkbookBundle.from_excel(source, source_name=st.session_state.cep_source_name))
         except Exception as error:
             st.error(str(error))
     bundle = st.session_state.get("cep_bundle")
@@ -52,16 +69,18 @@ def render_cep_workspace(results, busy=False):
     candidates = [q for q in queries if q.candidate]
     st.write(f"{bundle.report.movements} movimientos · {sum(q.ready for q in candidates)} candidatos con datos para TXT · {bundle.report.dates_review} fechas para revisión")
     st.subheader("Preparar TXT")
-    adjacent = st.checkbox("Fecha original y reintentos ±1 día", value=True, key="cep_adjacent_dates")
-    if st.button("Generar TXT Banxico", key="cep_make_txt"):
+    adjacent = st.checkbox("Fecha homologada y reintentos ±1 día", value=True, key="cep_adjacent_dates")
+    if st.button("Preparar TXT Banxico", key="cep_make_txt"):
         try:
-            st.session_state.cep_txt_zip = txt_zip(queries, adjacent_days=adjacent)
+            st.session_state.cep_txt_files = batch_texts(queries, adjacent_days=adjacent)
             st.session_state.cep_txt_adjacent = adjacent
         except Exception as error:
             st.error(str(error))
-    if st.session_state.get("cep_txt_zip") and st.session_state.get('cep_txt_adjacent') == adjacent:
-        st.download_button("Descargar TXT (ZIP)", st.session_state.cep_txt_zip,
-                           "TXT_Banxico.zip", "application/zip")
+    if st.session_state.get("cep_txt_files") and st.session_state.get('cep_txt_adjacent') == adjacent:
+        files = st.session_state.cep_txt_files
+        for name, content in files.items():
+            st.download_button("Descargar TXT Banxico" if len(files) == 1 else f"Descargar {name}", content,
+                               "consultas_banxico.txt" if len(files) == 1 else name, "text/plain; charset=utf-8", key="cep_txt_" + name)
     st.link_button("Abrir consulta por lotes en Banxico", BANXICO_BATCH_URL)
     st.caption("Carga los TXT en Banxico y solicita PDF y XML. Después importa aquí los ZIP descargados.")
     st.subheader("Cruzar resultados Banxico")
@@ -85,9 +104,7 @@ def render_cep_workspace(results, busy=False):
         counts = Counter(v["CEP Estado"] for v in matches.values())
         st.write(" · ".join(f"{name}: {count}" for name, count in counts.items()))
     raw, clean = st.session_state.get('cep_enriched_pair', (bundle.original, bundle.improved))
-    a, b = st.columns(2)
-    a.download_button("Excel original", raw, "excel_original_con_CEP.xlsx" if matches else "excel_original.xlsx")
-    b.download_button("Excel mejorado", clean, "excel_mejorado_con_CEP.xlsx" if matches else "excel_mejorado.xlsx")
+    st.download_button("Descargar Excel normalizado", clean, "excel_normalizado_con_CEP.xlsx" if matches else "excel_normalizado.xlsx")
     if evidence.preserved and st.button("Preparar ZIP final", key="cep_make_final"):
         try:
             with tempfile.TemporaryDirectory(prefix="engine_cep_web_") as folder:
@@ -100,4 +117,4 @@ def render_cep_workspace(results, busy=False):
         st.download_button("Descargar ZIP final", st.session_state.cep_final_zip, "Movimientos_y_CEP.zip", "application/zip")
     if candidates:
         st.dataframe([q.audit() | matches.get(q.row, {}) for q in candidates], hide_index=True, use_container_width=True)
-    st.caption("Las columnas CEP se añaden al final de Movimientos en ambos Excel. Los cruces ambiguos quedan para revisión. Un fallo de búsqueda no significa que la transferencia falló.")
+    st.caption("El ZIP final contiene ambos Excel cruzados y los PDF/XML renombrados. Extrae todo su contenido para abrir los PDF desde sus vínculos en Excel.")

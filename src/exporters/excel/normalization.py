@@ -15,6 +15,7 @@ from openpyxl.utils import get_column_letter
 from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
 from exporters.excel.writer import write_table_sheet
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
+from utils.spei_metadata import extract_spei_metadata, valid_tracking
 
 
 def header_key(value: object) -> str:
@@ -155,8 +156,24 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
     """Repair labelled identifiers; never pick an arbitrary long concept number."""
     text = text_key(str(get(row, "Concepto", "")) + " " + str(get(row, "Concepto Original", "")))
     changes, notes = {}, []
+    found = extract_spei_metadata(str(get(row, "Banco", "")), get(row, "Concepto"), get(row, "Concepto Original"))
+    notes.extend(found.notes)
+    existing = identifier(get(row, "Clave de Rastreo"))
+    if found.tracking and not valid_tracking(existing):
+        changes["Clave de Rastreo"] = found.tracking
+    elif found.tracking and existing.upper() != found.tracking:
+        notes.append("Clave de Rastreo: difiere del concepto; se conserva el dato extraído")
+    if found.reference and not identifier(get(row, "Referencia")):
+        changes["Referencia"] = found.reference
+    if found.clabe:
+        column = "CLABE del Ordenante" if found.direction == "RECIBIDO" else "CLABE del Beneficiario"
+        if not valid_clabe(get(row, column)):
+            changes[column] = found.clabe
+    if found.bank:
+        column = "Banco Emisor" if found.direction == "RECIBIDO" else "Banco Receptor"
+        if not _present(get(row, column)):
+            changes[column] = found.bank
     for column, pattern in (
-        ("Clave de Rastreo", r"\b(?:(?:CLAVE|CVE)\.?\s*(?:DE\s+)?RASTREO|RASTREO)\s*[:#=-]?\s*([A-Z0-9][A-Z0-9._/-]{0,39})\b"),
         ("Referencia", r"\b(?:REFERENCIA(?:\s+NUMERICA)?|REF\.?)\s*[:#=-]?\s*([0-9]{1,20})\b"),
     ):
         existing = identifier(get(row, column))
@@ -347,7 +364,7 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             if (resolution.value and not isinstance(old, (date, datetime))) or resolution.status == "REVISAR":
                 record(row, field_name, old, resolution.value or old, resolution.status + ": " + resolution.detail)
         for field_name, value in list(values.items()):
-            if field_name in {"Clave de Rastreo", "Referencia", "Cuenta del Beneficiario", "CLABE del Beneficiario", "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Banco del Beneficiario", "Cuenta Titular", "CLABE Titular"}:
+            if field_name in {"Clave de Rastreo", "Referencia", "Cuenta del Beneficiario", "CLABE del Beneficiario", "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Banco del Beneficiario", "Banco Emisor", "Banco Receptor", "Cuenta Titular", "CLABE Titular"}:
                 if get(row, field_name) != value:
                     record(row, field_name, get(row, field_name), value, "Concepto, catálogo o datos del titular")
         # Excel identifiers stay strings, including leading zeros.
