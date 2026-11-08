@@ -114,7 +114,6 @@ class WindowsPdfDropZone:
         bind(u, "IsWindowVisible", w.BOOL, w.HWND)
         bind(u, "IsIconic", w.BOOL, w.HWND)
         bind(u, "IsWindowEnabled", w.BOOL, w.HWND)
-        bind(u, "GetForegroundWindow", w.HWND)
         bind(u, "GetAncestor", w.HWND, w.HWND, w.UINT)
         bind(u, "SetWindowPos", w.BOOL, w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT)
         bind(u, "ShowWindow", w.BOOL, w.HWND, c.c_int)
@@ -254,11 +253,11 @@ class WindowsPdfDropZone:
                     scale = u.GetDpiForWindow(parent) / 96 or 1.0
                 point = w.POINT(0, 0)
                 u.ClientToScreen(parent, c.byref(point))
-                foreground = u.GetForegroundWindow()
-                active = foreground == parent or foreground == self.hwnd
+                # Explorer takes focus at the start of a real file drag. Do not
+                # hide the drop target when the application loses foreground.
                 geometry = (point.x + int(14 * scale), point.y + rect.bottom - int(64 * scale),
                             max(10, rect.right - int(28 * scale)), int(44 * scale),
-                            self.visible and self.enabled and active and u.IsWindowVisible(parent)
+                            self.visible and self.enabled and u.IsWindowVisible(parent)
                             and not u.IsIconic(parent) and u.IsWindowEnabled(parent))
                 if geometry != last_geometry:
                     u.SetWindowPos(self.hwnd, 0, *geometry[:4], 0x10)

@@ -55,8 +55,7 @@ LOGO_PATH = PROJECT_ROOT / 'assets' / 'logo_gobierno_mexico.png'
 PRIMARY_VALIDATIONS = ('Total depósitos / abonos', 'Total retiros / cargos')
 MOVEMENT_COLUMNS: list[tuple[str, str, int]] = [
     ('fecha_corte', 'Fecha Corte', 92),
-    ('numero_cuenta', 'Cuenta Titular', 118),
-    ('clabe_titular', 'CLABE Titular', 155),
+    ('numero_cuenta', 'Número de Cuenta', 118),
     ('numero_movimiento', 'No. Mov.', 70),
     ('fecha_operacion', 'Fecha Operación', 98),
     ('fecha_liquidacion', 'Fecha Liquidación', 100),
@@ -222,7 +221,7 @@ def main(page: ft.Page):
         prefix_icon=ft.Icons.SEARCH,
     )
     export_button = ft.FilledButton(
-        content='Descargar Excel original',
+        content='Generar Excel',
         icon=ft.Icons.DOWNLOAD,
         disabled=True,
         bgcolor=GOB_GOLD,

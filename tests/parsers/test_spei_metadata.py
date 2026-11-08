@@ -8,8 +8,7 @@ import pytest
 from engine import statement_processor
 from models.movimiento import Movimiento
 from readers.models import DocumentData
-from utils.spei_metadata import bbva_statement_reference, enrich_missing_spei_fields, extract_spei_metadata
-from parsers.bbva.extractors.movimientos import extract_clave_rastreo_from_concepto
+from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata
 
 
 def synthetic_clabe(prefix="072"):
@@ -39,7 +38,6 @@ def test_bbva_positional_key_requires_spei_block_and_checked_account(key, sent):
     assert found.reference == "0000123"
     assert found.bank == "40072"
     assert found.direction == ("ENVIADO" if sent else "RECIBIDO")
-    assert extract_clave_rastreo_from_concepto(text) == key
     assert not extract_spei_metadata("banamex", text).tracking
     assert extract_spei_metadata("bbva", text.replace("SPEI", "TRASPASO")).tracking == ""
     assert extract_spei_metadata("bbva", text.replace(synthetic_clabe(), "7" * 18)).tracking == ""
@@ -66,7 +64,7 @@ def test_conflicting_evidence_never_overwrites_confirmed_metadata_or_money():
     m = Movimiento("03 ENE", None, "CVE RAST: SYNTHETIC001", "CARGO", 50.25, 0,
                    clave_rastreo="CONFIRMED001", referencia="0007", clabe_beneficiario=synthetic_clabe())
     before = asdict(m)
-    enrich_missing_spei_fields([m], "bbva")
+    assert extract_spei_metadata("bbva", m.concepto).tracking == "SYNTHETIC001"
     assert asdict(m) == before
     found = extract_spei_metadata("nu", "RASTREO: SYNTHETIC001 RASTREO: SYNTHETIC002")
     assert not found.tracking and found.notes
@@ -90,13 +88,12 @@ def test_bbva_reference_bank_suffix_is_not_concatenated_or_guessed():
     assert not bbva_statement_reference("0000001234072", found)
     assert not bbva_statement_reference("0000001234 014", found)
     m = Movimiento("03 ENE", None, text, "CARGO", 10.25, 0, referencia="0000001234 072")
-    enrich_missing_spei_fields([m], "bbva")
-    assert m.referencia == "0000001234"
+    assert m.referencia == "0000001234 072"  # CEP normalization must not mutate the parsed movement
 
 
 @pytest.mark.parametrize("bank", list(statement_processor.PARSER_REGISTRY))
 @pytest.mark.parametrize("ocr", [False, True])
-def test_shared_recovery_runs_on_every_registered_digital_and_ocr_route(monkeypatch, bank, ocr):
+def test_parser_output_is_untouched_on_every_registered_digital_and_ocr_route(monkeypatch, bank, ocr):
     m = Movimiento("03 ENE", None, "SPEI ENVIADO CVE RAST: SYNTHETIC001", "CARGO", 10.25, 0)
     state = SimpleNamespace(movimientos=[m])
     parser = lambda document: state
@@ -105,5 +102,6 @@ def test_shared_recovery_runs_on_every_registered_digital_and_ocr_route(monkeypa
     doc = DocumentData(raw_text="SYNTHETIC", metadata={"ocr": ocr})
     result, _ = statement_processor._process_once(doc, bank)
     assert len(result.movimientos) == 1 and result.movimientos[0] is m
-    assert m.clave_rastreo == "SYNTHETIC001"
+    assert m.clave_rastreo is None
+    assert extract_spei_metadata(bank, m.concepto).tracking == "SYNTHETIC001"
     assert (m.fecha_operacion, m.cargo, m.abono, m.concepto) == ("03 ENE", 10.25, 0, "SPEI ENVIADO CVE RAST: SYNTHETIC001")

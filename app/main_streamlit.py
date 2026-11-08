@@ -39,8 +39,7 @@ PRIMARY_VALIDATIONS = ('Total depósitos / abonos', 'Total retiros / cargos')
 FINAL_STATUSES = {'completed', 'error', 'cancelled'}
 MOVEMENT_COLUMNS = [
     ('fecha_corte', 'Fecha Corte'),
-    ('numero_cuenta', 'Cuenta Titular'),
-    ('clabe_titular', 'CLABE Titular'),
+    ('numero_cuenta', 'Número de Cuenta'),
     ('numero_movimiento', 'No. Movimiento'),
     ('fecha_operacion', 'Fecha Operación'),
     ('fecha_liquidacion', 'Fecha Liquidación'),

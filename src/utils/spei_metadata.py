@@ -136,23 +136,3 @@ def extract_spei_metadata(bank: str, concept: str | None, original: str | None =
     result.tracking = _one(tracking, "Clave de Rastreo", result.notes)
     result.reference = _one(references, "Referencia", result.notes)
     return result
-
-
-def enrich_missing_spei_fields(movements, bank: str):
-    """Complete metadata only, preserving existing fields and all money/dates."""
-    for movement in movements or []:
-        found = extract_spei_metadata(bank, getattr(movement, "concepto", None),
-                                      getattr(movement, "concepto_original", None))
-        if found.tracking and not valid_tracking(getattr(movement, "clave_rastreo", None)):
-            movement.clave_rastreo = found.tracking
-        if found.reference and not identifier(getattr(movement, "referencia", None)):
-            movement.referencia = found.reference
-        elif bank_code(bank) == "40012":
-            repaired = bbva_statement_reference(getattr(movement, "referencia", None), found)
-            if repaired:
-                movement.referencia = repaired
-        if found.clabe and not valid_clabe(getattr(movement, "clabe_beneficiario", None)):
-            movement.clabe_beneficiario = found.clabe
-        if found.bank and not identifier(getattr(movement, "sucursal", None)):
-            movement.sucursal = next(name for name, code in ALIASES.items() if code == found.bank)
-    return movements
