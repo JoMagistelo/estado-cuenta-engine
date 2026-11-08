@@ -16,7 +16,6 @@ from models.ocr_review import OCRCandidate, OCRReview
 from readers.models import DocumentData
 from readers.reader_manager import ReaderManager
 from utils.text_normalizer import normalize_text
-from utils.spei_metadata import enrich_missing_spei_fields
 from parsers.bbva import parse_bbva
 from parsers.banamex import parse_banamex
 from parsers.banorte import parse_banorte
@@ -153,7 +152,6 @@ def _process_once(document: DocumentData, bank_key: str):
         ocr_parser_fn = _resolve_ocr_parser(bank_key)
         if ocr_parser_fn is not None:
             estado = ocr_parser_fn(document)
-            enrich_missing_spei_fields(getattr(estado, 'movimientos', None), bank_key)
             _classify_movements_by_amount_direction(estado)
             return estado, document
 
@@ -162,7 +160,6 @@ def _process_once(document: DocumentData, bank_key: str):
             document = _apply_coordinate_normalizer(document, normalizer_fn)
 
     estado = parser_fn(document)
-    enrich_missing_spei_fields(getattr(estado, 'movimientos', None), bank_key)
     _classify_movements_by_amount_direction(estado)
     return estado, document
 
