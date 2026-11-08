@@ -39,7 +39,7 @@ def amount(value) -> Decimal | None:
 
 def _valid_card16(value: str) -> bool:
     """Check a 16-digit card identifier without treating it as an 18-digit CLABE."""
-    if not re.fullmatch(r"[0-9]{16}", value):
+    if not re.fullmatch(r"[0-9]{16}", value) or len(set(value)) < 2:
         return False
     total = 0
     for index, char in enumerate(value):
