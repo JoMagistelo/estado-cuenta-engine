@@ -161,6 +161,17 @@ def test_missing_date_and_placeholder_tracking_are_reviewed():
     assert not query.ready and not query.tracking
 
 
+def test_holder_identifiers_already_in_movement_are_kept_when_metadata_is_missing():
+    bundle = WorkbookBundle.from_excel(excel(accounts=[account_row(account=None, own=None)],
+        movements=[movement_row(**{"Número de Cuenta": None, "Cuenta Titular": "12345678901", "CLABE Titular": OWN,
+                                  "Cargo": 0, "Abono": 125.25, "Concepto": "SPEI RECIBIDO BANORTE"})]))
+    row = rows(bundle.improved)[0]
+    assert get(row, "Cuenta Titular") == "12345678901"
+    assert get(row, "CLABE Titular") == OWN
+    query = queries_from_workbook(bundle.improved)[0]
+    assert query.ready and query.destination == OWN
+
+
 def test_txt_uses_improved_date_and_three_variants_without_bom():
     bundle = WorkbookBundle.from_excel(excel())
     queries = queries_from_workbook(bundle.improved)

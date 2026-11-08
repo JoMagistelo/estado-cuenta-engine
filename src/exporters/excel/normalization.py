@@ -314,8 +314,8 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
         owner = matches[0] if len(matches) == 1 else None
         metadata = owner.row if owner else row
         values, notes = recover_fields(row)
-        account = owner.account if owner else _account(get(row, "Cuenta Titular") or get(row, "Número de Cuenta"))
-        clabe = owner.clabe if owner else account_identifier(get(row, "CLABE Titular"))
+        account = (owner.account if owner else "") or _account(get(row, "Cuenta Titular") or get(row, "Número de Cuenta"))
+        clabe = (owner.clabe if owner else "") or account_identifier(get(row, "CLABE Titular"))
         values.update({"Cuenta Titular": account, "CLABE Titular": clabe if valid_clabe(clabe) else ""})
         if account and account != _account(get(row, "Número de Cuenta")):
             values["Número de Cuenta"] = account
