@@ -1,5 +1,33 @@
 # Excel mejorado y CEP integrado
 
+## Contrato de la versión 7.0.0
+
+- **Extracción:** parsers y procesador bancario sin modificaciones. `Generar Excel` sigue descargando
+  `reporte_estados_de_cuenta.xlsx`, con la misma estructura y los valores originales.
+- **Interfaz Windows:** exportación fija, fuera de la columna desplazable de resultados;
+  zona independiente de arrastre PDF de 96 DIP al pie de la ventana, con margen DPI
+  calculado por una única función y sin superponerse al botón de exportación.
+- **CEP:** pestaña y pasos completos conservados. Recupera metadatos y homologa fechas
+  **únicamente a partir del Excel exportado**, en su copia normalizada.
+- **Cobertura progresiva:** el módulo muestra cuántos candidatos están listos y cuáles
+  requieren revisión manual. Los patrones documentados de nuevos bancos se incorporarán
+  en futuras versiones a la normalización, no a los parsers; no se inventan claves,
+  CLABE, cuentas ni bancos faltantes.
+- **Control de calidad:** no se fusiona hasta comprobar en Windows el botón de
+  descarga, arrastre de varios PDF, navegación de las pestañas, integridad del Excel
+  original y validación del TXT/ZIP con casos autorizados.
+
+Para probar la rama antes del merge:
+
+```powershell
+Set-Location (git rev-parse --show-toplevel)
+git fetch origin
+git switch -c release/7.0.0-cep-ui-estable --track origin/release/7.0.0-cep-ui-estable
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q
+.\.venv\Scripts\python.exe app\main_desktop.py
+```
+
+
 El experimento `experimentos/cep-banxico-gui` se conserva intacto. La integración usa módulos independientes en `src/cep` y el exportador existente para conservar el formato del Excel original.
 
 ## Flujo de uso
