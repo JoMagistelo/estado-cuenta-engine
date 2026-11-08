@@ -183,6 +183,12 @@ jobs:
           python -c "import flet, pandas, streamlit; print('UI dependencies OK')"
           python -m compileall -q app
 
+      - name: Exercise real Flet controls and native Windows PDF drop lane
+        shell: pwsh
+        run: |
+          python -m pip install --group dev
+          python -m pytest tests/test_cep_ui_smoke.py tests/test_pdf_drop.py tests/exporters/test_normalized_cep_workflow.py -q
+
   desktop-build:
     name: PyInstaller portable offline Windows
     runs-on: windows-latest

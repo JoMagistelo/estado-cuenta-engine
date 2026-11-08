@@ -19,6 +19,8 @@ from engine.ocr_fallback_policy import normalize_ocr_engine
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
+from exporters.excel.workbook_bundle import WorkbookBundle
+from cep_streamlit import render_cep_workspace, set_cep_bundle
 
 APP_VERSION = '6.0.0'
 PROCESSING_UI_POLL_INTERVAL = 0.75
@@ -37,7 +39,8 @@ PRIMARY_VALIDATIONS = ('Total depósitos / abonos', 'Total retiros / cargos')
 FINAL_STATUSES = {'completed', 'error', 'cancelled'}
 MOVEMENT_COLUMNS = [
     ('fecha_corte', 'Fecha Corte'),
-    ('numero_cuenta', 'Número de Cuenta'),
+    ('numero_cuenta', 'Cuenta Titular'),
+    ('clabe_titular', 'CLABE Titular'),
     ('numero_movimiento', 'No. Movimiento'),
     ('fecha_operacion', 'Fecha Operación'),
     ('fecha_liquidacion', 'Fecha Liquidación'),
@@ -865,6 +868,8 @@ def movement_dataframe(result) -> pd.DataFrame:
                 value = getattr(dc, 'numero_cuenta', None)
             elif field_name == 'numero_movimiento':
                 value = index
+            elif field_name == 'clabe_titular':
+                value = getattr(dc, 'clabe', None)
             elif field_name == '__bank__':
                 value = str(result.bank_key).upper()
             else:
@@ -1116,6 +1121,10 @@ def render_export_section() -> None:
         return
     st.divider()
     pending = pending_ocr_selection_files(list(st.session_state.results))
+    token = tuple((id(r), r.confirmed_ocr_engine, len(r.estado_cuenta.movimientos or []) if r.estado_cuenta else 0)
+                  for r in st.session_state.results)
+    if st.session_state.get('export_bundle_token') != token:
+        st.session_state.pop('export_bundle', None)
     col_text, col_button = st.columns([3, 1])
     with col_text:
         st.markdown('### 📤 Exportación')
@@ -1133,30 +1142,21 @@ def render_export_section() -> None:
             'Preparar Excel',
             type='primary',
             use_container_width=True,
-            disabled=bool(pending),
+            disabled=bool(pending) or st.session_state.worker_running,
         ):
-            excel_path = None
             try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                    excel_path = tmp.name
-                export_batch_excel(list(st.session_state.results), excel_path)
-                with open(excel_path, 'rb') as file:
-                    data = file.read()
-                st.download_button(
-                    'Descargar Excel',
-                    data=data,
-                    file_name='reporte_estados_de_cuenta.xlsx',
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    use_container_width=True,
-                )
+                st.session_state.export_bundle = WorkbookBundle.from_results(list(st.session_state.results))
+                st.session_state.export_bundle_token = token
             except Exception as ex:
                 st.error(f'Error al generar Excel: {ex}')
-            finally:
-                if excel_path:
-                    try:
-                        os.remove(excel_path)
-                    except (FileNotFoundError, OSError):
-                        pass
+    bundle = st.session_state.get('export_bundle')
+    if bundle:
+        original, improved, cep = st.columns(3)
+        original.download_button('Excel original', bundle.original, 'excel_original.xlsx', use_container_width=True)
+        improved.download_button('Excel mejorado', bundle.improved, 'excel_mejorado.xlsx', use_container_width=True)
+        if cep.button('Preparar TXT en CEP', use_container_width=True):
+            set_cep_bundle(bundle)
+            st.info('Movimientos listos en la pestaña CEP Banxico.')
 
 
 @st.dialog(
@@ -1283,25 +1283,25 @@ def main() -> None:
         st.session_state.initial_dialog_pending = False
         processing_dialog()
 
-    render_upload_area()
-
-    if st.session_state.worker_error:
-        st.error(f'Error durante el procesamiento: {st.session_state.worker_error}')
-        if st.session_state.worker_traceback:
-            with st.expander('Detalle técnico'):
-                st.code(st.session_state.worker_traceback)
-
-    if st.session_state.worker_running:
-        live_processing_fragment()
-    else:
-        render_static_processing_workspace()
-
-    result = selected_result()
-    if result is not None:
-        st.divider()
-        render_result(result)
-
-    render_export_section()
+    extraction, cep = st.tabs(['Extracción de movimientos', 'CEP Banxico'])
+    with extraction:
+        render_upload_area()
+        if st.session_state.worker_error:
+            st.error(f'Error durante el procesamiento: {st.session_state.worker_error}')
+            if st.session_state.worker_traceback:
+                with st.expander('Detalle técnico'):
+                    st.code(st.session_state.worker_traceback)
+        if st.session_state.worker_running:
+            live_processing_fragment()
+        else:
+            render_static_processing_workspace()
+        result = selected_result()
+        if result is not None:
+            st.divider()
+            render_result(result)
+        render_export_section()
+    with cep:
+        render_cep_workspace(st.session_state.results, busy=st.session_state.worker_running)
 
 
 if __name__ == '__main__':

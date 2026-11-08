@@ -594,6 +594,18 @@ def _parallel_runtime_probe(delay_seconds: float) -> int:
     return os.getpid()
 
 
+def _run_packaged_excel_cep_self_test() -> bool:
+    if "--self-test-excel-cep" not in sys.argv:
+        return False
+    from cep.self_test import run_excel_cep_self_test
+    from utils.windows_pdf_drop import WindowsPdfDropZone
+    importlib.import_module("cep_panel")
+    if not callable(WindowsPdfDropZone):
+        raise RuntimeError("El ejecutable no contiene la carga nativa de PDF")
+    run_excel_cep_self_test()
+    return True
+
+
 def _run_packaged_parallel_runtime_self_test() -> bool:
     """Comprueba que el portable puede crear hijos sin reabrir la interfaz."""
     if "--self-test-parallel-runtime" not in sys.argv:
@@ -617,6 +629,8 @@ def _run_packaged_parallel_runtime_self_test() -> bool:
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    if _run_packaged_excel_cep_self_test():
+        raise SystemExit(0)
     if _run_packaged_parallel_runtime_self_test():
         raise SystemExit(0)
     if _run_packaged_paddlex_self_test():

@@ -121,6 +121,15 @@ if (-not (Test-Path $Exe)) {
     throw "No se generó el ejecutable esperado: $Exe"
 }
 
+$ExcelCepSmoke = Start-Process `
+    -FilePath $Exe `
+    -ArgumentList "--self-test-excel-cep" `
+    -Wait `
+    -PassThru
+if ($ExcelCepSmoke.ExitCode -ne 0) {
+    throw "El EXE no pudo comprobar Excel normalizado y cruce CEP (ExitCode=$($ExcelCepSmoke.ExitCode))."
+}
+
 # El paralelismo debe comprobarse dentro del binario congelado. Esta prueba
 # inicia dos hijos con spawn y detecta la regresión donde el EXE reabre la UI,
 # queda bloqueado o no incluye los módulos de la entrada paralela.
