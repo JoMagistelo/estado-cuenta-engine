@@ -45,6 +45,7 @@ git fetch origin
 git switch feature/excel-normalizado-cep-integrado
 git pull --ff-only
 py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[desktop]"
 .\.venv\Scripts\python.exe -m pip install --group dev
 .\.venv\Scripts\python.exe -m pytest -m "not integration" -q

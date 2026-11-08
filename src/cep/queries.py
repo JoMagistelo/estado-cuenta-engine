@@ -80,6 +80,7 @@ class CepQuery:
     destination: str = ""
     destination_aliases: tuple[str, ...] = ()
     owner_aliases: tuple[str, ...] = ()
+    origin_aliases: tuple[str, ...] = ()
     value: Decimal | None = None
     issues: list[str] = field(default_factory=list)
 
@@ -139,6 +140,7 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
         q.issuer = bank_code(get(row, "Banco Emisor")) or _label_bank(text, "emisor")
         q.receiver = bank_code(get(row, "Banco Receptor")) or _label_bank(text, "receptor")
         if q.direction == "ENVIADO":
+            q.origin_aliases = own
             if q.issuer and owner_bank and q.issuer != owner_bank:
                 q.issues.append("Banco emisor contradice banco del estado")
             q.issuer = q.issuer or owner_bank
@@ -163,6 +165,22 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
             if inferred and q.issuer and inferred != q.issuer:
                 q.issues.append("CLABE ordenante contradice banco emisor")
             q.issuer = q.issuer or inferred
+            source_accounts = [_account(get(row, "CLABE del Ordenante")),
+                               _account(get(row, "Cuenta del Ordenante"))]
+            # HSBC explicitly maps Ordenante -> legacy Beneficiario and
+            # Participante Emisor -> Sucursal in received-SPEI enrichment.
+            # The destination for Banxico remains the HOLDER's account.
+            if owner_bank == "40021":
+                source_accounts.extend((_account(get(row, "CLABE del Beneficiario")),
+                                        _account(get(row, "Cuenta del Beneficiario"))))
+            q.origin_aliases = tuple(dict.fromkeys(v for v in source_accounts if v and v not in own))
+            participant = bank_code(get(row, "Sucursal")) or bank_code(get(row, "Banco del Beneficiario"))
+            if not q.issuer and participant and participant != owner_bank:
+                q.issuer = participant
+            if not q.issuer:
+                inferred_sources = {clabe_bank(v) for v in q.origin_aliases if clabe_bank(v)}
+                if len(inferred_sources) == 1:
+                    q.issuer = next(iter(inferred_sources))
         other = bank_mentions(text) - {owner_bank}
         if len(other) == 1:
             if q.direction == "ENVIADO" and not q.receiver:

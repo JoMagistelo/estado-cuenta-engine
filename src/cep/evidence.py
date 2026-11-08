@@ -217,6 +217,8 @@ def _compatible(query: CepQuery, record: CepRecord):
         return False
     if query.direction == "ENVIADO" and query.owner_aliases and origin not in query.owner_aliases:
         return False
+    if query.origin_aliases and origin not in query.origin_aliases:
+        return False
     # At least one account anchors the link to this statement, even when its
     # TXT could not be generated because another field was missing.
     return bool(query.destination_aliases or (query.direction == "ENVIADO" and query.owner_aliases))

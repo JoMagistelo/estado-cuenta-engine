@@ -193,6 +193,29 @@ def test_received_txt_uses_each_holders_own_account():
     assert qs[0].issuer == "40072" and qs[0].receiver == "40012"
 
 
+def test_hsbc_received_uses_participant_bank_and_keeps_sender_distinct_from_holder():
+    own_hsbc = clabe("021")
+    source_bbva = clabe("012", "55555555555")
+    account = account_row(own=own_hsbc)
+    account["Banco"] = "hsbc"
+    row = movement_row(**{"Banco": "hsbc", "Cargo": 0, "Abono": 125.25,
+                           "CLABE del Beneficiario": source_bbva, "Cuenta del Beneficiario": "55555555555",
+                           "Sucursal": "BBVA MEXICO", "Concepto": "SPEI RECIBIDO", "Concepto Original": "PAGO"})
+    qs = queries_from_workbook(WorkbookBundle.from_excel(excel([account], [row])).improved)
+    query = qs[0]
+    assert query.ready, query.issues
+    assert query.issuer == "40012" and query.receiver == "40021"
+    assert query.destination == own_hsbc
+    assert source_bbva in query.origin_aliases
+    official = xml_cep(destination=own_hsbc, origin=source_bbva).replace(b'bancoReceptor="40072"', b'bancoReceptor="40021"')
+    evidence = CepEvidence()
+    evidence.add_zip(zipped(official))
+    assert match_evidence(qs, evidence)[2]["CEP Estado"] == "EXITO"
+    wrong = CepEvidence()
+    wrong.add_zip(zipped(official.replace(source_bbva.encode(), OTHER.encode())))
+    assert match_evidence(qs, wrong)[2]["CEP Estado"] == "REVISAR"
+
+
 def xml_cep(tracking="PRUEBASINTETICA001", value="125.25", when="03/01/2026", destination=OTHER, origin=OWN):
     return (f'<SPEI_Tercero fechaOperacion="{when}" claveRastreo="{tracking}">'
             f'<Ordenante nombre="ORDENANTE XML" rfc="XXXX010101XXX" cuenta="{origin}" bancoEmisor="40012"/>'
