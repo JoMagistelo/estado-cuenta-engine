@@ -429,11 +429,18 @@ def test_zero_amount_remains_in_review_even_with_tracking_and_valid_card():
 def test_normalize_joined_month_pago_only_when_month_and_cutoff_are_unambiguous():
     assert resolve_date("02 ENEPAGO", cutoff="05/01/2024").value == date(2024, 1, 2)
     assert resolve_date("02 ENEPAGOS", cutoff="05/01/2024").value is None
-    original = excel(movements=[movement_row(**{
-        "Fecha de Operación": "02 ENEPAGO",
-        "Fecha de Corte": "05/01/2024",
-        "Concepto": "PAGO INTERBANCARIO A BANORTE",
-    })])
+    original = excel(
+        accounts=[account_row() | {
+            "Periodo de Inicio": "05/12/2023",
+            "Periodo de Fin": "05/01/2024",
+            "Fecha de Corte": "05/01/2024",
+        }],
+        movements=[movement_row(**{
+            "Fecha de Operación": "02 ENEPAGO",
+            "Fecha de Corte": "05/01/2024",
+            "Concepto": "PAGO INTERBANCARIO A BANORTE",
+        })],
+    )
     bundle = WorkbookBundle.from_excel(original)
     assert bundle.original == original
     assert get(rows(bundle.improved)[0], "Fecha de Operación") == datetime(2024, 1, 2)
