@@ -56,6 +56,12 @@ def date_parts(value: object) -> tuple[int, int | None, int | None] | None:
     s = re.sub(r"^(?:(?:FECHA\s+(?:CORTE|CIERRE)|AL|CORTE|PERIODO)\s*[:#-]?\s*)+", "", s)
     s = re.sub(r"\s*\$.*$", "", s)
     s = re.sub(r"\s+", " ", s).strip()
+    # OCR sometimes joins the last month abbreviation and the next word:
+    # "02 ENEPAGO" means "02 ENE" + "PAGO". Only this exact, anchored shape
+    # is recoverable; never infer a day, month or year from arbitrary text.
+    joined = re.fullmatch(r"(\d{1,2})\s+(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)PAGO", s)
+    if joined:
+        s = joined[1] + " " + joined[2]
     iso = re.fullmatch(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T]00:00:00)?", s)
     compact = re.fullmatch(r"(20\d{2})(\d{2})(\d{2})", s)
     if iso or compact:
