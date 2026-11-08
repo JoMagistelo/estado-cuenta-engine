@@ -1,6 +1,6 @@
 # Excel mejorado y CEP integrado
 
-PR de prueba contra master. El experimento `experimentos/cep-banxico-gui` y sus ramas se consultaron como referencia y no se modificaron. La integración usa módulos independientes en `src/cep` y el exportador existente para conservar el Excel original.
+PR de prueba contra master. El experimento `experimentos/cep-banxico-gui` se conserva con archivos idénticos a la rama `feature/cep-banxico-gui-piloto`; no se modificó su código ni sus ramas. Se incorpora esa copia intacta porque master todavía no contenía el experimento. La integración usa módulos independientes en `src/cep` y el exportador existente para conservar el Excel original.
 
 ## Checklist de las 11 mejoras
 

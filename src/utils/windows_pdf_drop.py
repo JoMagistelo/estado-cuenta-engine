@@ -172,6 +172,13 @@ class WindowsPdfDropZone:
             self._closed.wait(0.2)
         if not parent:
             raise RuntimeError("No se encontró la ventana para recibir PDFs arrastrados")
+        previous_dpi = None
+        if hasattr(u, "GetWindowDpiAwarenessContext") and hasattr(u, "SetThreadDpiAwarenessContext"):
+            bind(u, "GetWindowDpiAwarenessContext", w.HANDLE, w.HWND)
+            bind(u, "SetThreadDpiAwarenessContext", w.HANDLE, w.HANDLE)
+            context = u.GetWindowDpiAwarenessContext(parent)
+            if context:
+                previous_dpi = u.SetThreadDpiAwarenessContext(context)
         brush = gdi.CreateSolidBrush(0x00ECF0E8)
 
         @proc_type
@@ -242,3 +249,5 @@ class WindowsPdfDropZone:
             self.hwnd = None
             u.UnregisterClassW(class_name, instance)
             gdi.DeleteObject(brush)
+            if previous_dpi:
+                u.SetThreadDpiAwarenessContext(previous_dpi)

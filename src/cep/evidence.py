@@ -226,6 +226,22 @@ def match_evidence(queries: list[CepQuery], evidence: CepEvidence) -> dict[int, 
     by_tracking = defaultdict(list)
     for record in evidence.records:
         by_tracking[identifier(record.data["tracking"]).upper()].append(record)
+    options = {}
+    for query in queries:
+        compatible = [r for r in by_tracking.get(query.tracking.upper(), []) if _compatible(query, r)]
+        exact = [r for r in compatible if full_date(r.data["date"]) == query.operation_date]
+        options[query.row] = exact or compatible
+    # An XML must not be assigned to two different same-direction operations.
+    # When exact and ±1 dates compete, first reserve the exact-date evidence.
+    exact_claims = {r.signature for q in queries for r in options[q.row]
+                    if full_date(r.data["date"]) == q.operation_date}
+    for query in queries:
+        options[query.row] = [r for r in options[query.row]
+                              if r.signature not in exact_claims or full_date(r.data["date"]) == query.operation_date]
+    claims = defaultdict(list)
+    for query in queries:
+        if len(options[query.row]) == 1:
+            claims[options[query.row][0].signature].append(query)
     output = {}
     for query in queries:
         result = dict.fromkeys(CEP_COLUMNS, "")
@@ -233,9 +249,14 @@ def match_evidence(queries: list[CepQuery], evidence: CepEvidence) -> dict[int, 
         result["CEP Estado"] = "NO_APARECE_EN_ZIP" if query.candidate else "SIN_INDICIOS_SPEI"
         result["CEP Detalle"] = "; ".join(query.issues)
         candidates = by_tracking.get(query.tracking.upper(), [])
-        matches = [r for r in candidates if _compatible(query, r)]
-        exact = [r for r in matches if full_date(r.data["date"]) == query.operation_date]
-        matches = exact or matches
+        matches = options[query.row]
+        competing = bool(len(matches) == 1 and sum(
+            q.direction == query.direction for q in claims[matches[0].signature]) > 1)
+        if competing:
+            result["CEP Estado"] = "REVISAR"
+            result["CEP Detalle"] = "El mismo XML corresponde a varias filas indistinguibles; revisar duplicados"
+            output[query.row] = result
+            continue
         if len(matches) == 1:
             record = matches[0]
             d = record.data

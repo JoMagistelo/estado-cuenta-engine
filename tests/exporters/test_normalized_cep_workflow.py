@@ -238,6 +238,30 @@ def test_xml_entities_are_rejected():
         parse_cep_xml(b'<!DOCTYPE a [<!ENTITY x "evil">]><a>&x;</a>')
 
 
+def test_identical_tracking_in_two_rows_does_not_duplicate_cep_assignment():
+    qs = queries_from_workbook(WorkbookBundle.from_excel(excel(movements=[movement_row(), movement_row(2)])).improved)
+    evidence = CepEvidence()
+    evidence.add_zip(zipped())
+    assert all(v["CEP Estado"] == "REVISAR" for v in match_evidence(qs, evidence).values())
+
+
+def test_exact_date_wins_over_competing_adjacent_day_row():
+    qs = queries_from_workbook(WorkbookBundle.from_excel(excel(movements=[movement_row(), movement_row(2, **{"Fecha de Operación": "04 ENE"})])).improved)
+    evidence = CepEvidence()
+    evidence.add_zip(zipped())
+    result = match_evidence(qs, evidence)
+    assert result[2]["CEP Estado"] == "EXITO"
+    assert result[3]["CEP Estado"] == "REVISAR"
+
+
+def test_reloading_normalized_workbook_keeps_dates_and_audit_history():
+    bundle = WorkbookBundle.from_excel(excel())
+    reloaded = WorkbookBundle.from_excel(bundle.improved)
+    assert get(rows(reloaded.improved)[0], "Fecha de Operación Original") == "03 ENE"
+    assert get(rows(reloaded.improved)[0], "Fecha de Operación") == datetime(2026, 1, 3)
+    assert len(rows(reloaded.improved, "Revisión Excel")) >= len(rows(bundle.improved, "Revisión Excel"))
+
+
 def test_batch_splitting_501_queries_does_not_leave_a_single_line():
     qs = queries_from_workbook(WorkbookBundle.from_excel(excel()).improved)
     from dataclasses import replace
