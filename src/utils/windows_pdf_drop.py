@@ -1,9 +1,8 @@
-"""Native Explorer PDF drop lane for the stock portable Flet Windows client.
+"""Explorer drop strip owned by the Flet window, without cross-process parenting.
 
-Flet 0.86's DragTarget accepts Flet controls, not Explorer files. This small
-child HWND owns its WM_DROPFILES procedure in Python's process; it does NOT
-subclass the separate Flet client process or require a custom Flutter build.
-Only the reserved footer area accepts drops. Parsing stays on the usual worker.
+An owned, nonactivating WS_POPUP avoids attaching a Python child HWND to the
+Flutter renderer (which can reset DPI state or leave a grey rendering surface).
+It follows the reserved 50-DIP area and hides on tab changes/minimize/dialogs.
 """
 
 from __future__ import annotations
@@ -37,6 +36,8 @@ class WindowsPdfDropZone:
         self.visible = True
         self.enabled = True
         self.hwnd = None
+        self.ready = False
+        self.error = None
         self._closed = threading.Event()
         self._thread = None
 
@@ -56,6 +57,7 @@ class WindowsPdfDropZone:
         try:
             self._run()
         except Exception as error:
+            self.error = str(error)
             if self.on_error:
                 self.on_error(str(error))
 
@@ -98,6 +100,7 @@ class WindowsPdfDropZone:
         enum_type = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
         bind(u, "EnumWindows", w.BOOL, enum_type, w.LPARAM)
         bind(u, "GetWindowTextW", c.c_int, w.HWND, w.LPWSTR, c.c_int)
+        bind(u, "GetClassNameW", c.c_int, w.HWND, w.LPWSTR, c.c_int)
         bind(u, "GetWindowThreadProcessId", w.DWORD, w.HWND, c.POINTER(w.DWORD))
         bind(u, "RegisterClassW", w.ATOM, c.POINTER(WindowClass))
         bind(u, "UnregisterClassW", w.BOOL, w.LPCWSTR, w.HINSTANCE)
@@ -107,6 +110,12 @@ class WindowsPdfDropZone:
         bind(u, "DestroyWindow", w.BOOL, w.HWND)
         bind(u, "IsWindow", w.BOOL, w.HWND)
         bind(u, "GetClientRect", w.BOOL, w.HWND, c.POINTER(w.RECT))
+        bind(u, "ClientToScreen", w.BOOL, w.HWND, c.POINTER(w.POINT))
+        bind(u, "IsWindowVisible", w.BOOL, w.HWND)
+        bind(u, "IsIconic", w.BOOL, w.HWND)
+        bind(u, "IsWindowEnabled", w.BOOL, w.HWND)
+        bind(u, "GetForegroundWindow", w.HWND)
+        bind(u, "GetAncestor", w.HWND, w.HWND, w.UINT)
         bind(u, "SetWindowPos", w.BOOL, w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT)
         bind(u, "ShowWindow", w.BOOL, w.HWND, c.c_int)
         bind(u, "BeginPaint", w.HDC, w.HWND, c.POINTER(Paint))
@@ -140,14 +149,18 @@ class WindowsPdfDropZone:
                     ok = kernel.Process32NextW(snapshot, c.byref(entry))
             finally:
                 kernel.CloseHandle(snapshot)
-            found = []
+            found, flutter_matches = [], []
 
             @enum_type
             def visit(hwnd, unused):
                 title = c.create_unicode_buffer(512)
                 u.GetWindowTextW(hwnd, title, 512)
-                if title.value != self.title:
+                if title.value != self.title or not u.IsWindowVisible(hwnd):
                     return True
+                window_class = c.create_unicode_buffer(256)
+                u.GetClassNameW(hwnd, window_class, 256)
+                if "FLUTTER" in window_class.value.upper():
+                    flutter_matches.append(hwnd)
                 pid = w.DWORD()
                 u.GetWindowThreadProcessId(hwnd, c.byref(pid))
                 current, seen = pid.value, set()
@@ -160,10 +173,15 @@ class WindowsPdfDropZone:
                 return True
 
             u.EnumWindows(visit, 0)
-            return found[0] if len(found) == 1 else None
+            if len(found) == 1:
+                return found[0]
+            # The cached Flet launcher can exit after starting its real client,
+            # so its intermediate PID is no longer in the process snapshot.
+            # Accept only one visible Flutter window with this exact app title.
+            return flutter_matches[0] if not found and len(flutter_matches) == 1 else None
 
         parent = None
-        for attempt in range(150):
+        for attempt in range(300):
             if self._closed.is_set():
                 return
             parent = find_parent()
@@ -217,11 +235,14 @@ class WindowsPdfDropZone:
             gdi.DeleteObject(brush)
             raise c.WinError(c.get_last_error())
         try:
-            self.hwnd = u.CreateWindowExW(0x10, class_name, "Carga PDF", 0x50000000,
-                                         14, 0, 300, 44, parent, None, instance, None)
+            # WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_ACCEPTFILES;
+            # WS_POPUP, NOT WS_CHILD. hWndParent is its owner, not a parent.
+            self.hwnd = u.CreateWindowExW(0x08000090, class_name, "Carga PDF", 0x80000000,
+                                         0, 0, 300, 44, parent, None, instance, None)
             if not self.hwnd:
                 raise c.WinError(c.get_last_error())
             shell.DragAcceptFiles(self.hwnd, True)
+            self.ready = True
             message = w.MSG()
             last_geometry = None
             while not self._closed.is_set() and u.IsWindow(parent) and u.IsWindow(self.hwnd):
@@ -231,12 +252,17 @@ class WindowsPdfDropZone:
                 if hasattr(u, "GetDpiForWindow"):
                     bind(u, "GetDpiForWindow", w.UINT, w.HWND)
                     scale = u.GetDpiForWindow(parent) / 96 or 1.0
-                geometry = (int(14 * scale), rect.bottom - int(64 * scale),
+                point = w.POINT(0, 0)
+                u.ClientToScreen(parent, c.byref(point))
+                foreground = u.GetForegroundWindow()
+                active = foreground == parent or foreground == self.hwnd
+                geometry = (point.x + int(14 * scale), point.y + rect.bottom - int(64 * scale),
                             max(10, rect.right - int(28 * scale)), int(44 * scale),
-                            self.visible and self.enabled)
+                            self.visible and self.enabled and active and u.IsWindowVisible(parent)
+                            and not u.IsIconic(parent) and u.IsWindowEnabled(parent))
                 if geometry != last_geometry:
                     u.SetWindowPos(self.hwnd, 0, *geometry[:4], 0x10)
-                    u.ShowWindow(self.hwnd, 5 if geometry[-1] else 0)
+                    u.ShowWindow(self.hwnd, 4 if geometry[-1] else 0)  # SW_SHOWNOACTIVATE
                     last_geometry = geometry
                 while u.PeekMessageW(c.byref(message), None, 0, 0, 1):
                     u.TranslateMessage(c.byref(message))
@@ -247,6 +273,7 @@ class WindowsPdfDropZone:
                 shell.DragAcceptFiles(self.hwnd, False)
                 u.DestroyWindow(self.hwnd)
             self.hwnd = None
+            self.ready = False
             u.UnregisterClassW(class_name, instance)
             gdi.DeleteObject(brush)
             if previous_dpi:

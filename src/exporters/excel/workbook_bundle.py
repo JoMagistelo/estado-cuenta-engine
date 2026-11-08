@@ -28,6 +28,7 @@ def verify_pair(original: bytes, improved: bytes) -> int:
                        "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Cuenta Titular", "CLABE Titular",
                        "Estado de Fecha", "Revisión Normalización", "Origen Datos Titular", "Banco del Beneficiario",
                        "Código Banco Beneficiario", "Código Plaza/Producto CLABE"}
+            allowed.update({"Banco Emisor", "Banco Receptor", "Referencia SPEI", "Referencia Original"})
             for name in left:
                 if name in allowed or name == '_row':
                     continue
@@ -61,11 +62,16 @@ class WorkbookBundle:
 
     @classmethod
     def from_results(cls, results):
-        with tempfile.TemporaryDirectory(prefix="engine_export_") as folder:
-            path = export_batch_excel(results, Path(folder) / "original.xlsx")
-            return cls.from_excel(path)
+        return cls.from_excel(original_from_results(results))
 
     def content(self, variant: str):
         if variant not in {"original", "mejorado"}:
             raise ValueError("Elige original o mejorado")
         return self.original if variant == "original" else self.improved
+
+
+def original_from_results(results) -> bytes:
+    """The extraction tab exports without running any normalization."""
+    with tempfile.TemporaryDirectory(prefix="engine_export_") as folder:
+        path = export_batch_excel(results, Path(folder) / "original.xlsx")
+        return path.read_bytes()

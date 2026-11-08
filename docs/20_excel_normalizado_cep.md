@@ -1,6 +1,19 @@
 # Excel mejorado y CEP integrado
 
-PR de prueba contra master. El experimento `experimentos/cep-banxico-gui` se conserva con archivos idénticos a la rama `feature/cep-banxico-gui-piloto`; no se modificó su código ni sus ramas. Se incorpora esa copia intacta porque master todavía no contenía el experimento. La integración usa módulos independientes en `src/cep` y el exportador existente para conservar el Excel original.
+El experimento `experimentos/cep-banxico-gui` se conserva intacto. La integración usa módulos independientes en `src/cep` y el exportador existente para conservar el formato del Excel original.
+
+## Flujo de uso
+
+1. **Extracción de movimientos:** cargar o arrastrar los PDF, procesarlos y descargar el **Excel original**, con sus hojas y formato habituales. El arrastre usa una franja de 44 píxeles lógicos que sólo aparece cuando el receptor nativo está disponible; no inserta una ventana hija en el renderizador Flutter ni deja un aviso permanente si falla.
+2. **CEP Banxico:** cargar un Excel anterior o pulsar **Usar extracción actual**. Esta acción carga el archivo sin normalizarlo todavía.
+3. Pulsar **Normalizar Excel**. Se homologan fechas, reconstruyen datos del titular y recuperan metadatos SPEI. Se habilitan **Descargar Excel normalizado** y **Descargar TXT Banxico**.
+4. Guardar el archivo **.txt directamente**, cargarlo en Banxico y solicitar PDF y XML. Si hay más de 500 consultas se guardan varios TXT planos, sin ZIP intermedio.
+5. Importar uno o varios ZIP de Banxico y descargar el ZIP final. Incluye ambos Excel cruzados con las columnas CEP al final de Movimientos y los comprobantes renombrados.
+6. **Extraer todo el ZIP final en una misma carpeta.** Las celdas CEP Archivo PDF/XML contienen hipervínculos relativos a sus subcarpetas. Un clic abre el comprobante local correspondiente; los enlaces se conservan al mover la carpeta completa.
+
+La recuperación de rastreos se comparte entre la salida de los 12 parsers registrados (digital/OCR) y la normalización de Excel anteriores. Reconoce etiquetas completas y abreviadas, la clave inicial de SPEI recibido de Banorte y el bloque posicional de BBVA: cabecera SPEI, cuenta con CLABE validada, rastreo y contraparte. No convierte referencias, autorizaciones o números largos arbitrarios en claves de rastreo. No reemplaza campos ya confirmados ni modifica importes, saldos, fechas o conceptos durante el enriquecimiento de parsers.
+
+BBVA puede entregar la referencia de diez dígitos junto al código de banco de tres dígitos. Se separan sólo si ese banco coincide con la contraparte del bloque SPEI; nunca se concatenan para inventar una referencia de trece dígitos. La referencia del pago SPEI, cuando está presente en el bloque, se conserva por separado en **Referencia SPEI**. **Referencia Original** y la hoja de revisión permiten consultar el dato anterior.
 
 ## Checklist de las 11 mejoras
 
@@ -8,11 +21,11 @@ PR de prueba contra master. El experimento `experimentos/cep-banxico-gui` se con
 2. **Original y mejorado:** el original conserva el contenido previo. La copia se comprueba después de escribir el XLSX: misma cantidad y orden de filas, mismos importes, saldos, conceptos y columnas no corregidas. Se conservan las columnas añadidas por el analista y sus hojas. Las fechas anteriores y los cambios quedan en columnas de trazabilidad y Revisión Excel.
 3. **Segunda pasada:** recuperación de rastreo, referencia, cuenta y CLABE desde etiquetas del concepto, sin tomar números largos arbitrarios. CLABE con dígito verificador; números de cuenta como texto para conservar ceros. Los identificadores que Excel ya redondeó no se dan por válidos.
 4. **Titular por cuenta:** Cuenta Titular y CLABE Titular junto al corte en los libros simples del Engine. En libros con fórmulas/tablas/gráficas se añaden al final para conservar las coordenadas. Se recuperan datos faltantes de estados compatibles del mismo banco/cuenta; nombre o RFC por sí solos no fusionan cuentas. Una familia de nombres de archivo sirve sólo si apunta inequívocamente a una cuenta sin contradicciones. Se registra el archivo donante.
-5. **TXT:** siempre desde el **mejorado**, también al cargar Excel anteriores. Cada movimiento con rastreo es candidato SPEI; los que tienen los seis datos suficientes entran en consultas con fecha original, −1 y +1. Un abono usa la cuenta del titular de ese estado; un cargo usa la del beneficiario. Un solo conjunto de TXT enriquecidos: se divide únicamente para respetar 2–500 líneas por archivo, sin dejar archivos de una línea. Duplicados de consulta no duplican las solicitudes, pero se conservan todos los movimientos.
+5. **TXT:** siempre desde el **normalizado**, también al cargar Excel anteriores. Cada movimiento con rastreo es candidato SPEI; los que tienen los seis datos suficientes entran en consultas con fecha homologada, −1 y +1. Un abono usa la cuenta del titular de ese estado; un cargo usa la del beneficiario. Los TXT se descargan directamente: se dividen únicamente para respetar 2–500 líneas por archivo, sin dejar archivos de una línea. Duplicados de consulta no duplican las solicitudes, pero se conservan todos los movimientos.
 6. **Dos pestañas:** Extracción de movimientos y CEP Banxico, tanto en Flet como en Streamlit. El escritorio paralelo reutiliza la interfaz principal y conserva su configuración OCR.
-7. **Arrastrar PDF:** zona nativa Windows al pie de Extracción; acepta varios PDF locales, rutas Unicode y añade al lote. Usa el mismo procesamiento y controles de cancelación. No modifica el cliente Flutter portable ni añade una extensión incompatible. Streamlit conserva su cargador con arrastre del navegador.
+7. **Arrastrar PDF:** zona nativa Windows al pie de Extracción; acepta varios PDF locales, rutas Unicode y añade al lote. Usa una ventana auxiliar sin activación, propiedad de la ventana principal, sin parentesco entre procesos. Se oculta en CEP, durante procesamiento y al minimizar. Streamlit conserva su cargador con arrastre del navegador.
 8. **Importar ZIP:** lectura de XML oficiales, vinculación de PDF y cruce por rastreo, importe exacto, fecha original/±1 y cuentas/bancos disponibles. Los datos oficiales se añaden a la misma fila de Movimientos, después de las columnas existentes. Un rastreo coincidente con importe/cuenta/banco contradictorios se marca REVISAR y no recibe datos de otro movimiento.
-9. **Paquete final:** `excel_original_con_CEP.xlsx`, `excel_mejorado_con_CEP.xlsx`, PDF/XML con nombres que incluyen fecha y participantes, y archivos recibidos de Banxico preservados. Admite varios ZIP acumulados y elimina duplicados de evidencia sin perder filas. CEP Estado y CEP Archivo PDF/XML permiten identificar pendientes manualmente.
+9. **Paquete final:** `excel_original_con_CEP.xlsx`, `excel_mejorado_con_CEP.xlsx`, PDF/XML con nombres que incluyen fecha y participantes, y archivos recibidos de Banxico preservados. Admite varios ZIP acumulados y elimina duplicados de evidencia sin perder filas. CEP Estado identifica pendientes y CEP Archivo PDF/XML contiene vínculos clicables al comprobante correspondiente.
 10. **Regresión y empaquetado:** pruebas de fechas, cuentas, TXT, XLSX reabierto, ZIP, contradicciones de cruce, controles Flet y WM_DROPFILES real en Windows. El constructor ejecuta `--self-test-excel-cep` dentro del EXE generado, además de las comprobaciones existentes de OCR y paralelismo.
 11. **Catálogo bancario:** catálogo local de participantes Banxico, códigos oficiales y alias de los parsers. Los primeros tres dígitos de una CLABE válida determinan Banco del Beneficiario y Código Banco Beneficiario. Completa Sucursal cuando esté vacía (uso histórico como banco). No reemplaza una sucursal ya extraída ni afirma una oficina física. Los dígitos 4–6 se muestran como código de plaza/producto.
 
@@ -42,7 +55,7 @@ Desde cualquier carpeta del clon de Estado Cuenta Engine abierto en VS Code:
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
 git fetch origin
-git switch feature/excel-normalizado-cep-integrado
+git switch fix/cep-normalizacion-arrastre-rastreo
 git pull --ff-only
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
@@ -59,9 +72,9 @@ Si ya utilizas un entorno con PaddleOCR, usa su Python y conserva esa instalaci�
 
 - Cargar varios bancos/cuentas, incluidos estados diciembre–enero; comprobar cargos/abonos y ordenar Fecha de Operación por año en el mejorado.
 - Revisar Cuenta Titular/CLABE Titular y el archivo donante en casos incompletos; confirmar que ninguna cuenta recibió datos de otra.
-- Preparar TXT en CEP: revisar los seis campos y sus fechas ±1 en el archivo de cada lote. Descargar ambos Excel para comparar.
+- Cargar los movimientos en CEP, pulsar Normalizar Excel y descargar el TXT directamente. Revisar los seis campos y sus fechas ±1. Descargar original y normalizado para comparar.
 - Solicitar PDF y XML en Banxico e importar sus ZIP aquí. Revisar EXITO, EXITO_FECHA_ALTERNATIVA, REVISAR, NO_APARECE_EN_ZIP y NO_CONSULTABLE.
-- Descargar ZIP final y comprobar que los campos oficiales y nombres de comprobantes de cada fila correspondan al movimiento correcto.
+- Descargar y extraer el ZIP final. Comprobar campos oficiales y abrir el PDF de cada fila mediante su hipervínculo en ambos Excel.
 
 No se automatizan correo/token/CAPTCHA. Una ausencia de XML no implica que la transferencia fallara. La extracción y el cotejo no verifican criptográficamente el sello. PDF sin XML y XML inválidos se conservan entre los originales para revisión.
 

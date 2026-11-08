@@ -59,6 +59,10 @@ def test_windows_native_lane_delivers_real_unicode_wm_dropfiles(tmp_path):
         zone.start()
         until(lambda: zone.hwnd or errors)
         assert not errors
+        user.GetWindowLongW.argtypes = (w.HWND, c.c_int)
+        user.GetWindowLongW.restype = c.c_long
+        assert user.GetWindowLongW(zone.hwnd, -16) & 0x80000000  # WS_POPUP
+        assert not user.GetWindowLongW(zone.hwnd, -16) & 0x40000000  # never WS_CHILD
         path = tmp_path / "Prueba Unicode ñ con espacios.pdf"
         path.write_bytes(b"%PDF-1.4")
         data = struct.pack("<IiiII", 20, 0, 0, 0, 1) + (str(path) + "\0\0").encode("utf-16-le")
@@ -74,3 +78,105 @@ def test_windows_native_lane_delivers_real_unicode_wm_dropfiles(tmp_path):
         zone.close()
         until(lambda: zone.hwnd is None)
         user.DestroyWindow(parent)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Real Flet Windows client")
+def test_window_discovery_and_drop_with_real_flet_client(tmp_path):
+    """Exercise the launcher/client process boundary missing from the old test."""
+    pytest.importorskip("flet")
+    import ctypes as c
+    import json
+    import os
+    import struct
+    import subprocess
+    import time
+    from ctypes import wintypes as w
+    from pathlib import Path
+
+    probe = tmp_path / "flet_drop_probe.py"
+    probe.write_text('''
+import asyncio, json, sys, time
+from pathlib import Path
+import flet as ft
+import main_flet
+from utils.windows_pdf_drop import WindowsPdfDropZone
+
+folder = Path(sys.argv[1])
+async def main(page):
+    found, errors = [], []
+    zones = []
+    def create_zone(title, on_files, on_error):
+        zone = WindowsPdfDropZone("Engine synthetic drop probe", found.append, errors.append)
+        zones.append(zone)
+        return zone
+    main_flet.WindowsPdfDropZone = create_zone
+    main_flet.main(page)
+    page.title = "Engine synthetic drop probe"
+    page.update()
+    zone = zones[0]
+    async def monitor():
+        start = time.monotonic()
+        announced = False
+        try:
+            while time.monotonic() - start < 70:
+                if errors:
+                    (folder / "error.json").write_text(json.dumps(errors))
+                    return
+                if zone.ready and not announced:
+                    (folder / "ready.json").write_text(json.dumps({"hwnd": zone.hwnd}))
+                    announced = True
+                if found:
+                    (folder / "done.json").write_text(json.dumps(found))
+                    return
+                await asyncio.sleep(0.05)
+        finally:
+            zone.close()
+            await page.window.destroy()
+    page.run_task(monitor)
+ft.run(main)
+''', encoding="utf-8")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join((str(Path("src").resolve()), str(Path("app").resolve()), env.get("PYTHONPATH", "")))
+    env.pop("FLET_APP_HIDDEN", None)
+    with (tmp_path / "probe.log").open("w", encoding="utf-8") as log:
+        process = subprocess.Popen([sys.executable, str(probe), str(tmp_path)], env=env,
+                                   stdout=log, stderr=log)
+        try:
+            def wait_for(name, timeout=60):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    if (tmp_path / "error.json").exists():
+                        pytest.fail((tmp_path / "error.json").read_text())
+                    target = tmp_path / name
+                    if target.exists():
+                        try:
+                            return json.loads(target.read_text())
+                        except json.JSONDecodeError:
+                            pass
+                    if process.poll() is not None:
+                        pytest.fail("Flet exited before " + name + ": " + (tmp_path / "probe.log").read_text())
+                    time.sleep(0.05)
+                pytest.fail("Flet drop probe timed out: " + (tmp_path / "probe.log").read_text())
+            hwnd = wait_for("ready.json")["hwnd"]
+            path = tmp_path / "Synthetic Unicode ñ.pdf"
+            path.write_bytes(b"%PDF-1.4")
+            payload = struct.pack("<IiiII", 20, 0, 0, 0, 1) + (str(path) + "\0\0").encode("utf-16-le")
+            kernel = c.WinDLL("kernel32", use_last_error=True)
+            user = c.WinDLL("user32", use_last_error=True)
+            kernel.GlobalAlloc.restype = w.HGLOBAL
+            kernel.GlobalAlloc.argtypes = (w.UINT, c.c_size_t)
+            kernel.GlobalLock.restype = w.LPVOID
+            kernel.GlobalLock.argtypes = (w.HGLOBAL,)
+            kernel.GlobalUnlock.argtypes = (w.HGLOBAL,)
+            user.PostMessageW.argtypes = (w.HWND, w.UINT, w.WPARAM, w.LPARAM)
+            memory = kernel.GlobalAlloc(0x42, len(payload))
+            pointer = kernel.GlobalLock(memory)
+            c.memmove(pointer, payload, len(payload))
+            kernel.GlobalUnlock(memory)
+            assert user.PostMessageW(hwnd, 0x233, memory, 0)
+            assert wait_for("done.json", 15) == [[str(path)]]
+            process.wait(timeout=15)
+            assert process.returncode == 0
+        finally:
+            if process.poll() is None:
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)

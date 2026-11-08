@@ -2,6 +2,7 @@
 from typing import List, Dict, Any
 import re
 from models.movimiento import Movimiento
+from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata
 from parsers.bbva.utils.words_footer_filter import remove_bbva_footer
 from parsers.bbva.utils.words_resume_filter import remove_after_movimientos
 from parsers.bbva.utils.words_header_filter import remove_duplicate_premium_headers
@@ -1394,6 +1395,10 @@ def extract_clabe_beneficiario_from_concepto(
     return None
 
 
+def extract_clave_rastreo_from_concepto(concepto: str) -> str | None:
+    return extract_spei_metadata("bbva", concepto).tracking or None
+
+
 def extract_cuenta_beneficiario_from_concepto(
     concepto: str
 ) -> str | None:
@@ -1511,6 +1516,7 @@ def build_movimiento(block, cols):
         block,
         cols
     )
+    referencia = bbva_statement_reference(referencia, extract_spei_metadata("bbva", concepto)) or referencia
 
     beneficiario = extract_beneficiario_from_concepto(
         concepto
@@ -1563,7 +1569,7 @@ def build_movimiento(block, cols):
 
         referencia=referencia,
 
-        clave_rastreo=None,
+        clave_rastreo=extract_clave_rastreo_from_concepto(concepto),
 
         autorizacion=
             extract_auth_from_concepto(

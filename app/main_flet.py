@@ -23,7 +23,6 @@ from engine.ocr_reprocessing import reprocess_with_secondary_ocr
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
-from exporters.excel.workbook_bundle import WorkbookBundle
 from utils.windows_pdf_drop import WindowsPdfDropZone, pdf_drop_paths
 from cep_panel import CepPanel
 from utils.result_state import (
@@ -223,17 +222,10 @@ def main(page: ft.Page):
         prefix_icon=ft.Icons.SEARCH,
     )
     export_button = ft.FilledButton(
-        content='Excel original',
+        content='Descargar Excel original',
         icon=ft.Icons.DOWNLOAD,
         disabled=True,
         bgcolor=GOB_GOLD,
-        color=BUTTON_TEXT,
-    )
-    normalized_export_button = ft.FilledButton(
-        content='Excel mejorado',
-        icon=ft.Icons.DOWNLOAD,
-        disabled=True,
-        bgcolor=GOB_GREEN,
         color=BUTTON_TEXT,
     )
     stop_button = ft.OutlinedButton(
@@ -864,13 +856,11 @@ def main(page: ft.Page):
         add_more_button.disabled = state['running'] or busy or not has_results
         config_button.disabled = state['running'] or busy
         export_button.disabled = not has_results or busy
-        normalized_export_button.disabled = export_button.disabled
         try:
             upload_button.update()
             add_more_button.update()
             config_button.update()
             export_button.update()
-            normalized_export_button.update()
         except Exception:
             pass
 
@@ -2555,7 +2545,6 @@ def main(page: ft.Page):
         add_more_button.disabled = bool(state['reprocess_cancel_events']) or not results
         config_button.disabled = bool(state['reprocess_cancel_events'])
         export_button.disabled = not results or bool(state['reprocess_cancel_events'])
-        normalized_export_button.disabled = export_button.disabled
         help_button.disabled = False
         stop_button.visible = False
         stop_button.disabled = False
@@ -2568,7 +2557,6 @@ def main(page: ft.Page):
             add_more_button,
             config_button,
             export_button,
-            normalized_export_button,
             help_button,
             stop_button,
         ):
@@ -2601,7 +2589,7 @@ def main(page: ft.Page):
                                 status_text.update()
                         continue
                     if kind == 'pdf_drop_error':
-                        drop_footer.content.value = 'Selecciona tus PDFs con el botón de carga. Arrastre no disponible en esta sesión.'
+                        drop_footer.visible = False
                         drop_footer.update()
                         continue
                     if batch_id != state['batch_id']:
@@ -2662,6 +2650,11 @@ def main(page: ft.Page):
             drop_zone = state.get('drop_zone')
             if drop_zone is not None:
                 drop_zone.enabled = not (state['running'] or state['reprocess_cancel_events'] or cep_panel.busy)
+                show_drop = bool(drop_zone.ready and not drop_zone.error and drop_zone.enabled
+                                 and workspaces.selected_index == 0)
+                if drop_footer.visible != show_drop:
+                    drop_footer.visible = show_drop
+                    drop_footer.update()
             if (
                 state['running']
                 and state['started_at'] is not None
@@ -2737,7 +2730,6 @@ def main(page: ft.Page):
         stop_button.visible = True
         stop_button.disabled = False
         export_button.disabled = True
-        normalized_export_button.disabled = True
         status_text.value = (
             'Añadiendo estados de cuenta al resultado actual...'
             if append
@@ -2800,7 +2792,7 @@ def main(page: ft.Page):
     async def pick_more_files(e):
         await pick_files(e, append=True)
 
-    async def export_excel(e, *, variant='original'):
+    async def export_excel(e):
         if not results:
             return
         if state['reprocess_cancel_events']:
@@ -2840,7 +2832,7 @@ def main(page: ft.Page):
 
         path = await ft.FilePicker().save_file(
             dialog_title='Guardar reporte Excel',
-            file_name=f'reporte_estados_de_cuenta_{variant}.xlsx',
+            file_name='reporte_estados_de_cuenta.xlsx',
             file_type=ft.FilePickerFileType.CUSTOM,
             allowed_extensions=['xlsx'],
         )
@@ -2850,7 +2842,6 @@ def main(page: ft.Page):
             path += '.xlsx'
         snapshot = list(results)
         export_button.disabled = True
-        normalized_export_button.disabled = True
         status_text.value = 'Generando archivo Excel...'
         try:
             export_button.update()
@@ -2860,16 +2851,8 @@ def main(page: ft.Page):
 
         def worker():
             try:
-                if variant == 'original':
-                    export_batch_excel(snapshot, path)
-                    status_text.value = '✅ Excel original exportado correctamente.'
-                else:
-                    bundle = WorkbookBundle.from_results(snapshot)
-                    Path(path).write_bytes(bundle.improved)
-                    status_text.value = (
-                        f'✅ Excel mejorado comprobado: {bundle.report.dates_resolved} fechas; '
-                        f'{bundle.report.dates_review} para revisión.'
-                    )
+                export_batch_excel(snapshot, path)
+                status_text.value = '✅ Excel original exportado correctamente.'
                 status_text.color = ft.Colors.GREEN
                 try:
                     if sys.platform == 'win32':
@@ -2885,10 +2868,8 @@ def main(page: ft.Page):
                 status_text.color = ft.Colors.RED
             finally:
                 export_button.disabled = False
-                normalized_export_button.disabled = False
                 try:
                     export_button.update()
-                    normalized_export_button.update()
                     status_text.update()
                 except Exception:
                     pass
@@ -2923,20 +2904,9 @@ def main(page: ft.Page):
         on_click=show_help,
     )
     export_button.on_click = export_excel
-    async def export_improved(e):
-        await export_excel(e, variant='mejorado')
-    normalized_export_button.on_click = export_improved
 
     cep_panel = CepPanel(page, lambda: list(results),
                          lambda: not state['running'] and not state['reprocess_cancel_events'])
-
-    async def prepare_txt(e):
-        workspaces.selected_index = 1
-        drop_footer.visible = False
-        if state.get('drop_zone'):
-            state['drop_zone'].visible = False
-        page.update()
-        await cep_panel.use_current()
 
     header: list[ft.Control] = []
     if LOGO_PATH.exists():
@@ -3000,15 +2970,12 @@ def main(page: ft.Page):
                 [
                     ft.Text('📤 Exportación', size=13, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        'Original o mejorado con fechas reales de Excel y revisión de datos.',
+                        'Conserva el formato original y el resultado OCR elegido de cada archivo.',
                         size=8,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Container(expand=True),
                     export_button,
-                    normalized_export_button,
-                    ft.OutlinedButton(content='Preparar TXT Banxico', icon=ft.Icons.DESCRIPTION,
-                                      on_click=prepare_txt),
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 wrap=True,
@@ -3064,27 +3031,31 @@ def main(page: ft.Page):
     extraction_content = ft.Column(app_content.controls[3:], spacing=0,
                                    scroll=ft.ScrollMode.AUTO, expand=True)
     drop_footer = ft.Container(
-        content=ft.Text('Arrastra aquí tus estados de cuenta PDF · Se añadirán al lote actual'
-                        if sys.platform == 'win32' else 'Selecciona tus estados de cuenta con el botón de carga.',
+        content=ft.Text('Arrastra aquí tus estados de cuenta PDF · Se añadirán al lote actual',
                         size=12, text_align=ft.TextAlign.CENTER),
         height=50, alignment=ft.Alignment.CENTER, bgcolor=GOB_GREEN_LIGHT, border_radius=7,
+        visible=False,
     )
 
     def workspace_changed(e):
         active = workspaces.selected_index == 0
-        drop_footer.visible = active
+        extraction_content.visible = active
+        cep_panel.control.visible = not active
+        drop_footer.visible = bool(active and state.get('drop_zone') and state['drop_zone'].ready)
         if state.get('drop_zone'):
             state['drop_zone'].visible = active
         page.update()
 
-    workspaces = ft.Tabs(length=2, selected_index=0, expand=True, on_change=workspace_changed,
-        content=ft.Column([
-            ft.TabBar(tabs=[ft.Tab(label='Extracción de movimientos', icon=ft.Icons.TABLE_CHART),
+    cep_panel.control.visible = False
+    workspaces = ft.Tabs(length=2, selected_index=0, on_change=workspace_changed,
+        content=ft.TabBar(tabs=[ft.Tab(label='Extracción de movimientos', icon=ft.Icons.TABLE_CHART),
                             ft.Tab(label='CEP Banxico', icon=ft.Icons.ACCOUNT_BALANCE)],
-                      indicator_color=GOB_GREEN, label_color=GOB_GREEN),
-            ft.TabBarView(controls=[extraction_content, cep_panel.control], expand=True),
-        ], spacing=8, expand=True))
-    app_content = ft.Column([*app_content.controls[:3], workspaces, drop_footer], spacing=5, expand=True)
+                      indicator_color=GOB_GREEN, label_color=GOB_GREEN))
+    # Both workspaces stay mounted; only the active one participates in layout.
+    # This also keeps live extraction updates valid while viewing CEP.
+    workspace_body = ft.Column([extraction_content, cep_panel.control], expand=True, spacing=0)
+    app_content = ft.Column([*app_content.controls[:3], workspaces, workspace_body, drop_footer],
+                            spacing=5, expand=True)
     page.run_task(poller)
     page.add(app_content)
     drop_zone = WindowsPdfDropZone(page.title,

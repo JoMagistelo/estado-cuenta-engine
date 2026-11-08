@@ -252,6 +252,16 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
             assert get(row, "CEP Nombre Beneficiario") == "BENEFICIARIO XML"
             assert get(row, "CEP Archivo PDF") in archive.namelist()
             assert get(row, "CEP Archivo XML") in archive.namelist()
+        for name in ("excel_original_con_CEP.xlsx", "excel_mejorado_con_CEP.xlsx"):
+            workbook = load_workbook(BytesIO(archive.read(name)))
+            ws = workbook["Movimientos"]
+            columns = {cell.value: cell.column for cell in ws[1]}
+            for label in ("CEP Archivo PDF", "CEP Archivo XML"):
+                cell = ws.cell(2, columns[label])
+                assert cell.hyperlink.target == cell.value
+                assert cell.hyperlink.target in archive.namelist()
+            assert ws.cell(3, columns["CEP Archivo PDF"]).hyperlink is None
+            workbook.close()
         assert get(raw[1], "CEP Nombre Beneficiario") is None
 
 
@@ -309,3 +319,43 @@ def test_batch_splitting_501_queries_does_not_leave_a_single_line():
     queries = [replace(qs[0], tracking=f"SYNTHETIC{i:06d}") for i in range(501)]
     batches = batch_texts(queries, adjacent_days=False)
     assert [len(data.splitlines()) for data in batches.values()] == [499, 2]
+
+
+@pytest.mark.parametrize("received", [False, True])
+def test_bbva_recovery_on_old_exports_feeds_txt_with_correct_parties(received):
+    heading = "SPEI RECIBIDOBANORTE" if received else "SPEI ENVIADO BANORTE"
+    concept = f"{heading}\n0000007PRUEBA\n00{OTHER}\nMBAN20260103000000000001\nPERSONA SINTETICA"
+    original = excel(movements=[movement_row(**{
+        "Concepto": concept, "Concepto Original": "0000007PRUEBA", "Clave de Rastreo": None,
+        "CLABE del Beneficiario": None, "Referencia": None,
+        "Cargo": 0 if received else 125.25, "Abono": 125.25 if received else 0,
+    })])
+    bundle = WorkbookBundle.from_excel(original)
+    assert bundle.original == original
+    q = queries_from_workbook(bundle.improved)[0]
+    assert q.ready, q.issues
+    assert q.tracking == "MBAN20260103000000000001"
+    assert q.destination == (OWN if received else OTHER)
+    assert (q.issuer, q.receiver) == (("40072", "40012") if received else ("40012", "40072"))
+    assert len(batch_texts([q])["lote_001.txt"].splitlines()) == 3
+
+
+def test_bbva_statement_reference_and_payment_reference_are_distinct_and_audited():
+    concept = f"SPEI ENVIADO BANORTE\n0000007PRUEBA\n00{OTHER}\nMBAN20260103000000000001\nPERSONA SINTETICA"
+    bundle = WorkbookBundle.from_excel(excel(movements=[movement_row(**{
+        "Concepto": concept, "Concepto Original": "0000007PRUEBA", "Referencia": "0000001234 072",
+    })]))
+    row = rows(bundle.improved)[0]
+    assert get(row, "Referencia") == "0000001234"
+    assert get(row, "Referencia Original") == "0000001234 072"
+    assert get(row, "Referencia SPEI") == "0000007"
+    assert queries_from_workbook(bundle.improved)[0].reference == "0000007"
+    assert any(c["Campo"] == "Referencia" and c["Original"] == "0000001234 072" for c in bundle.report.changes)
+    reloaded = rows(WorkbookBundle.from_excel(bundle.improved).improved)[0]
+    assert get(reloaded, "Referencia") == "0000001234"
+    assert get(reloaded, "Referencia Original") == "0000001234 072"
+    conflict = WorkbookBundle.from_excel(excel(movements=[movement_row(**{
+        "Concepto": concept, "Concepto Original": "0000007PRUEBA", "Referencia": "0000001234 014",
+    })]))
+    assert get(rows(conflict.improved)[0], "Referencia") == "0000001234 014"
+    assert "no concordante" in get(rows(conflict.improved)[0], "Revisión Normalización")

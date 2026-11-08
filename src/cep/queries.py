@@ -121,7 +121,7 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
         candidate = bool(tracking or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
         q = CepQuery(row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
                      identifier(get(row, "No. de Movimiento")), candidate, tracking=tracking,
-                     reference=identifier(get(row, "Referencia")))
+                     reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")))
         q.operation_date = full_date(get(row, "Fecha de Operación"))
         debit, credit = amount(get(row, "Cargo")), amount(get(row, "Abono"))
         if debit is not None and credit is not None and bool(debit) != bool(credit):
@@ -167,10 +167,10 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
             q.issuer = q.issuer or inferred
             source_accounts = [_account(get(row, "CLABE del Ordenante")),
                                _account(get(row, "Cuenta del Ordenante"))]
-            # HSBC explicitly maps Ordenante -> legacy Beneficiario and
+            # HSBC and BBVA map Ordenante -> legacy Beneficiario and
             # Participante Emisor -> Sucursal in received-SPEI enrichment.
             # The destination for Banxico remains the HOLDER's account.
-            if owner_bank == "40021":
+            if owner_bank in {"40021", "40012"}:
                 source_accounts.extend((_account(get(row, "CLABE del Beneficiario")),
                                         _account(get(row, "Cuenta del Beneficiario"))))
             q.origin_aliases = tuple(dict.fromkeys(v for v in source_accounts if v and v not in own))

@@ -19,8 +19,8 @@ from engine.ocr_fallback_policy import normalize_ocr_engine
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
-from exporters.excel.workbook_bundle import WorkbookBundle
-from cep_streamlit import render_cep_workspace, set_cep_bundle
+from exporters.excel.workbook_bundle import original_from_results
+from cep_streamlit import render_cep_workspace, set_cep_source
 
 APP_VERSION = '6.0.0'
 PROCESSING_UI_POLL_INTERVAL = 0.75
@@ -1145,18 +1145,13 @@ def render_export_section() -> None:
             disabled=bool(pending) or st.session_state.worker_running,
         ):
             try:
-                st.session_state.export_bundle = WorkbookBundle.from_results(list(st.session_state.results))
+                st.session_state.export_bundle = original_from_results(list(st.session_state.results))
                 st.session_state.export_bundle_token = token
             except Exception as ex:
                 st.error(f'Error al generar Excel: {ex}')
     bundle = st.session_state.get('export_bundle')
     if bundle:
-        original, improved, cep = st.columns(3)
-        original.download_button('Excel original', bundle.original, 'excel_original.xlsx', use_container_width=True)
-        improved.download_button('Excel mejorado', bundle.improved, 'excel_mejorado.xlsx', use_container_width=True)
-        if cep.button('Preparar TXT en CEP', use_container_width=True):
-            set_cep_bundle(bundle)
-            st.info('Movimientos listos en la pestaña CEP Banxico.')
+        st.download_button('Descargar Excel original', bundle, 'reporte_estados_de_cuenta.xlsx', use_container_width=True)
 
 
 @st.dialog(
