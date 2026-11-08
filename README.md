@@ -148,7 +148,35 @@ python -m pip install --group dev
 
 ## 6. Ejecución
 
-### Empaquetar y ejecutar la versión 6.0.0 en Windows
+### Versión 7.0.0 — interfaz estable y CEP separado
+
+La 7.0 mantiene la extracción bancaria y el **Excel original sin normalización**
+en el botón `Generar Excel` de la pestaña Extracción. El botón de descarga
+permanece visible debajo de los resultados, incluso al desplazarse por ellos.
+La zona nativa de arrastre de PDF para Windows es ahora un área dedicada
+de 96 píxeles lógicos en la parte inferior y no cubre la exportación.
+El fondo de escritorio ya no muestra el espacio gris de la disposición anterior.
+
+La pestaña **CEP Banxico** mantiene su asistente, la normalización de una **copia**
+del Excel, la recuperación conservadora de metadatos SPEI del concepto,
+la homologación de fechas, la exportación TXT y el cruce PDF/XML de Banxico.
+Muestra cuántos SPEI son consultables y cuántos necesitan completar datos
+manualmente. Cuando se reciban patrones de otros bancos, se ampliará la
+normalización sin modificar parsers ni motores OCR.
+
+Para construir 7.0 desde `master` **después de fusionar el PR y aprobar
+sus pruebas en Windows**:
+
+```powershell
+Set-Location C:\Proyectos\estado-cuenta-engine
+git switch master
+git pull --ff-only origin master
+.\scripts\build_windows_release.ps1 -Version "7.0.0" -PortableOffline
+Get-Content .\dist\release-manifest.json
+.\dist\Extractor_de_Movimientos_Financieros.exe
+```
+
+### Empaquetar y ejecutar la versión 6.0.0 en Windows (histórico)
 
 Después de fusionar el PR, desde PowerShell con el entorno virtual de build
 ya preparado y activo:
