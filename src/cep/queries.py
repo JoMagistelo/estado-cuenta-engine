@@ -61,6 +61,9 @@ def _destination(value):
     """
     s = account_identifier(value)
     if len(s) == 18:
+        # All-zero placeholders can satisfy the CLABE checksum by accident.
+        if len(set(s)) == 1:
+            return ""
         if valid_clabe(s):
             return s
         if s.startswith("00") and _valid_card16(s[2:]):
