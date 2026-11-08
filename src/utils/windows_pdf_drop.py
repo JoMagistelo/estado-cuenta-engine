@@ -2,7 +2,7 @@
 
 An owned, nonactivating WS_POPUP avoids attaching a Python child HWND to the
 Flutter renderer (which can reset DPI state or leave a grey rendering surface).
-It follows the reserved 50-DIP area and hides on tab changes/minimize/dialogs.
+It follows the reserved 96-DIP area and hides on tab changes/minimize/dialogs.
 """
 
 from __future__ import annotations
@@ -11,6 +11,18 @@ import os
 import sys
 import threading
 from pathlib import Path
+
+
+PDF_DROP_HEIGHT_DIP = 96
+PDF_DROP_MARGIN_DIP = 14
+
+
+def drop_window_geometry(client_width: int, client_height: int, x: int, y: int, scale: float) -> tuple[int, int, int, int]:
+    """The native receiver occupies only the reserved drop footer, never export controls."""
+    margin = round(PDF_DROP_MARGIN_DIP * scale)
+    height = round(PDF_DROP_HEIGHT_DIP * scale)
+    return (x + margin, y + client_height - margin - height,
+            max(10, client_width - 2 * margin), height)
 
 
 def pdf_drop_paths(paths) -> list[str]:
@@ -237,7 +249,7 @@ class WindowsPdfDropZone:
             # WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_ACCEPTFILES;
             # WS_POPUP, NOT WS_CHILD. hWndParent is its owner, not a parent.
             self.hwnd = u.CreateWindowExW(0x08000090, class_name, "Carga PDF", 0x80000000,
-                                         0, 0, 300, 44, parent, None, instance, None)
+                                         0, 0, 300, PDF_DROP_HEIGHT_DIP, parent, None, instance, None)
             if not self.hwnd:
                 raise c.WinError(c.get_last_error())
             shell.DragAcceptFiles(self.hwnd, True)
@@ -255,8 +267,8 @@ class WindowsPdfDropZone:
                 u.ClientToScreen(parent, c.byref(point))
                 # Explorer takes focus at the start of a real file drag. Do not
                 # hide the drop target when the application loses foreground.
-                geometry = (point.x + int(14 * scale), point.y + rect.bottom - int(64 * scale),
-                            max(10, rect.right - int(28 * scale)), int(44 * scale),
+                bounds = drop_window_geometry(rect.right, rect.bottom, point.x, point.y, scale)
+                geometry = (*bounds,
                             self.visible and self.enabled and u.IsWindowVisible(parent)
                             and not u.IsIconic(parent) and u.IsWindowEnabled(parent))
                 if geometry != last_geometry:
