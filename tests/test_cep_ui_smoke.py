@@ -34,7 +34,19 @@ def test_real_flet_workspace_construction(monkeypatch):
     body = page.controls[0].controls[-2]
     extraction, cep = body.controls
     assert extraction.visible and not cep.visible
+    # The scrollable results must NOT contain export_section: its button is
+    # pinned above the drop lane and can never wrap below the viewport.
+    scrollable, export_section = extraction.controls
+    assert len(scrollable.controls) == 2  # upload controls and results only
+    assert export_section not in scrollable.controls
+    assert isinstance(export_section, ft.Column)
+    export_row = export_section.controls[1]
+    assert isinstance(export_row, ft.Row)
+    assert export_row.wrap is False
+    assert export_row.controls[-1].content == "Generar Excel"
+    from utils.windows_pdf_drop import PDF_DROP_HEIGHT_DIP
     footer = page.controls[0].controls[-1]
+    assert footer.height == PDF_DROP_HEIGHT_DIP
     assert not footer.visible
     tabs.selected_index = 1
     tabs.on_change(SimpleNamespace(control=tabs))
