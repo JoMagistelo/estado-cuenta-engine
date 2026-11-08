@@ -22,7 +22,7 @@ from exporters.excel.batch_exporter import pending_ocr_selection_files
 from exporters.excel.workbook_bundle import original_from_results
 from cep_streamlit import render_cep_workspace, set_cep_source
 
-APP_VERSION = '6.0.0'
+APP_VERSION = '7.0.0'
 PROCESSING_UI_POLL_INTERVAL = 0.75
 
 GOB_GREEN = '#1F4D3A'
