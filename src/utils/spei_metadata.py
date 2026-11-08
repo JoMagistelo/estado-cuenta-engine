@@ -74,6 +74,16 @@ def metadata_search_text(bank: str, concept: str | None, original: str | None = 
     return re.split(r"\bCONCEPTO(?:\s+DE[L]?\s+PAGO)?\s*:", text, maxsplit=1)[0]
 
 
+def bbva_statement_reference(value: object, metadata: SpeiMetadata) -> str:
+    """Separate the labelled 10-digit reference from its adjacent bank code.
+
+    The three-digit suffix must agree with the SPEI counterparty bank. Never
+    split an unseparated identifier or replace it with a payment memo reference.
+    """
+    match = re.fullmatch(r"\s*([0-9]{10})\s+([0-9]{3})\s*", str(value or ""))
+    return match[1] if match and metadata.bank and bank_code(match[2]) == metadata.bank else ""
+
+
 def extract_spei_metadata(bank: str, concept: str | None, original: str | None = None) -> SpeiMetadata:
     bank = str(bank or "").lower().strip()
     result = SpeiMetadata()
@@ -137,6 +147,10 @@ def enrich_missing_spei_fields(movements, bank: str):
             movement.clave_rastreo = found.tracking
         if found.reference and not identifier(getattr(movement, "referencia", None)):
             movement.referencia = found.reference
+        elif bank_code(bank) == "40012":
+            repaired = bbva_statement_reference(getattr(movement, "referencia", None), found)
+            if repaired:
+                movement.referencia = repaired
         if found.clabe and not valid_clabe(getattr(movement, "clabe_beneficiario", None)):
             movement.clabe_beneficiario = found.clabe
         if found.bank and not identifier(getattr(movement, "sucursal", None)):

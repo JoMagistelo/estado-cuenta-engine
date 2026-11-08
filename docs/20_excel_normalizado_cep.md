@@ -13,6 +13,8 @@ El experimento `experimentos/cep-banxico-gui` se conserva intacto. La integraci�
 
 La recuperación de rastreos se comparte entre la salida de los 12 parsers registrados (digital/OCR) y la normalización de Excel anteriores. Reconoce etiquetas completas y abreviadas, la clave inicial de SPEI recibido de Banorte y el bloque posicional de BBVA: cabecera SPEI, cuenta con CLABE validada, rastreo y contraparte. No convierte referencias, autorizaciones o números largos arbitrarios en claves de rastreo. No reemplaza campos ya confirmados ni modifica importes, saldos, fechas o conceptos durante el enriquecimiento de parsers.
 
+BBVA puede entregar la referencia de diez dígitos junto al código de banco de tres dígitos. Se separan sólo si ese banco coincide con la contraparte del bloque SPEI; nunca se concatenan para inventar una referencia de trece dígitos. La referencia del pago SPEI, cuando está presente en el bloque, se conserva por separado en **Referencia SPEI**. **Referencia Original** y la hoja de revisión permiten consultar el dato anterior.
+
 ## Checklist de las 11 mejoras
 
 1. **Fechas Excel:** las columnas Fecha de Operación y Fecha de Liquidación de la copia mejorada contienen fechas de calendario, con formato `dd/mm/yyyy`. El año de las fechas parciales se obtiene del intervalo del estado. Del 15/12/2025 al 14/01/2026, `03 ENE` corresponde al **03/01/2026**. No se usa el año actual. Las fechas inválidas, sin evidencia o ambiguas quedan visibles para revisión.

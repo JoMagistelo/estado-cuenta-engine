@@ -28,7 +28,7 @@ def verify_pair(original: bytes, improved: bytes) -> int:
                        "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Cuenta Titular", "CLABE Titular",
                        "Estado de Fecha", "Revisión Normalización", "Origen Datos Titular", "Banco del Beneficiario",
                        "Código Banco Beneficiario", "Código Plaza/Producto CLABE"}
-            allowed.update({"Banco Emisor", "Banco Receptor"})
+            allowed.update({"Banco Emisor", "Banco Receptor", "Referencia SPEI", "Referencia Original"})
             for name in left:
                 if name in allowed or name == '_row':
                     continue

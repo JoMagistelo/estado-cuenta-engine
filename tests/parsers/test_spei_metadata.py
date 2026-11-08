@@ -8,7 +8,7 @@ import pytest
 from engine import statement_processor
 from models.movimiento import Movimiento
 from readers.models import DocumentData
-from utils.spei_metadata import enrich_missing_spei_fields, extract_spei_metadata
+from utils.spei_metadata import bbva_statement_reference, enrich_missing_spei_fields, extract_spei_metadata
 from parsers.bbva.extractors.movimientos import extract_clave_rastreo_from_concepto
 
 
@@ -81,6 +81,17 @@ def test_sender_memo_cannot_supply_bank_tracking_or_accounts():
     assert found.tracking == "MBAN20260103000000000001"
     assert found.reference == "0000007"
     assert extract_spei_metadata("BANORTE", "SYNTHETIC001 SPEI RECIBIDO").tracking == "SYNTHETIC001"
+
+
+def test_bbva_reference_bank_suffix_is_not_concatenated_or_guessed():
+    text = f"SPEI ENVIADO BANORTE\n0000007PRUEBA\n00{synthetic_clabe()}\nSYNTHETIC001\nPERSONA SINTETICA"
+    found = extract_spei_metadata("bbva", text)
+    assert bbva_statement_reference("0000001234 072", found) == "0000001234"
+    assert not bbva_statement_reference("0000001234072", found)
+    assert not bbva_statement_reference("0000001234 014", found)
+    m = Movimiento("03 ENE", None, text, "CARGO", 10.25, 0, referencia="0000001234 072")
+    enrich_missing_spei_fields([m], "bbva")
+    assert m.referencia == "0000001234"
 
 
 @pytest.mark.parametrize("bank", list(statement_processor.PARSER_REGISTRY))

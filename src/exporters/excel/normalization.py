@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
 from exporters.excel.writer import write_table_sheet
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
-from utils.spei_metadata import extract_spei_metadata, metadata_search_text, valid_tracking
+from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata, metadata_search_text, valid_tracking
 
 
 def header_key(value: object) -> str:
@@ -165,6 +165,16 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
         notes.append("Clave de Rastreo: difiere del concepto; se conserva el dato extraído")
     if found.reference and not identifier(get(row, "Referencia")):
         changes["Referencia"] = found.reference
+    if bank_code(get(row, "Banco")) == "40012":
+        # BBVA has both a statement reference and a distinct 7-digit payment
+        # reference. Keep their meanings separate and retain the source value.
+        repaired = bbva_statement_reference(get(row, "Referencia"), found)
+        if repaired:
+            changes["Referencia"] = repaired
+        if found.reference and not _present(get(row, "Referencia SPEI")):
+            changes["Referencia SPEI"] = found.reference
+    if "Referencia" in changes and get(row, "Referencia Original") is None:
+        changes["Referencia Original"] = get(row, "Referencia")
     if found.clabe:
         column = "CLABE del Ordenante" if found.direction == "RECIBIDO" else "CLABE del Beneficiario"
         if not valid_clabe(get(row, column)):
@@ -364,15 +374,21 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             if (resolution.value and not isinstance(old, (date, datetime))) or resolution.status == "REVISAR":
                 record(row, field_name, old, resolution.value or old, resolution.status + ": " + resolution.detail)
         for field_name, value in list(values.items()):
-            if field_name in {"Clave de Rastreo", "Referencia", "Cuenta del Beneficiario", "CLABE del Beneficiario", "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Banco del Beneficiario", "Banco Emisor", "Banco Receptor", "Cuenta Titular", "CLABE Titular"}:
+            if field_name in {"Clave de Rastreo", "Referencia", "Referencia SPEI", "Cuenta del Beneficiario", "CLABE del Beneficiario", "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Banco del Beneficiario", "Banco Emisor", "Banco Receptor", "Cuenta Titular", "CLABE Titular"}:
                 if get(row, field_name) != value:
                     record(row, field_name, get(row, field_name), value, "Concepto, catálogo o datos del titular")
         # Excel identifiers stay strings, including leading zeros.
         for field_name in ("Referencia", "Clave de Rastreo", "Cuenta del Beneficiario", "CLABE del Beneficiario"):
             if field_name not in values and _present(get(row, field_name)):
+                if (field_name == "Referencia" and bank_code(get(row, "Banco")) == "40012"
+                        and re.fullmatch(r"\s*[0-9]{10}\s+[0-9]{3}\s*", str(get(row, field_name)))):
+                    notes.append("Referencia: contiene código bancario no concordante; se conserva para revisión")
+                    continue
                 value = (account_identifier if field_name in {"Cuenta del Beneficiario", "CLABE del Beneficiario"} else identifier)(get(row, field_name))
                 if value:
                     values[field_name] = value
+                    if value != get(row, field_name):
+                        record(row, field_name, get(row, field_name), value, "Identificador guardado como texto")
                 else:
                     notes.append(f"{field_name}: identificador numérico con posible pérdida de precisión")
         values["Revisión Normalización"] = "; ".join(dict.fromkeys(notes))
