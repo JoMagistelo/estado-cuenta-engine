@@ -211,13 +211,25 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
             q.issues.append("Cargo/abono ambiguos o importe inválido")
         owner_bank = bank_code(get(row, "Banco")) or bank_code(get(donor, "Banco"))
         holder_clabe = account_identifier(get(row, "CLABE Titular"))
-        donor_clabe = account_identifier(get(donor, "CLABE"))
+        movement_account = _account(get(row, "Número de Cuenta"))
+        legacy_account = _account(get(row, "Cuenta Titular"))
+        if movement_account and legacy_account and movement_account != legacy_account:
+            q.issues.append(
+                "Cuenta Titular difiere de Número de Cuenta: corrige Número de Cuenta en Movimientos"
+            )
+        donor_account = _account(get(donor, "Número de Cuenta"))
+        donor_agrees = not (donor_account and movement_account and donor_account != movement_account)
+        donor_clabe = account_identifier(get(donor, "CLABE")) if donor_agrees else ""
+        if not donor_agrees and not valid_clabe(holder_clabe) and q.direction == "RECIBIDO":
+            q.issues.append(
+                "Número de Cuenta corregido difiere de Datos de la Cuenta: completa CLABE Titular"
+            )
         own = tuple(dict.fromkeys(v for v in (
             holder_clabe if valid_clabe(holder_clabe) else "",
             donor_clabe if valid_clabe(donor_clabe) else "",
-            _account(get(row, "Número de Cuenta")),
-            _account(get(row, "Cuenta Titular")),  # previous improved layouts
-            _account(get(donor, "Número de Cuenta")),
+            movement_account,
+            legacy_account,  # previous improved layouts
+            donor_account if donor_agrees else "",
         ) if v))
         q.owner_aliases = own
         if not owner_bank:
