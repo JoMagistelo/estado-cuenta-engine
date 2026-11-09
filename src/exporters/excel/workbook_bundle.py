@@ -61,6 +61,29 @@ class WorkbookBundle:
         return cls(original, improved, report, source_name)
 
     @classmethod
+    def from_uploaded(cls, source: str | Path | bytes, *, source_name="movimientos.xlsx"):
+        """Use an existing (possibly manually corrected) Excel without re-normalizing.
+
+        Legacy exports, original exports, normalized exports and already-crossed
+        exports all use the same Movimientos source-of-truth. The uploaded bytes
+        remain unchanged; querying never silently rewrites user corrections.
+        """
+        content = source if isinstance(source, bytes) else Path(source).read_bytes()
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+        try:
+            if "Movimientos" not in workbook.sheetnames:
+                raise ValueError("El Excel debe contener la hoja Movimientos")
+            ws = workbook["Movimientos"]
+            headers = {str(c.value or "").strip().casefold() for c in next(ws.iter_rows(max_row=1))}
+            if not {"fecha de operación", "clave de rastreo", "cargo", "abono"} <= headers:
+                raise ValueError("Faltan columnas básicas de Movimientos (fecha, rastreo, cargo o abono)")
+            count = sum(1 for values in ws.iter_rows(min_row=2, values_only=True)
+                        if any(v is not None for v in values))
+        finally:
+            workbook.close()
+        return cls(content, content, NormalizationReport(movements=count), source_name)
+
+    @classmethod
     def from_results(cls, results):
         return cls.from_excel(original_from_results(results))
 
