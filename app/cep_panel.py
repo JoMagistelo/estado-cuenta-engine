@@ -22,6 +22,7 @@ class CepPanel:
         self.get_results = get_results
         self.can_use_results = can_use_results
         self.bundle = None
+        self.normalized = False
         self.source = None
         self.source_name = "movimientos.xlsx"
         self.queries = []
@@ -44,14 +45,24 @@ class CepPanel:
         self.control = ft.Column([
             ft.Text("CEP Banxico", size=22, weight=ft.FontWeight.BOLD),
             ft.Text("1. Selecciona tus movimientos", size=15, weight=ft.FontWeight.BOLD),
-            ft.Text("Carga un Excel o usa la extracción actual. El Excel original se descarga en Extracción de movimientos.", size=12),
+            ft.Text(
+                "Acepta Excel antiguos, originales, mejorados o ya cruzados. "
+                "Después de corregir Movimientos puedes descargar TXT directamente, "
+                "sin volver a normalizar. La descarga del Excel original sigue en Extracción.",
+                size=12,
+            ),
             ft.Row([self.load_button, self.current_button], wrap=True),
             self.message, self.summary,
             ft.Row([self.normalize_button, self.clean_button], wrap=True),
             ft.Divider(),
             ft.Text("2. Descarga el TXT para Banxico", size=15, weight=ft.FontWeight.BOLD),
             self.adjacent,
-            ft.Text("El TXT usa las fechas normalizadas. Los recibidos usan la cuenta del titular. Si hay más de 500 consultas se guardan varios archivos .txt.", size=12),
+            ft.Text(
+                "El TXT lee los datos editados de Movimientos. Resuelve fechas antiguas usando "
+                "el periodo, sin cambiar tu archivo. En abonos usa preferentemente CLABE Titular. "
+                "Si hay más de 500 consultas se generan varios TXT.",
+                size=12,
+            ),
             ft.Row([self.txt_button, ft.TextButton(content="Abrir consulta por lotes en Banxico", on_click=self.open_banxico)], wrap=True),
             ft.Text("Carga los TXT en Banxico y solicita PDF y XML. Después importa aquí los ZIP descargados.", size=12),
             ft.Divider(),
@@ -66,7 +77,8 @@ class CepPanel:
         for button in self.actions:
             button.disabled = self.busy
         self.normalize_button.disabled = self.busy or self.source is None
-        for button in [self.clean_button, self.txt_button, self.zip_button]:
+        self.clean_button.disabled = self.busy or self.bundle is None or not self.normalized
+        for button in [self.txt_button, self.zip_button]:
             button.disabled = self.busy or self.bundle is None
         self.final_button.disabled = self.busy or self.bundle is None or not self.evidence.preserved
         self.adjacent.disabled = self.busy
@@ -90,8 +102,10 @@ class CepPanel:
             self.refresh()
 
     def set_bundle(self, bundle):
+        queries = queries_from_workbook(bundle.improved)
         self.bundle = bundle
-        self.queries = queries_from_workbook(bundle.improved)
+        self.queries = queries
+        self.normalized = True
         self.evidence = CepEvidence()
         report = bundle.report
         self.message.value = (f"{bundle.source_name} · Comprobación del Excel terminada: "
@@ -116,13 +130,19 @@ class CepPanel:
                 + (" · " + "; ".join(q.issues) if q.issues else ""), size=11, selectable=True))
 
     def set_source(self, source, name="movimientos.xlsx"):
-        self.source, self.source_name = source, name
-        self.bundle = None
-        self.queries = []
+        # Validate and prepare direct queries before switching the UI. Uploaded
+        # bytes remain intact; no normalization is required to generate TXT.
+        bundle = WorkbookBundle.from_uploaded(source, source_name=name)
+        queries = queries_from_workbook(bundle.improved)
+        self.source, self.source_name = bundle.original, name
+        self.bundle, self.queries = bundle, queries
+        self.normalized = False
         self.evidence = CepEvidence()
-        self.preview.controls = []
-        self.summary.value = ""
-        self.message.value = f"{name} cargado. Pulsa Normalizar Excel para preparar las fechas y los datos SPEI."
+        self.message.value = (
+            f"{name} · {bundle.report.movements} movimientos cargados SIN modificar. "
+            "Ya puedes generar TXT. Normalizar Excel es opcional."
+        )
+        self.update_preview()
 
     async def normalize_excel(self, event=None):
         if self.source is None:
