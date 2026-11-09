@@ -15,7 +15,8 @@ from openpyxl import load_workbook
 
 from cep.catalog import account_identifier, bank_code, bank_mentions, clabe_bank, identifier, valid_clabe
 from exporters.excel.normalization import _account, get, rows_from_sheet
-from utils.statement_dates import full_date, text_key
+from utils.spei_metadata import extract_spei_metadata
+from utils.statement_dates import full_date, resolve_date, text_key
 
 
 BANXICO_BATCH_URL = "https://www.banxico.org.mx/cep-scl/inicio.do"
@@ -144,26 +145,65 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
     if "Movimientos" not in workbook:
         workbook.close()
         raise ValueError("El Excel no contiene la hoja Movimientos")
+    # Legacy exports kept the holder CLABE only in Datos de la Cuenta. Link
+    # donors by BOTH statement id and original filename, never by account name
+    # alone. An ambiguous donor is not silently selected.
+    account_index: dict[tuple[str, str], list[dict]] = {}
+    if "Datos de la Cuenta" in workbook:
+        for account in rows_from_sheet(workbook["Datos de la Cuenta"]):
+            key = (identifier(get(account, "id_estado")),
+                   str(get(account, "Nombre del Archivo", "")))
+            account_index.setdefault(key, []).append(account)
     queries = []
     for row in rows_from_sheet(workbook["Movimientos"]):
+        key = (identifier(get(row, "id_estado")),
+               str(get(row, "Nombre del Archivo", "")))
+        donors = account_index.get(key, [])
+        donor = donors[0] if len(donors) == 1 else {}
         text = text_key(str(get(row, "Concepto", "")) + " " + str(get(row, "Concepto Original", "")))
         tracking = identifier(get(row, "Clave de Rastreo")).upper()
+        if not tracking:
+            # Extraction from an existing CONCEPTO is read-only. Parsed or
+            # manually corrected tracking always wins over this fallback.
+            tracking = extract_spei_metadata(
+                str(get(row, "Banco", "")),
+                get(row, "Concepto"), get(row, "Concepto Original")
+            ).tracking
         classified_spei = text_key(get(row, "Tipo de Operación")) == "SPEI"
         candidate = bool(classified_spei or tracking or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
         q = CepQuery(row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
                      identifier(get(row, "No. de Movimiento")), candidate, tracking=tracking,
                      reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")))
-        q.operation_date = full_date(get(row, "Fecha de Operación"))
+        date_input = get(row, "Fecha de Operación")
+        explicit_date = full_date(date_input)
+        q.operation_date = explicit_date
+        if q.operation_date is None:
+            context = donor if donor else row
+            resolved = resolve_date(
+                date_input, get(context, "Periodo de Inicio"),
+                get(context, "Periodo de Fin"),
+                get(context, "Fecha de Corte") or get(row, "Fecha de Corte"),
+                filename=key[1],
+            )
+            if resolved.status in {"POR_ARCHIVO", "FUERA_DE_PERIODO", "REVISAR"}:
+                q.issues.append("Fecha sin evidencia suficiente; corrige Fecha de Operación")
+            else:
+                q.operation_date = resolved.value
         debit, credit = amount(get(row, "Cargo")), amount(get(row, "Abono"))
         if debit is not None and credit is not None and bool(debit) != bool(credit):
             q.direction = "ENVIADO" if debit else "RECIBIDO"
             q.value = debit or credit
         else:
             q.issues.append("Cargo/abono ambiguos o importe inválido")
-        owner_bank = bank_code(get(row, "Banco"))
+        owner_bank = bank_code(get(row, "Banco")) or bank_code(get(donor, "Banco"))
+        holder_clabe = account_identifier(get(row, "CLABE Titular"))
+        donor_clabe = account_identifier(get(donor, "CLABE"))
         own = tuple(dict.fromkeys(v for v in (
-            _account(get(row, "CLABE Titular")), _account(get(row, "Cuenta Titular")),
-            _account(get(row, "Número de Cuenta")) if not get(row, "Cuenta Titular") else "",
+            holder_clabe if valid_clabe(holder_clabe) else "",
+            donor_clabe if valid_clabe(donor_clabe) else "",
+            _account(get(row, "Número de Cuenta")),
+            _account(get(row, "Cuenta Titular")),  # previous improved layouts
+            _account(get(donor, "Número de Cuenta")),
         ) if v))
         q.owner_aliases = own
         if not owner_bank:
@@ -204,7 +244,14 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
                 q.issues.append("Banco receptor contradice banco del estado")
             q.receiver = q.receiver or owner_bank
             q.destination_aliases = own
-            q.destination = next((v for v in own if _destination(v)), "")
+            # For a received SPEI the beneficiary is the HOLDER, never the
+            # transfer sender. Prefer the movement's corrected CLABE; otherwise
+            # use the same statement's legacy Datos de la Cuenta.
+            if holder_clabe and not valid_clabe(holder_clabe):
+                q.issues.append("CLABE Titular inválida; corrígela en Movimientos")
+                q.destination = ""
+            else:
+                q.destination = next((v for v in own if _destination(v)), "")
             q.destination_format = ("CLABE_18" if len(q.destination) == 18
                                     else "TARJETA_16" if len(q.destination) == 16
                                     else "CELULAR_10" if len(q.destination) == 10 else "")
@@ -243,7 +290,9 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
             q.issues.append("Formato de rastreo no admitido")
         if q.operation_date and not date(2018, 3, 16) <= q.operation_date <= today:
             q.issues.append("Fecha fuera del intervalo de consulta CEP por lotes")
-        if text_key(get(row, "Estado de Fecha")) in {"REVISAR", "FUERA_DE_PERIODO"}:
+        # Estado de Fecha is a previous, potentially stale audit value.
+        # A manually corrected explicit date takes precedence over it.
+        if not explicit_date and text_key(get(row, "Estado de Fecha")) in {"REVISAR", "FUERA_DE_PERIODO"} and not q.operation_date:
             q.issues.append("Fecha requiere revisión del periodo")
         if q.destination and valid_clabe(q.destination) and clabe_bank(q.destination) not in ("", q.receiver):
             q.issues.append("CLABE de destino contradice banco receptor")
