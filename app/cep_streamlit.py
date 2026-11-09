@@ -19,22 +19,34 @@ from exporters.excel.workbook_bundle import WorkbookBundle, original_from_result
 def set_cep_bundle(bundle):
     for key in ('cep_txt_files', 'cep_final_zip', 'cep_enriched_pair', 'cep_txt_adjacent'):
         st.session_state.pop(key, None)
+    queries = queries_from_workbook(bundle.improved)
     st.session_state.cep_bundle = bundle
-    st.session_state.cep_queries = queries_from_workbook(bundle.improved)
+    st.session_state.cep_queries = queries
+    st.session_state.cep_normalized = True
     st.session_state.cep_evidence = CepEvidence()
 
 
 def set_cep_source(source, name="movimientos.xlsx"):
-    for key in ('cep_bundle', 'cep_queries', 'cep_txt_files', 'cep_final_zip', 'cep_enriched_pair', 'cep_txt_adjacent'):
+    bundle = WorkbookBundle.from_uploaded(source, source_name=name)
+    queries = queries_from_workbook(bundle.improved)
+    for key in ('cep_bundle', 'cep_queries', 'cep_txt_files', 'cep_final_zip',
+                'cep_enriched_pair', 'cep_txt_adjacent'):
         st.session_state.pop(key, None)
-    st.session_state.cep_source = source
+    st.session_state.cep_source = bundle.original
     st.session_state.cep_source_name = name
+    st.session_state.cep_bundle = bundle
+    st.session_state.cep_queries = queries
+    st.session_state.cep_normalized = False
     st.session_state.cep_evidence = CepEvidence()
 
 
 def render_cep_workspace(results, busy=False):
     st.subheader("CEP Banxico")
-    st.caption("Carga un Excel y pulsa Normalizar Excel. El original se descarga en Extracción de movimientos.")
+    st.caption(
+        "Carga cualquier Excel de Estado Cuenta Engine (antiguo, original, mejorado o cruzado). "
+        "Puedes generar TXT inmediatamente desde las correcciones de Movimientos; "
+        "normalizar es opcional. El Excel original del motor se descarga en Extracción."
+    )
     uploaded = st.file_uploader("Excel de movimientos", type=["xlsx"], key="cep_excel_upload")
     if uploaded:
         data = uploaded.getvalue()
@@ -67,7 +79,12 @@ def render_cep_workspace(results, busy=False):
     queries = st.session_state.cep_queries
     evidence = st.session_state.cep_evidence
     candidates = [q for q in queries if q.candidate]
-    st.write(f"{bundle.report.movements} movimientos · {sum(q.ready for q in candidates)} candidatos con datos para TXT · {bundle.report.dates_review} fechas para revisión")
+    state = "Excel normalizado" if st.session_state.get("cep_normalized") else "Excel cargado sin modificaciones"
+    st.write(
+        f"{state} · {bundle.report.movements} movimientos · "
+        f"{sum(q.ready for q in candidates)} candidatos con datos para TXT"
+        + (f" · {bundle.report.dates_review} fechas para revisión" if st.session_state.get("cep_normalized") else "")
+    )
     st.subheader("Preparar TXT")
     adjacent = st.checkbox("Fecha homologada y reintentos ±1 día", value=True, key="cep_adjacent_dates")
     if st.button("Preparar TXT Banxico", key="cep_make_txt"):
@@ -104,7 +121,10 @@ def render_cep_workspace(results, busy=False):
         counts = Counter(v["CEP Estado"] for v in matches.values())
         st.write(" · ".join(f"{name}: {count}" for name, count in counts.items()))
     raw, clean = st.session_state.get('cep_enriched_pair', (bundle.original, bundle.improved))
-    st.download_button("Descargar Excel normalizado", clean, "excel_normalizado_con_CEP.xlsx" if matches else "excel_normalizado.xlsx")
+    normalized = st.session_state.get("cep_normalized")
+    label = "Descargar Excel normalizado" if normalized else "Descargar Excel cargado"
+    filename = ("excel_normalizado" if normalized else "excel_cargado")
+    st.download_button(label, clean, filename + ("_con_CEP" if matches else "") + ".xlsx")
     if evidence.preserved and st.button("Preparar ZIP final", key="cep_make_final"):
         try:
             with tempfile.TemporaryDirectory(prefix="engine_cep_web_") as folder:
@@ -117,4 +137,10 @@ def render_cep_workspace(results, busy=False):
         st.download_button("Descargar ZIP final", st.session_state.cep_final_zip, "Movimientos_y_CEP.zip", "application/zip")
     if candidates:
         st.dataframe([q.audit() | matches.get(q.row, {}) for q in candidates], hide_index=True, use_container_width=True)
-    st.caption("El ZIP final contiene ambos Excel cruzados y los PDF/XML renombrados. Extrae todo su contenido para abrir los PDF desde sus vínculos en Excel.")
+    st.caption(
+        "Los encabezados verdes de Movimientos en el Excel normalizado o cruzado "
+        "señalan los datos usados para preparar el TXT. "
+        "Control CEP muestra los 6 campos que se consultan y el motivo de cada resultado. "
+        "Corrige las columnas originales de Movimientos, vuelve a cargar el Excel y prepara "
+        "un TXT nuevo sin normalizar. El ZIP conserva ambos Excel cruzados y los PDF/XML."
+    )

@@ -6,14 +6,15 @@ import re
 from copy import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
 from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
-from exporters.excel.writer import write_table_sheet
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
 from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata, metadata_search_text, valid_tracking
 
@@ -177,10 +178,18 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
         changes["Referencia Original"] = get(row, "Referencia")
     if found.clabe:
         column = "CLABE del Ordenante" if found.direction == "RECIBIDO" else "CLABE del Beneficiario"
-        if not valid_clabe(get(row, column)):
+        existing = account_identifier(get(row, column))
+        # A 16-digit card or a 00-padded card may be a deliberate manual
+        # correction. Never replace it with an older value found in CONCEPTO.
+        protected = existing.isdigit() and len(existing) in (10, 16, 18)
+        if not valid_clabe(existing) and not protected:
             changes[column] = found.clabe
+        elif protected and existing != found.clabe:
+            notes.append(f"{column}: difiere del concepto; se conserva la edición")
     if found.bank:
-        column = "Banco Emisor" if found.direction == "RECIBIDO" else "Banco Receptor"
+        # Do not add Banco Receptor beside Banco del Beneficiario:
+        # the latter is the receiver for outgoing SPEI.
+        column = "Banco Emisor" if found.direction == "RECIBIDO" else "Banco del Beneficiario"
         if not _present(get(row, column)):
             changes[column] = found.bank
     for column, pattern in (
@@ -220,10 +229,14 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
         existing_clabe = account_identifier(get(row, clabe_col))
         existing_account = account_identifier(get(row, account_col))
         if not valid_clabe(existing_clabe):
-            if valid_clabe(existing_account):
-                changes[clabe_col] = existing_account
-            elif len(clabes) == 1:
-                changes[clabe_col] = next(iter(clabes))
+            protected = existing_clabe.isdigit() and len(existing_clabe) in (10, 16, 18)
+            if not protected:
+                if valid_clabe(existing_account):
+                    changes[clabe_col] = existing_account
+                elif len(clabes) == 1:
+                    changes[clabe_col] = next(iter(clabes))
+            elif clabes and existing_clabe not in clabes:
+                notes.append(f"{clabe_col}: valor manual distinto; se conserva para revisión")
         elif clabes and existing_clabe not in clabes:
             notes.append(f"{clabe_col}: contradicción; se conserva el dato extraído")
         if not _account(existing_account) and len(accounts) == 1:
@@ -232,15 +245,151 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
             notes.append(f"{account_col}: varias candidatas")
     beneficiary_clabe = changes.get("CLABE del Beneficiario", account_identifier(get(row, "CLABE del Beneficiario")))
     code = clabe_bank(beneficiary_clabe)
-    if code:
-        changes["Banco del Beneficiario"] = INSTITUTIONS[code]
-        changes["Código Banco Beneficiario"] = code
-        changes["Código Plaza/Producto CLABE"] = beneficiary_clabe[3:6]
-        # Historical UI uses Sucursal for the counterpart bank. Do not replace
-        # an explicitly extracted value or claim a physical branch from CLABE.
-        if not _present(get(row, "Sucursal")):
-            changes["Sucursal"] = INSTITUTIONS[code]
+    # In received SPEI, some legacy parsers place the ORIGINATOR in these
+    # third-party fields: never call that account/bank the beneficiary.
+    direction = movement_direction(row)
+    if code and direction == "ENVIADO":
+        if not _present(get(row, "Banco del Beneficiario")):
+            changes["Banco del Beneficiario"] = INSTITUTIONS[code]
+        if not _present(get(row, "Código Banco Beneficiario")):
+            changes["Código Banco Beneficiario"] = code
+        if not _present(get(row, "Código Plaza/Producto CLABE")):
+            changes["Código Plaza/Producto CLABE"] = beneficiary_clabe[3:6]
     return changes, notes
+
+
+# Inputs to the CEP TXT, including legacy fallbacks used when a preferred
+# field is absent. Do not mark references or CEP results as editable inputs.
+# Highlight normalized/crossed copies only, never the original export.
+CEP_QUERY_INPUT_HEADERS = frozenset({
+    "TIPODEOPERACION", "FECHADEOPERACION", "CLAVEDERASTREO",
+    "BANCO", "BANCODELBENEFICIARIO", "BANCOEMISOR", "BANCORECEPTOR",
+    "CLABEDELBENEFICIARIO", "CUENTADELBENEFICIARIO",
+    "CLABETITULAR", "NUMERODECUENTA", "CUENTATITULAR", "CARGO", "ABONO",
+    "SUCURSAL", "CLABEDELORDENANTE", "CUENTADELORDENANTE",
+    "CONCEPTO", "CONCEPTOORIGINAL", "FECHADECORTE", "PERIODODEINICIO", "PERIODODEFIN",
+})
+CEP_HEADER_FILL = PatternFill("solid", fgColor="14695C")
+
+
+def highlight_cep_headers(ws) -> None:
+    """Mark the source-of-truth input columns for Banxico in one teal tone."""
+    for cell in ws[1]:
+        if header_key(cell.value) in CEP_QUERY_INPUT_HEADERS:
+            cell.fill = copy(CEP_HEADER_FILL)
+            font = copy(cell.font)
+            font.bold = True
+            font.color = "FFFFFF"
+            cell.font = font
+
+
+def movement_direction(row: dict) -> str:
+    """Only one strictly positive amount determines the SPEI direction."""
+    try:
+        amounts = []
+        for label in ("Cargo", "Abono"):
+            value = str(get(row, label, 0) or 0).replace("$", "").replace(",", "").strip()
+            parsed = Decimal(value)
+            if not parsed.is_finite() or parsed < 0:
+                return ""
+            amounts.append(parsed)
+    except (InvalidOperation, ValueError):
+        return ""
+    if (amounts[0] > 0) == (amounts[1] > 0):
+        return ""
+    return "ENVIADO" if amounts[0] > 0 else "RECIBIDO"
+
+
+def canonicalize_sucursal_bank(ws, *, allow_column_removal: bool = True) -> bool:
+    """Move historical Sucursal bank meaning to the correct SPEI bank role.
+
+    ENVIADO: old Sucursal is the receiving bank, Banco del Beneficiario.
+    RECIBIDO: old Sucursal may be the *sending* bank, which must be retained
+    as Banco Emisor; Banco del Beneficiario is the account-holder's bank.
+    Physical branch names and unknown non-SPEI values are not discarded.
+    """
+    columns = {header_key(c.value): c.column for c in ws[1] if c.value is not None}
+    sucursal = columns.get("SUCURSAL")
+    if sucursal is None:
+        return False
+    rows = rows_from_sheet(ws)
+    # Only clean a legacy column when every populated value can be migrated.
+    migration = []
+    can_remove = allow_column_removal
+    for row in rows:
+        original = get(row, "Sucursal")
+        if not _present(original):
+            continue
+        direction = movement_direction(row)
+        recognized = bank_code(original)
+        owner = bank_code(get(row, "Banco"))
+        spei = (text_key(get(row, "Tipo de Operación")) == "SPEI"
+                or bool(identifier(get(row, "Clave de Rastreo")))
+                or "SPEI" in text_key(get(row, "Concepto")))
+        if not spei or not recognized or not direction:
+            can_remove = False
+            continue
+        values = {}
+        if direction == "ENVIADO":
+            if not _present(get(row, "Banco del Beneficiario")):
+                values["Banco del Beneficiario"] = original
+        else:
+            if not owner:
+                can_remove = False
+                continue
+            if not _present(get(row, "Banco del Beneficiario")):
+                values["Banco del Beneficiario"] = INSTITUTIONS[owner]
+            if recognized != owner and not _present(get(row, "Banco Emisor")):
+                values["Banco Emisor"] = original
+        migration.append((row["_row"], values))
+    # The canonical beneficiary-bank column is always available for
+    # corrections, but the original branch column stays when ambiguous.
+    if "BANCODELBENEFICIARIO" not in columns:
+        column = ws.cell(1, ws.max_column + 1)
+        column._style = copy(ws.cell(1, 1)._style)
+        set_literal(column, "Banco del Beneficiario")
+        ws.column_dimensions[get_column_letter(column.column)].width = 27
+    for row_number, values in migration:
+        if values:
+            put_columns(ws, row_number, values)
+    if can_remove:
+        ws.delete_cols(sucursal)
+    return can_remove
+
+
+def collapse_holder_account(ws, *, allow_column_removal=True) -> bool:
+    """Keep Número de Cuenta as the only account column (CLABE Titular stays).
+
+    Never discard competing manually entered values. Removing a column in a
+    workbook containing formulas may invalidate external cell references;
+    callers should opt out for those complex workbooks.
+    """
+    headers = {header_key(cell.value): cell.column for cell in ws[1] if cell.value is not None}
+    redundant = headers.get("CUENTATITULAR")
+    canonical = headers.get("NUMERODECUENTA")
+    if not redundant:
+        return False
+    if not canonical:
+        ws.cell(1, redundant).value = "Número de Cuenta"
+        return True
+    for index in range(2, ws.max_row + 1):
+        current = account_identifier(ws.cell(index, canonical).value)
+        previous = account_identifier(ws.cell(index, redundant).value)
+        if current and previous and current != previous:
+            raise ValueError(
+                f"Fila {index}: Cuenta Titular y Número de Cuenta son distintos. "
+                "Corrige Número de Cuenta en Movimientos antes de normalizar/cruzar."
+            )
+    if not allow_column_removal:
+        return False
+    for index in range(2, ws.max_row + 1):
+        canonical_cell = ws.cell(index, canonical)
+        old = account_identifier(ws.cell(index, redundant).value)
+        if not account_identifier(canonical_cell.value) and old:
+            canonical_cell.value = old
+            canonical_cell.data_type = "s"
+    ws.delete_cols(redundant)
+    return True
 
 
 def set_literal(cell, value):
@@ -296,12 +445,18 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
     movable = not workbook.defined_names and not any(
         sheet.tables or sheet._charts or any(c.data_type == "f" for cells in sheet.iter_rows() for c in cells)
         for sheet in workbook.worksheets)
-    if movable and "FECHADECORTE" in headers and "CUENTATITULAR" not in headers and "CLABETITULAR" not in headers:
+    if "CUENTATITULAR" in headers and "NUMERODECUENTA" in headers and not movable:
+        raise ValueError(
+            "El Excel tiene fórmulas o tablas que impiden quitar con seguridad Cuenta Titular. "
+            "Puedes generar el TXT directamente sin normalizar este archivo."
+        )
+    collapse_holder_account(ws, allow_column_removal=movable)
+    headers = {header_key(c.value): c.column for c in ws[1] if c.value is not None}
+    if movable and "FECHADECORTE" in headers and "CLABETITULAR" not in headers:
         position = headers["FECHADECORTE"] + 1
-        ws.insert_cols(position, 2)
-        for column, label in ((position, "Cuenta Titular"), (position + 1, "CLABE Titular")):
-            ws.cell(1, column, label)._style = copy(ws.cell(1, 1)._style)
-            ws.column_dimensions[get_column_letter(column)].width = 24
+        ws.insert_cols(position, 1)
+        ws.cell(1, position, "CLABE Titular")._style = copy(ws.cell(1, 1)._style)
+        ws.column_dimensions[get_column_letter(position)].width = 24
 
     def record(row, field_name, old, new, detail):
         report.changes.append({
@@ -341,10 +496,15 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
         owner = matches[0] if len(matches) == 1 else None
         metadata = owner.row if owner else row
         values, notes = recover_fields(row)
-        account = (owner.account if owner else "") or _account(get(row, "Cuenta Titular") or get(row, "Número de Cuenta"))
-        clabe = (owner.clabe if owner else "") or account_identifier(get(row, "CLABE Titular"))
-        values.update({"Cuenta Titular": account, "CLABE Titular": clabe if valid_clabe(clabe) else ""})
-        if account and account != _account(get(row, "Número de Cuenta")):
+        # The analyst's movement columns take precedence over donor data.
+        account = _account(get(row, "Número de Cuenta")) or (owner.account if owner else "")
+        own_clabe = account_identifier(get(row, "CLABE Titular"))
+        clabe = own_clabe if valid_clabe(own_clabe) else (owner.clabe if owner else "")
+        if not _present(own_clabe):
+            values["CLABE Titular"] = clabe if valid_clabe(clabe) else ""
+        elif not valid_clabe(own_clabe):
+            notes.append("CLABE Titular inválida; se conserva para corrección manual")
+        if account and not _account(get(row, "Número de Cuenta")):
             values["Número de Cuenta"] = account
         if owner and owner.sources:
             values["Origen Datos Titular"] = "; ".join(owner.sources)
@@ -393,24 +553,27 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
                     notes.append(f"{field_name}: identificador numérico con posible pérdida de precisión")
         values["Revisión Normalización"] = "; ".join(dict.fromkeys(notes))
         put_columns(ws, row["_row"], values)
-    previous_changes = rows_from_sheet(workbook["Revisión Excel"]) if "Revisión Excel" in workbook else []
-    if "Revisión Excel" in workbook:
-        del workbook["Revisión Excel"]
-    audit = workbook.create_sheet("Revisión Excel")
-    combined = []
-    seen = set()
-    for change in previous_changes + report.changes:
-        change = {k: v for k, v in change.items() if k != '_row'}
-        signature = tuple((k, _display(v)) for k, v in change.items())
-        if signature not in seen:
-            combined.append(change)
-            seen.add(signature)
-    write_table_sheet(audit, combined or [{"Detalle": "Sin cambios ni incidencias"}])
-    # All external text in the audit is literal, never an Excel formula.
-    for cells in audit.iter_rows():
-        for cell in cells:
-            if isinstance(cell.value, str):
-                cell.data_type = "s"
+    # Audit differences are retained in the in-memory report, not in a
+    # separate Revisión Excel sheet. The final user's corrections live in
+    # Movimientos, and the generated Control CEP reports query problems.
+    # A previously crossed workbook may contain stale CEP status/results.
+    # They are not evidence for this new run; rebuilding them requires
+    # importing the official Banxico ZIP again. Never alter the source XLSX.
+    previous_cep_columns = [
+        cell.column for cell in ws[1]
+        if cell.value and header_key(cell.value).startswith("CEP")
+    ]
+    if previous_cep_columns and not movable:
+        raise ValueError(
+            "El Excel tiene fórmulas que impiden retirar los resultados CEP anteriores. "
+            "Genera TXT sin normalizar o trabaja sobre una copia sin dependencias."
+        )
+    for column in sorted(previous_cep_columns, reverse=True):
+        ws.delete_cols(column)
+    for old_sheet in ("Revisión Excel", "Revisión CEP", "Control CEP", "Datos CEP"):
+        if old_sheet in workbook:
+            del workbook[old_sheet]
+    highlight_cep_headers(ws)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(destination)
