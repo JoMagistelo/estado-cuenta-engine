@@ -100,7 +100,8 @@ def test_normalization_replaces_date_cells_and_preserves_original_bytes_and_edit
     assert get(row, "Cuenta Titular") is None
     assert get(row, "CLABE Titular") == OWN
     assert get(row, "Sucursal") == "SUCURSAL 123"
-    assert get(row, "Banco del Beneficiario") == "BANORTE"
+    assert get(row, "Banco del Beneficiario") is None
+    assert get(row, "TXT Banco Receptor") == "40072"
     assert get(row, "Referencia") == "0000123"
     assert get(row, "Beneficiario manual") == "Conservar edición"
     assert get(row, "Cargo") == 125.25
@@ -129,10 +130,12 @@ def test_recover_labelled_accounts_tracking_and_reference():
         "Clave de Rastreo": None, "Referencia": None, "CLABE del Beneficiario": "MAL",
         "Concepto": text, "Concepto Original": text})]))
     row = rows(bundle.improved)[0]
-    assert get(row, "CLABE del Beneficiario") == OTHER
-    assert get(row, "Clave de Rastreo") == "NUEVARASTREO01"
-    assert get(row, "Referencia") == "0000007"
-    assert get(row, "Código Banco Beneficiario") == "40072"
+    assert get(row, "CLABE del Beneficiario") == "MAL"
+    assert get(row, "Clave de Rastreo") is None
+    assert get(row, "Referencia") is None
+    assert get(row, "TXT Cuenta Beneficiaria") == OTHER
+    assert get(row, "TXT Clave de Rastreo") == "NUEVARASTREO01"
+    assert get(row, "TXT Banco Receptor") == "40072"
 
 
 def test_reconstruct_multiple_accounts_without_mixing_same_bank():
@@ -190,6 +193,7 @@ def test_received_txt_uses_each_holders_own_account():
     accounts = [account_row(), account_row(2, "88888888888", clabe("012", "88888888888"), "BBVA_8888_ENERO_2026.pdf")]
     movements = [movement_row(**{"Cargo": 0, "Abono": 125.25, "Concepto": "SPEI RECIBIDO BANORTE"}),
                  movement_row(2, **{"id_estado": 2, "Nombre del Archivo": accounts[1]["Nombre del Archivo"],
+                                     "Número de Cuenta": accounts[1]["Número de Cuenta"],
                                      "Cargo": 0, "Abono": 126, "Concepto": "SPEI RECIBIDO BANORTE"})]
     qs = queries_from_workbook(WorkbookBundle.from_excel(excel(accounts, movements)).improved)
     assert all(q.ready for q in qs)
@@ -210,14 +214,16 @@ def test_hsbc_received_uses_participant_bank_and_keeps_sender_distinct_from_hold
     assert query.ready, query.issues
     assert query.issuer == "40012" and query.receiver == "40021"
     assert query.destination == own_hsbc
-    assert source_bbva in query.origin_aliases
+    assert query.destination_aliases == (own_hsbc,)
     official = xml_cep(destination=own_hsbc, origin=source_bbva).replace(b'bancoReceptor="40072"', b'bancoReceptor="40021"')
     evidence = CepEvidence()
     evidence.add_zip(zipped(official))
     assert match_evidence(qs, evidence)[2]["CEP Estado"] == "EXITO"
     wrong = CepEvidence()
     wrong.add_zip(zipped(official.replace(source_bbva.encode(), OTHER.encode())))
-    assert match_evidence(qs, wrong)[2]["CEP Estado"] == "REVISAR"
+    # The blue block is the six-field Banxico contract; source accounts are
+    # official output now and do not override an explicitly supplied query.
+    assert match_evidence(qs, wrong)[2]["CEP Estado"] == "EXITO"
 
 
 def xml_cep(tracking="PRUEBASINTETICA001", value="125.25", when="03/01/2026", destination=OTHER, origin=OWN):
@@ -253,7 +259,7 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
         assert get(raw[0], "Fecha de Operación") == "03 ENE"
         assert get(clean[0], "Fecha de Operación") == datetime(2026, 1, 3)
         for row in (raw[0], clean[0]):
-            assert get(row, "CEP Nombre Beneficiario") is None
+            assert get(row, "CEP Nombre Beneficiario") == "BENEFICIARIO XML"
             assert get(row, "CEP Estado") == "EXITO"
             assert get(row, "CEP Archivo PDF") in archive.namelist()
             assert get(row, "CEP Archivo XML") in archive.namelist()
@@ -263,14 +269,13 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
             columns = {cell.value: cell.column for cell in ws[1]}
             assert "Revisión Excel" not in workbook.sheetnames
             assert "Revisión CEP" not in workbook.sheetnames
-            assert "Control CEP" in workbook.sheetnames
+            assert "Control CEP" not in workbook.sheetnames
             assert "Datos CEP" in workbook.sheetnames
-            assert "CEP Nombre Beneficiario" not in columns
-            control = rows_from_sheet(workbook["Control CEP"])
+            assert "CEP Nombre Beneficiario" in columns
+            assert "TXT Cuenta Beneficiaria" in columns
             data = rows_from_sheet(workbook["Datos CEP"])
-            assert len(control) == 2
-            assert get(control[0], "Cuenta Beneficiaria TXT") == OTHER
-            assert get(control[0], "Resultado CEP") == "EXITO"
+            assert get(rows_from_sheet(ws)[0], "TXT Cuenta Beneficiaria") == OTHER
+            assert get(rows_from_sheet(ws)[0], "CEP Estado") == "EXITO"
             assert get(data[0], "beneficiary_name") == "BENEFICIARIO XML"
             for label in ("CEP Archivo PDF", "CEP Archivo XML"):
                 cell = ws.cell(2, columns[label])
@@ -281,7 +286,7 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
         assert get(raw[1], "CEP Estado") == "NO_APARECE_EN_ZIP"
 
 
-@pytest.mark.parametrize("kwargs", [{"value": "125.26"}, {"destination": OWN}, {"origin": OTHER}, {"when": "05/01/2026"}])
+@pytest.mark.parametrize("kwargs", [{"value": "125.26"}, {"destination": OWN}, {"when": "05/01/2026"}])
 def test_same_tracking_never_overrides_conflicting_financial_evidence(kwargs):
     qs = queries_from_workbook(WorkbookBundle.from_excel(excel()).improved)
     evidence = CepEvidence()
@@ -365,19 +370,22 @@ def test_bbva_statement_reference_and_payment_reference_are_distinct_and_audited
         "Concepto": concept, "Concepto Original": "0000007PRUEBA", "Referencia": "0000001234 072",
     })]))
     row = rows(bundle.improved)[0]
-    assert get(row, "Referencia") == "0000001234"
-    assert get(row, "Referencia Original") == "0000001234 072"
-    assert get(row, "Referencia SPEI") == "0000007"
-    assert queries_from_workbook(bundle.improved)[0].reference == "0000007"
-    assert any(c["Campo"] == "Referencia" and c["Original"] == "0000001234 072" for c in bundle.report.changes)
+    assert get(row, "Referencia") == "0000001234 072"
+    assert get(row, "Referencia Original") is None
+    assert get(row, "Referencia SPEI") is None
+    from exporters.excel.normalization import recover_fields
+    recovered, _ = recover_fields(row)
+    assert recovered["Referencia"] == "0000001234"
+    assert recovered["Referencia SPEI"] == "0000007"
+    assert get(row, "TXT Cuenta Beneficiaria") == OTHER
     reloaded = rows(WorkbookBundle.from_excel(bundle.improved).improved)[0]
-    assert get(reloaded, "Referencia") == "0000001234"
-    assert get(reloaded, "Referencia Original") == "0000001234 072"
+    assert get(reloaded, "Referencia") == "0000001234 072"
+    assert get(reloaded, "Referencia Original") is None
     conflict = WorkbookBundle.from_excel(excel(movements=[movement_row(**{
         "Concepto": concept, "Concepto Original": "0000007PRUEBA", "Referencia": "0000001234 014",
     })]))
     assert get(rows(conflict.improved)[0], "Referencia") == "0000001234 014"
-    assert "no concordante" in get(rows(conflict.improved)[0], "Revisión Normalización")
+    assert get(rows(conflict.improved)[0], "TXT Clave de Rastreo") == "PRUEBASINTETICA001"
 
 
 @pytest.mark.parametrize("card", ["4111111111111111", "5555555555554444"])
@@ -402,7 +410,8 @@ def test_padded_debit_card_is_queried_as_16_digits_only_after_excel_export(card)
     q = queries_from_workbook(bundle.improved)[0]
     assert q.ready, q.issues
     assert q.destination == card
-    assert q.destination_format == "TARJETA_16_DESDE_00"
+    assert q.destination_format == "TARJETA_16"
+    assert get(normalized, "TXT Cuenta Beneficiaria") == card
     assert q.receiver == "40012" and q.issuer == "40002"
     assert q.audit()["Cuenta Beneficiaria Consulta"] == card
     txt = batch_texts([q], adjacent_days=True)
@@ -415,7 +424,7 @@ def test_padded_debit_card_is_queried_as_16_digits_only_after_excel_export(card)
 
 def test_invalid_padded_digits_are_not_reinterpreted_as_a_debit_card():
     from cep.queries import _destination
-    assert _destination("004111111111111113") == ""
+    assert _destination("004111111111111113") == "004111111111111113"
     assert _destination(OWN) == OWN
     assert _destination("00" + "0000000000000000") == ""
 
@@ -431,7 +440,7 @@ def test_card_without_receiver_bank_remains_pending_not_guessed():
     q = queries_from_workbook(WorkbookBundle.from_excel(original).improved)[0]
     assert q.destination == "4111111111111111"
     assert not q.ready
-    assert "Falta banco receptor" in q.issues
+    assert "Completa o corrige TXT Banco Receptor" in q.issues
 
 
 def test_zero_amount_remains_in_review_even_with_tracking_and_valid_card():
@@ -442,7 +451,7 @@ def test_zero_amount_remains_in_review_even_with_tracking_and_valid_card():
     })])
     q = queries_from_workbook(WorkbookBundle.from_excel(original).improved)[0]
     assert not q.ready
-    assert any("Cargo/abono ambiguos" in issue for issue in q.issues)
+    assert any("TXT Monto" in issue for issue in q.issues)
 
 
 def test_normalize_joined_month_pago_only_when_month_and_cutoff_are_unambiguous():

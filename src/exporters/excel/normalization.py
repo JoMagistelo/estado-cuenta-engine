@@ -6,36 +6,24 @@ import re
 from copy import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
-from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
+from cep.catalog import account_identifier, bank_code, clabe_bank, identifier, valid_clabe
+from cep.catalog import statement_account as _account
+from cep.columns import (
+    CEP_COLUMNS, REVIEW_COLUMN, add_bank_catalog, arrange_movement_blocks,
+    has_txt_inputs, install_txt_inputs, safe_to_reorder,
+)
+from cep.queries import queries_from_rows
+from exporters.excel.cells import (
+    delete_column, get, header_key, insert_column, put_columns, rows_from_sheet, set_literal, updated_row,
+)
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
 from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata, metadata_search_text, valid_tracking
-
-
-def header_key(value: object) -> str:
-    return re.sub(r"[^A-Z0-9]", "", text_key(value))
-
-
-def rows_from_sheet(ws) -> list[dict]:
-    headers = [c.value for c in ws[1]]
-    return [dict(zip(headers, values)) | {"_row": index}
-            for index, values in enumerate(ws.iter_rows(min_row=2, values_only=True), 2)
-            if any(v is not None for v in values)]
-
-
-def get(row: dict, name: str, default=None):
-    wanted = header_key(name)
-    for key, value in row.items():
-        if header_key(key) == wanted:
-            return value if value is not None else default
-    return default
 
 
 def _display(value):
@@ -56,11 +44,6 @@ def filename_family(filename: str) -> str:
     s = re.sub(rf"\b(?:{names})\b|\b20\d{{2}}\b", " ", s)
     s = re.sub(r"\b(?:ESTADO DE CUENTA|ESTADO CUENTA|CORTE|PERIODO)\b", " ", s)
     return re.sub(r"[^A-Z0-9]+", " ", s).strip()
-
-
-def _account(value):
-    value = account_identifier(value)
-    return value if re.fullmatch(r"[0-9]{5,17}", value) or valid_clabe(value) else ""
 
 
 @dataclass
@@ -243,118 +226,7 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
             changes[account_col] = next(iter(accounts))
         if len(clabes) > 1 or len(accounts) > 1:
             notes.append(f"{account_col}: varias candidatas")
-    beneficiary_clabe = changes.get("CLABE del Beneficiario", account_identifier(get(row, "CLABE del Beneficiario")))
-    code = clabe_bank(beneficiary_clabe)
-    # In received SPEI, some legacy parsers place the ORIGINATOR in these
-    # third-party fields: never call that account/bank the beneficiary.
-    direction = movement_direction(row)
-    if code and direction == "ENVIADO":
-        if not _present(get(row, "Banco del Beneficiario")):
-            changes["Banco del Beneficiario"] = INSTITUTIONS[code]
-        if not _present(get(row, "Código Banco Beneficiario")):
-            changes["Código Banco Beneficiario"] = code
-        if not _present(get(row, "Código Plaza/Producto CLABE")):
-            changes["Código Plaza/Producto CLABE"] = beneficiary_clabe[3:6]
     return changes, notes
-
-
-# Inputs to the CEP TXT, including legacy fallbacks used when a preferred
-# field is absent. Do not mark references or CEP results as editable inputs.
-# Highlight normalized/crossed copies only, never the original export.
-CEP_QUERY_INPUT_HEADERS = frozenset({
-    "TIPODEOPERACION", "FECHADEOPERACION", "CLAVEDERASTREO",
-    "BANCO", "BANCODELBENEFICIARIO", "BANCOEMISOR", "BANCORECEPTOR",
-    "CLABEDELBENEFICIARIO", "CUENTADELBENEFICIARIO",
-    "CLABETITULAR", "NUMERODECUENTA", "CUENTATITULAR", "CARGO", "ABONO",
-    "SUCURSAL", "CLABEDELORDENANTE", "CUENTADELORDENANTE",
-    "CONCEPTO", "CONCEPTOORIGINAL", "FECHADECORTE", "PERIODODEINICIO", "PERIODODEFIN",
-})
-CEP_HEADER_FILL = PatternFill("solid", fgColor="14695C")
-
-
-def highlight_cep_headers(ws) -> None:
-    """Mark the source-of-truth input columns for Banxico in one teal tone."""
-    for cell in ws[1]:
-        if header_key(cell.value) in CEP_QUERY_INPUT_HEADERS:
-            cell.fill = copy(CEP_HEADER_FILL)
-            font = copy(cell.font)
-            font.bold = True
-            font.color = "FFFFFF"
-            cell.font = font
-
-
-def movement_direction(row: dict) -> str:
-    """Only one strictly positive amount determines the SPEI direction."""
-    try:
-        amounts = []
-        for label in ("Cargo", "Abono"):
-            value = str(get(row, label, 0) or 0).replace("$", "").replace(",", "").strip()
-            parsed = Decimal(value)
-            if not parsed.is_finite() or parsed < 0:
-                return ""
-            amounts.append(parsed)
-    except (InvalidOperation, ValueError):
-        return ""
-    if (amounts[0] > 0) == (amounts[1] > 0):
-        return ""
-    return "ENVIADO" if amounts[0] > 0 else "RECIBIDO"
-
-
-def canonicalize_sucursal_bank(ws, *, allow_column_removal: bool = True) -> bool:
-    """Move historical Sucursal bank meaning to the correct SPEI bank role.
-
-    ENVIADO: old Sucursal is the receiving bank, Banco del Beneficiario.
-    RECIBIDO: old Sucursal may be the *sending* bank, which must be retained
-    as Banco Emisor; Banco del Beneficiario is the account-holder's bank.
-    Physical branch names and unknown non-SPEI values are not discarded.
-    """
-    columns = {header_key(c.value): c.column for c in ws[1] if c.value is not None}
-    sucursal = columns.get("SUCURSAL")
-    if sucursal is None:
-        return False
-    rows = rows_from_sheet(ws)
-    # Only clean a legacy column when every populated value can be migrated.
-    migration = []
-    can_remove = allow_column_removal
-    for row in rows:
-        original = get(row, "Sucursal")
-        if not _present(original):
-            continue
-        direction = movement_direction(row)
-        recognized = bank_code(original)
-        owner = bank_code(get(row, "Banco"))
-        spei = (text_key(get(row, "Tipo de Operación")) == "SPEI"
-                or bool(identifier(get(row, "Clave de Rastreo")))
-                or "SPEI" in text_key(get(row, "Concepto")))
-        if not spei or not recognized or not direction:
-            can_remove = False
-            continue
-        values = {}
-        if direction == "ENVIADO":
-            if not _present(get(row, "Banco del Beneficiario")):
-                values["Banco del Beneficiario"] = original
-        else:
-            if not owner:
-                can_remove = False
-                continue
-            if not _present(get(row, "Banco del Beneficiario")):
-                values["Banco del Beneficiario"] = INSTITUTIONS[owner]
-            if recognized != owner and not _present(get(row, "Banco Emisor")):
-                values["Banco Emisor"] = original
-        migration.append((row["_row"], values))
-    # The canonical beneficiary-bank column is always available for
-    # corrections, but the original branch column stays when ambiguous.
-    if "BANCODELBENEFICIARIO" not in columns:
-        column = ws.cell(1, ws.max_column + 1)
-        column._style = copy(ws.cell(1, 1)._style)
-        set_literal(column, "Banco del Beneficiario")
-        ws.column_dimensions[get_column_letter(column.column)].width = 27
-    for row_number, values in migration:
-        if values:
-            put_columns(ws, row_number, values)
-    if can_remove:
-        ws.delete_cols(sucursal)
-    return can_remove
 
 
 def collapse_holder_account(ws, *, allow_column_removal=True) -> bool:
@@ -388,37 +260,8 @@ def collapse_holder_account(ws, *, allow_column_removal=True) -> bool:
         if not account_identifier(canonical_cell.value) and old:
             canonical_cell.value = old
             canonical_cell.data_type = "s"
-    ws.delete_cols(redundant)
+    delete_column(ws, redundant)
     return True
-
-
-def set_literal(cell, value):
-    cell.value = value
-    if isinstance(value, str):
-        cell.data_type = "s"
-    if isinstance(value, (date, datetime)):
-        cell.number_format = "dd/mm/yyyy"
-
-
-def put_columns(ws, row_number: int, values: dict):
-    columns = {header_key(c.value): c.column for c in ws[1] if c.value is not None}
-    for header, value in values.items():
-        key = header_key(header)
-        if key not in columns:
-            column = ws.max_column + 1
-            cell = ws.cell(1, column)
-            if column > 1:
-                cell._style = copy(ws.cell(1, 1)._style)
-            set_literal(cell, header)
-            columns[key] = column
-            ws.column_dimensions[get_column_letter(column)].width = min(36, max(18, len(header) + 2))
-        column = columns[key]
-        cell = ws.cell(row_number, column)
-        if not cell.has_style and column > 1:
-            cell._style = copy(ws.cell(row_number, 1)._style)
-        set_literal(cell, value)
-    if ws.max_row > 1:
-        ws.auto_filter.ref = ws.dimensions
 
 
 @dataclass
@@ -430,152 +273,142 @@ class NormalizationReport:
 
 
 def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> NormalizationReport:
-    """Do not mutate the original file, row order, amounts, or extra sheets."""
+    """Correct dates/holder data, preserving parser fields and existing TXT edits."""
     workbook = load_workbook(BytesIO(source) if isinstance(source, bytes) else source)
-    if "Movimientos" not in workbook.sheetnames:
+    try:
+        if "Movimientos" not in workbook:
+            raise ValueError("El Excel debe contener la hoja Movimientos")
+        ws = workbook["Movimientos"]
+        report = NormalizationReport()
+        existing_txt = has_txt_inputs(ws[1])
+        movable = safe_to_reorder(workbook)
+        headers = {header_key(c.value): c.column for c in ws[1]}
+        if not existing_txt and "CUENTATITULAR" in headers and "NUMERODECUENTA" in headers and not movable:
+            raise ValueError(
+                "El Excel tiene fórmulas o tablas que impiden quitar con seguridad Cuenta Titular. "
+                "Puedes generar el TXT directamente sin normalizar este archivo."
+            )
+        if not existing_txt:
+            collapse_holder_account(ws, allow_column_removal=movable)
+        headers = {header_key(c.value): c.column for c in ws[1]}
+        if movable and "FECHADECORTE" in headers and "CLABETITULAR" not in headers:
+            position = headers["FECHADECORTE"] + 1
+            insert_column(ws, position)
+            ws.cell(1, position, "CLABE Titular")._style = copy(ws.cell(1, 1)._style)
+            ws.column_dimensions[get_column_letter(position)].width = 24
+
+        def record(row, label, old, new, detail):
+            report.changes.append({
+                "Nombre del Archivo": get(row, "Nombre del Archivo", ""),
+                "Fila Excel": row.get("_row"), "Campo": label,
+                "Original": _display(old), "Normalizado": _display(new), "Detalle": detail,
+            })
+
+        accounts = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
+        owners = reconstruct_owners(accounts)
+        owner_index = {}
+        for owner in owners:
+            row = owner.row
+            original = next(r for r in accounts if r["_row"] == row["_row"])
+            values = {}
+            for label in ("Número de Cuenta", "CLABE", "Nombre del Cliente", "RFC", "Número de Cliente"):
+                value, old = get(row, label), get(original, label)
+                if value != old:
+                    values[label] = value
+                    record(row, label, old, value, "Reconstruido desde: " + "; ".join(owner.sources))
+            first, last, cut = statement_interval(
+                get(row, "Periodo de Inicio"), get(row, "Periodo de Fin"), get(row, "Fecha de Corte"))
+            for label, parsed in (("Periodo de Inicio", first), ("Periodo de Fin", last), ("Fecha de Corte", cut)):
+                if parsed:
+                    values[label] = parsed
+            if owner.sources:
+                values["Origen Datos Titular"] = "; ".join(owner.sources)
+            put_columns(workbook["Datos de la Cuenta"], row["_row"], values)
+            key = (identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")))
+            owner_index.setdefault(key, []).append(owner)
+
+        repairs = {}
+        for row in rows_from_sheet(ws):
+            if get(row, "Sin información"):
+                continue
+            report.movements += 1
+            key = (identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")))
+            matches = owner_index.get(key, [])
+            owner = matches[0] if len(matches) == 1 else None
+            metadata = owner.row if owner else row
+            # Existing conservative recovery prepares only the blue copy.
+            # No bank parser or original movement field is rewritten.
+            recovered, notes = recover_fields(row) if not existing_txt else ({}, [])
+            repairs[row["_row"]] = recovered
+            values = {}
+            account = _account(get(row, "Número de Cuenta")) or (owner.account if owner else "")
+            own_clabe = account_identifier(get(row, "CLABE Titular"))
+            agrees = not (owner and owner.account and account and owner.account != account)
+            if not _present(own_clabe):
+                values["CLABE Titular"] = owner.clabe if owner and agrees else ""
+            elif not valid_clabe(own_clabe):
+                notes.append("Cuenta/CLABE Titular conservada; revisa el destino copiado al bloque TXT")
+            if account and not _account(get(row, "Número de Cuenta")):
+                values["Número de Cuenta"] = account
+            if owner and owner.sources:
+                values["Origen Datos Titular"] = "; ".join(owner.sources)
+            for label in ("Fecha de Operación", "Fecha de Liquidación", "Fecha de Corte"):
+                old = get(row, label)
+                if not _present(old) and label == "Fecha de Corte":
+                    old = get(metadata, label)
+                resolution = resolve_date(
+                    old, get(metadata, "Periodo de Inicio"), get(metadata, "Periodo de Fin"),
+                    get(metadata, "Fecha de Corte"), filename=key[1],
+                    settlement=label == "Fecha de Liquidación",
+                )
+                original_column = label + " Original"
+                if not any(header_key(k) == header_key(original_column) for k in row):
+                    values[original_column] = get(row, label)
+                if resolution.value:
+                    values[label] = resolution.value
+                    if label == "Fecha de Operación":
+                        report.dates_resolved += 1
+                if label == "Fecha de Operación":
+                    values["Estado de Fecha"] = resolution.status
+                    if resolution.status in {"VACIA", "REVISAR", "FUERA_DE_PERIODO", "POR_ARCHIVO"}:
+                        report.dates_review += 1
+                if resolution.status in {"REVISAR", "FUERA_DE_PERIODO", "POR_ARCHIVO"}:
+                    notes.append(f"{label}: {resolution.detail}")
+                if (resolution.value and not isinstance(old, (date, datetime))) or resolution.status == "REVISAR":
+                    record(row, label, old, resolution.value or old, resolution.status + ": " + resolution.detail)
+            values[REVIEW_COLUMN] = "; ".join(dict.fromkeys(notes))
+            put_columns(ws, row["_row"], values)
+
+        movement_rows = rows_from_sheet(ws)
+        if not existing_txt:
+            movement_rows = [updated_row(row, repairs.get(row["_row"], {})) for row in movement_rows]
+        current_accounts = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
+        queries = queries_from_rows(movement_rows, current_accounts, txt_inputs=existing_txt)
+        install_txt_inputs(ws, queries)
+        # Report exactly the issues of the authoritative blue cells.
+        prepared_rows = rows_from_sheet(ws)
+        prepared_index = {row["_row"]: row for row in prepared_rows}
+        for q in queries_from_rows(prepared_rows, current_accounts, txt_inputs=True):
+            if q.candidate and q.issues:
+                current = get(prepared_index[q.row], REVIEW_COLUMN, "")
+                put_columns(ws, q.row, {REVIEW_COLUMN: "; ".join(dict.fromkeys([current] + q.issues)).strip("; ")})
+
+        stale = [c.column for c in ws[1] if c.value in CEP_COLUMNS]
+        if stale and not movable:
+            raise ValueError(
+                "El Excel tiene fórmulas que impiden retirar los resultados CEP anteriores. "
+                "Genera TXT sin normalizar o trabaja sobre una copia sin dependencias."
+            )
+        for column in sorted(stale, reverse=True):
+            delete_column(ws, column)
+        for old_sheet in ("Revisión Excel", "Revisión CEP", "Control CEP", "Datos CEP"):
+            if old_sheet in workbook:
+                del workbook[old_sheet]
+        arrange_movement_blocks(workbook)
+        add_bank_catalog(workbook)
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        workbook.save(destination)
+        return report
+    finally:
         workbook.close()
-        raise ValueError("El Excel debe contener la hoja Movimientos")
-    report = NormalizationReport()
-
-    ws = workbook["Movimientos"]
-    # Generated Engine sheets have no formulas, tables, charts or defined
-    # names. Place holder identifiers next to the cutoff in those sheets.
-    # Keep coordinates in analyst workbooks that contain dependent formulas.
-    headers = {header_key(c.value): c.column for c in ws[1]}
-    movable = not workbook.defined_names and not any(
-        sheet.tables or sheet._charts or any(c.data_type == "f" for cells in sheet.iter_rows() for c in cells)
-        for sheet in workbook.worksheets)
-    if "CUENTATITULAR" in headers and "NUMERODECUENTA" in headers and not movable:
-        raise ValueError(
-            "El Excel tiene fórmulas o tablas que impiden quitar con seguridad Cuenta Titular. "
-            "Puedes generar el TXT directamente sin normalizar este archivo."
-        )
-    collapse_holder_account(ws, allow_column_removal=movable)
-    headers = {header_key(c.value): c.column for c in ws[1] if c.value is not None}
-    if movable and "FECHADECORTE" in headers and "CLABETITULAR" not in headers:
-        position = headers["FECHADECORTE"] + 1
-        ws.insert_cols(position, 1)
-        ws.cell(1, position, "CLABE Titular")._style = copy(ws.cell(1, 1)._style)
-        ws.column_dimensions[get_column_letter(position)].width = 24
-
-    def record(row, field_name, old, new, detail):
-        report.changes.append({
-            "Nombre del Archivo": get(row, "Nombre del Archivo", ""),
-            "Fila Excel": row.get("_row"), "Campo": field_name,
-            "Original": _display(old), "Normalizado": _display(new), "Detalle": detail,
-        })
-
-    account_rows = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
-    owners = reconstruct_owners(account_rows)
-    owner_index: dict[tuple[str, str], list[Owner]] = {}
-    for owner in owners:
-        row = owner.row
-        original = next(r for r in account_rows if r["_row"] == row["_row"])
-        values = {}
-        for field_name in ("Número de Cuenta", "CLABE", "Nombre del Cliente", "RFC", "Número de Cliente"):
-            value, old = get(row, field_name), get(original, field_name)
-            if value != old:
-                values[field_name] = value
-                record(row, field_name, old, value, "Reconstruido desde: " + "; ".join(owner.sources))
-        first, last, cut = statement_interval(get(row, "Periodo de Inicio"), get(row, "Periodo de Fin"), get(row, "Fecha de Corte"))
-        for field_name, parsed in (("Periodo de Inicio", first), ("Periodo de Fin", last), ("Fecha de Corte", cut)):
-            if parsed:
-                values[field_name] = parsed
-        if owner.sources:
-            values["Origen Datos Titular"] = "; ".join(owner.sources)
-        put_columns(workbook["Datos de la Cuenta"], row["_row"], values)
-        key = (identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")))
-        owner_index.setdefault(key, []).append(owner)
-    ws = workbook["Movimientos"]
-    for row in rows_from_sheet(ws):
-        if get(row, "Sin información"):
-            continue
-        report.movements += 1
-        key = (identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")))
-        matches = owner_index.get(key, [])
-        owner = matches[0] if len(matches) == 1 else None
-        metadata = owner.row if owner else row
-        values, notes = recover_fields(row)
-        # The analyst's movement columns take precedence over donor data.
-        account = _account(get(row, "Número de Cuenta")) or (owner.account if owner else "")
-        own_clabe = account_identifier(get(row, "CLABE Titular"))
-        clabe = own_clabe if valid_clabe(own_clabe) else (owner.clabe if owner else "")
-        if not _present(own_clabe):
-            values["CLABE Titular"] = clabe if valid_clabe(clabe) else ""
-        elif not valid_clabe(own_clabe):
-            notes.append("CLABE Titular inválida; se conserva para corrección manual")
-        if account and not _account(get(row, "Número de Cuenta")):
-            values["Número de Cuenta"] = account
-        if owner and owner.sources:
-            values["Origen Datos Titular"] = "; ".join(owner.sources)
-        for field_name in ("Fecha de Operación", "Fecha de Liquidación", "Fecha de Corte"):
-            old = get(row, field_name)
-            if not _present(old) and field_name == "Fecha de Corte":
-                old = get(metadata, field_name)
-            resolution = resolve_date(old, get(metadata, "Periodo de Inicio"), get(metadata, "Periodo de Fin"),
-                                      get(metadata, "Fecha de Corte"), filename=key[1],
-                                      settlement=field_name == "Fecha de Liquidación")
-            original_column = field_name + " Original"
-            if get(row, original_column) is None:
-                values[original_column] = get(row, field_name)
-            if resolution.value:
-                values[field_name] = resolution.value
-                if field_name == "Fecha de Operación":
-                    report.dates_resolved += 1
-            if field_name == "Fecha de Operación":
-                values["Estado de Fecha"] = resolution.status
-                if resolution.status == "VACIA":
-                    report.dates_review += 1
-                    notes.append("Fecha de Operación: no se extrajo fecha; requiere revisión")
-            if resolution.status in {"REVISAR", "FUERA_DE_PERIODO", "POR_ARCHIVO"}:
-                notes.append(f"{field_name}: {resolution.detail}")
-                if field_name == "Fecha de Operación":
-                    report.dates_review += 1
-            if (resolution.value and not isinstance(old, (date, datetime))) or resolution.status == "REVISAR":
-                record(row, field_name, old, resolution.value or old, resolution.status + ": " + resolution.detail)
-        for field_name, value in list(values.items()):
-            if field_name in {"Clave de Rastreo", "Referencia", "Referencia SPEI", "Cuenta del Beneficiario", "CLABE del Beneficiario", "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Banco del Beneficiario", "Banco Emisor", "Banco Receptor", "Cuenta Titular", "CLABE Titular"}:
-                if get(row, field_name) != value:
-                    record(row, field_name, get(row, field_name), value, "Concepto, catálogo o datos del titular")
-        # Excel identifiers stay strings, including leading zeros.
-        for field_name in ("Referencia", "Clave de Rastreo", "Cuenta del Beneficiario", "CLABE del Beneficiario"):
-            if field_name not in values and _present(get(row, field_name)):
-                if (field_name == "Referencia" and bank_code(get(row, "Banco")) == "40012"
-                        and re.fullmatch(r"\s*[0-9]{10}\s+[0-9]{3}\s*", str(get(row, field_name)))):
-                    notes.append("Referencia: contiene código bancario no concordante; se conserva para revisión")
-                    continue
-                value = (account_identifier if field_name in {"Cuenta del Beneficiario", "CLABE del Beneficiario"} else identifier)(get(row, field_name))
-                if value:
-                    values[field_name] = value
-                    if value != get(row, field_name):
-                        record(row, field_name, get(row, field_name), value, "Identificador guardado como texto")
-                else:
-                    notes.append(f"{field_name}: identificador numérico con posible pérdida de precisión")
-        values["Revisión Normalización"] = "; ".join(dict.fromkeys(notes))
-        put_columns(ws, row["_row"], values)
-    # Audit differences are retained in the in-memory report, not in a
-    # separate Revisión Excel sheet. The final user's corrections live in
-    # Movimientos, and the generated Control CEP reports query problems.
-    # A previously crossed workbook may contain stale CEP status/results.
-    # They are not evidence for this new run; rebuilding them requires
-    # importing the official Banxico ZIP again. Never alter the source XLSX.
-    previous_cep_columns = [
-        cell.column for cell in ws[1]
-        if cell.value and header_key(cell.value).startswith("CEP")
-    ]
-    if previous_cep_columns and not movable:
-        raise ValueError(
-            "El Excel tiene fórmulas que impiden retirar los resultados CEP anteriores. "
-            "Genera TXT sin normalizar o trabaja sobre una copia sin dependencias."
-        )
-    for column in sorted(previous_cep_columns, reverse=True):
-        ws.delete_cols(column)
-    for old_sheet in ("Revisión Excel", "Revisión CEP", "Control CEP", "Datos CEP"):
-        if old_sheet in workbook:
-            del workbook[old_sheet]
-    highlight_cep_headers(ws)
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(destination)
-    workbook.close()
-    return report

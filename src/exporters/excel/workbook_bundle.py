@@ -12,6 +12,8 @@ from openpyxl import load_workbook
 
 from exporters.excel.batch_exporter import export_batch_excel
 from exporters.excel.normalization import NormalizationReport, get, normalize_workbook, rows_from_sheet
+from exporters.excel.cells import header_key
+from cep.columns import TXT_KEYS, has_txt_inputs
 
 
 def verify_pair(original: bytes, improved: bytes) -> int:
@@ -24,11 +26,8 @@ def verify_pair(original: bytes, improved: bytes) -> int:
             raise ValueError("La comprobación del Excel detectó un cambio en el número de movimientos")
         for left, right in zip(a, b):
             allowed = {"Fecha de Operación", "Fecha de Liquidación", "Fecha de Corte", "Número de Cuenta",
-                       "Referencia", "Clave de Rastreo", "Cuenta del Beneficiario", "CLABE del Beneficiario",
-                       "Cuenta del Ordenante", "CLABE del Ordenante", "Sucursal", "Cuenta Titular", "CLABE Titular",
-                       "Estado de Fecha", "Revisión Normalización", "Origen Datos Titular", "Banco del Beneficiario",
-                       "Código Banco Beneficiario", "Código Plaza/Producto CLABE"}
-            allowed.update({"Banco Emisor", "Banco Receptor", "Referencia SPEI", "Referencia Original"})
+                       "Cuenta Titular", "CLABE Titular", "Estado de Fecha", "Revisión Normalización",
+                       "Origen Datos Titular"}
             for name in left:
                 if name in allowed or name == '_row' or name.startswith("CEP "):
                     # Imported previous CEP results are purposely cleared:
@@ -51,6 +50,7 @@ class WorkbookBundle:
     improved: bytes
     report: NormalizationReport
     source_name: str = "reporte_estados_de_cuenta.xlsx"
+    prepared: bool = False
 
     @classmethod
     def from_excel(cls, source: str | Path | bytes, *, source_name="reporte_estados_de_cuenta.xlsx"):
@@ -60,7 +60,7 @@ class WorkbookBundle:
             report = normalize_workbook(original, improved_path)
             improved = improved_path.read_bytes()
         verify_pair(original, improved)
-        return cls(original, improved, report, source_name)
+        return cls(original, improved, report, source_name, True)
 
     @classmethod
     def from_uploaded(cls, source: str | Path | bytes, *, source_name="movimientos.xlsx"):
@@ -76,14 +76,16 @@ class WorkbookBundle:
             if "Movimientos" not in workbook.sheetnames:
                 raise ValueError("El Excel debe contener la hoja Movimientos")
             ws = workbook["Movimientos"]
-            headers = {str(c.value or "").strip().casefold() for c in next(ws.iter_rows(max_row=1))}
-            if not {"fecha de operación", "cargo", "abono"} <= headers:
+            header_cells = next(ws.iter_rows(max_row=1))
+            headers = {header_key(c.value) for c in header_cells}
+            prepared = has_txt_inputs(header_cells)
+            if not prepared and not {"FECHADEOPERACION", "CARGO", "ABONO"} <= headers:
                 raise ValueError("Faltan columnas básicas de Movimientos (fecha, cargo o abono)")
             count = sum(1 for values in ws.iter_rows(min_row=2, values_only=True)
                         if any(v is not None for v in values))
         finally:
             workbook.close()
-        return cls(content, content, NormalizationReport(movements=count), source_name)
+        return cls(content, content, NormalizationReport(movements=count), source_name, prepared)
 
     @classmethod
     def from_results(cls, results):

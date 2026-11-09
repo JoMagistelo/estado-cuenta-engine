@@ -58,17 +58,17 @@ class CepPanel:
             ft.Text("2. Descarga el TXT para Banxico", size=15, weight=ft.FontWeight.BOLD),
             self.adjacent,
             ft.Text(
-                "Los encabezados verdes de Movimientos en el Excel normalizado o cruzado "
-                "señalan los datos usados para preparar el TXT. Para corregir, edita: Fecha de Operación, "
-                "Clave de Rastreo, Banco Emisor, Banco Receptor, Cargo/Abono; "
-                "CLABE del Beneficiario en cargos o CLABE Titular en abonos. "
+                "En Movimientos: verde para los datos originales, azul para las seis columnas TXT "
+                "y naranja para los resultados CEP. Corrige directamente las columnas azules: "
+                "fecha, rastreo, banco emisor, banco receptor, cuenta beneficiaria e importe. "
                 "Guarda el XLSX, vuelve a cargarlo y genera TXT directamente.",
                 size=12,
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ),
             ft.Text(
-                "El TXT lee los datos editados de Movimientos. Resuelve fechas antiguas usando "
-                "el periodo, sin cambiar tu archivo. En abonos usa preferentemente CLABE Titular. "
+                "Normalizar prepara el bloque azul sin modificar los campos SPEI del parser. "
+                "Si el Excel ya contiene columnas TXT, se usan sus valores, incluso tus correcciones. "
+                "El catálogo de bancos está incluido en el Excel normalizado. "
                 "Si hay más de 500 consultas se generan varios TXT.",
                 size=12,
             ),
@@ -145,11 +145,12 @@ class CepPanel:
         queries = queries_from_workbook(bundle.improved)
         self.source, self.source_name = bundle.original, name
         self.bundle, self.queries = bundle, queries
-        self.normalized = False
+        self.normalized = bundle.prepared
         self.evidence = CepEvidence()
         self.message.value = (
             f"{name} · {bundle.report.movements} movimientos cargados SIN modificar. "
-            "Ya puedes generar TXT. Normalizar Excel es opcional."
+            + ("TXT listo para generarse desde las columnas azules, sin volver a normalizar."
+               if bundle.prepared else "Normalizar prepara las columnas azules. También puedes generar TXT directamente.")
         )
         self.update_preview()
 

@@ -1,4 +1,4 @@
-"""Offline participant catalogue. Banxico CEP-SCL, verified 2026-11-07.
+"""Offline participant catalogue. Banxico CEP-SCL, verified 2026-11-09.
 
 https://www.banxico.org.mx/cep-scl/listaInstituciones.do
 CLABE's first three digits identify the institution, not a physical branch.
@@ -7,6 +7,10 @@ CLABE's first three digits identify the institution, not a physical branch.
 import re
 
 from utils.statement_dates import text_key
+
+
+CATALOG_SOURCE_URL = "https://www.banxico.org.mx/cep-scl/listaInstituciones.do"
+CATALOG_VERIFIED_ON = "2026-11-09"
 
 
 INSTITUTIONS = {
@@ -97,7 +101,36 @@ def account_identifier(value: object) -> str:
     return s.replace("-", "") if re.fullmatch(r"[0-9]+(?:-[0-9]+)*", s) else s
 
 
+def statement_account(value: object) -> str:
+    value = account_identifier(value)
+    return value if re.fullmatch(r"[0-9]{5,17}", value) or valid_clabe(value) else ""
+
+
 def bank_mentions(text: str) -> set[str]:
     text = text_key(text)
     return {code for name, code in ALIASES.items()
             if re.search(r"(?<![A-Z0-9])" + re.escape(name) + r"(?![A-Z0-9])", text)}
+
+
+def labelled_bank(text: str, role: str) -> str:
+    """Resolve a stated SPEI participant, never a bank from a card's prefix."""
+    text = re.sub(r"\s+", " ", text_key(text))
+    label = (r"(?:EMISOR[AO]?|ORDENANTE|ORIGEN)" if role == "emisor"
+             else r"(?:RECEPTOR[AO]?|BENEFICIARI[AO]|DESTINO)")
+    patterns = [
+        rf"\b(?:BANCO|INSTITUCION)\s+(?:DEL?\s+)?{label}\s*[:#=-]?\s*",
+        r"\bRECIBIDO\s+DE\s+" if role == "emisor"
+        else r"\b(?:ENVIADO|PAGO\s+INTERBANCARIO)\s+A\s+",
+    ]
+    options = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            tail = text[match.end():match.end() + 50]
+            number = re.match(r"([0-9]{3,5})\b", tail)
+            if number and bank_code(number[1]):
+                options.add(bank_code(number[1]))
+            for name in sorted(ALIASES, key=len, reverse=True):
+                if re.match(re.escape(name) + r"(?![A-Z0-9])", tail):
+                    options.add(ALIASES[name])
+                    break
+    return next(iter(options)) if len(options) == 1 else ""

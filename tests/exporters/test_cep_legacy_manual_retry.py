@@ -92,7 +92,7 @@ def edit(source: bytes, changes: dict) -> bytes:
         if column not in headers:
             ws.cell(1, ws.max_column + 1, column)
             headers[column] = ws.max_column
-        ws.cell(2, headers[column], value)
+        ws.cell(2, headers[column]).value = value
     data = BytesIO()
     wb.save(data)
     wb.close()
@@ -156,7 +156,7 @@ def test_manual_received_holder_clabe_wins_over_legacy_donor_clabe():
     assert q.receiver == "40012"
 
 
-def test_generated_cross_has_compact_movements_and_three_useful_cep_sheets():
+def test_generated_cross_has_inline_txt_and_full_cep_results():
     original = workbook(crossed=True, duplicate=True)
     bundle = WorkbookBundle.from_uploaded(original)
     qs = queries_from_workbook(bundle.improved)
@@ -168,16 +168,13 @@ def test_generated_cross_has_compact_movements_and_three_useful_cep_sheets():
     assert get(data[0], "CLABE Titular") == OWN
     headers = {k for k in data[0] if k.startswith("CEP ")}
     assert headers == set(MOVEMENT_CEP_COLUMNS)
-    assert "Control CEP" in names and "Datos CEP" in names
+    assert "Control CEP" not in names and "Datos CEP" in names
     assert "Revisión CEP" not in names and "Revisión Excel" not in names
-    control, _ = read(output, "Control CEP")
-    assert len(control) == 1
-    assert get(control[0], "Fecha TXT").date() == date(2026, 1, 3)
-    assert get(control[0], "Clave de Rastreo TXT") == "PRUEBA20260103001"
-    assert get(control[0], "Cuenta Beneficiaria TXT") == OTHER
-    assert get(control[0], "Resultado CEP") == "NO_APARECE_EN_ZIP"
-    assert get(control[0], "Datos por corregir") in ("", None)
-    assert get(control[0], "Línea TXT (fecha base)") == qs[0].line()
+    assert get(data[0], "TXT Fecha de Operación").date() == date(2026, 1, 3)
+    assert get(data[0], "TXT Clave de Rastreo") == "PRUEBA20260103001"
+    assert get(data[0], "TXT Cuenta Beneficiaria") == OTHER
+    assert get(data[0], "CEP Estado") == "NO_APARECE_EN_ZIP"
+    assert queries_from_workbook(output)[0].line() == qs[0].line()
 
 
 def test_reimport_previous_cross_edit_movements_regenerates_new_query():
@@ -186,9 +183,9 @@ def test_reimport_previous_cross_edit_movements_regenerates_new_query():
     qs = queries_from_workbook(bundle.improved)
     crossed = append_cep(bundle.improved, match_evidence(qs, CepEvidence()), qs, CepEvidence())
     corrected = edit(crossed, {
-        "Fecha de Operación": "05/01/2026",
-        "Clave de Rastreo": "SEGUNDAVEZ20260105",
-        "Cargo": 234.56,
+        "TXT Fecha de Operación": "05/01/2026",
+        "TXT Clave de Rastreo": "SEGUNDAVEZ20260105",
+        "TXT Monto": 234.56,
     })
     uploaded_again = WorkbookBundle.from_uploaded(corrected)
     assert uploaded_again.original == corrected
@@ -199,10 +196,11 @@ def test_reimport_previous_cross_edit_movements_regenerates_new_query():
         uploaded_again.improved, match_evidence([q], CepEvidence()), [q], CepEvidence()
     )
     data, names = read(crossed_again)
-    assert get(data[0], "Clave de Rastreo") == "SEGUNDAVEZ20260105"
+    assert get(data[0], "TXT Clave de Rastreo") == "SEGUNDAVEZ20260105"
+    assert get(data[0], "Clave de Rastreo") == "PRUEBA20260103001"
     assert "Revisión CEP" not in names
-    control, _ = read(crossed_again, "Control CEP")
-    assert get(control[0], "Clave de Rastreo TXT") == "SEGUNDAVEZ20260105"
+    assert "Control CEP" not in names
+    assert queries_from_workbook(crossed_again)[0].tracking == "SEGUNDAVEZ20260105"
 
 
 def test_conflicting_duplicate_holder_account_is_not_silently_discarded():
@@ -241,7 +239,7 @@ def test_legacy_unique_bank_and_account_donor_recovers_after_file_was_renamed():
     assert q.ready and q.destination == OWN
 
 
-def test_legacy_conflicting_account_donors_do_not_assign_a_titular_clabe():
+def test_legacy_conflicting_donors_never_guess_a_clabe_but_keep_the_known_account():
     source = workbook(old=True, received=True)
     wb = load_workbook(BytesIO(source))
     account = wb["Datos de la Cuenta"]
@@ -254,9 +252,9 @@ def test_legacy_conflicting_account_donors_do_not_assign_a_titular_clabe():
     wb.save(data)
     wb.close()
     q = queries_from_workbook(WorkbookBundle.from_uploaded(data.getvalue()).improved)[0]
-    assert not q.ready
-    assert q.destination == ""
-    assert "Falta cuenta beneficiaria" in q.issues
+    assert q.ready
+    assert q.destination == "12345678901"
+    assert q.destination_format == "CUENTA"
 
 
 def test_changing_holder_account_cannot_silently_reuse_old_donor_clabe():

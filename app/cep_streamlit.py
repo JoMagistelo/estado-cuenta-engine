@@ -36,7 +36,7 @@ def set_cep_source(source, name="movimientos.xlsx"):
     st.session_state.cep_source_name = name
     st.session_state.cep_bundle = bundle
     st.session_state.cep_queries = queries
-    st.session_state.cep_normalized = False
+    st.session_state.cep_normalized = bundle.prepared
     st.session_state.cep_evidence = CepEvidence()
 
 
@@ -138,9 +138,8 @@ def render_cep_workspace(results, busy=False):
     if candidates:
         st.dataframe([q.audit() | matches.get(q.row, {}) for q in candidates], hide_index=True, use_container_width=True)
     st.caption(
-        "Los encabezados verdes de Movimientos en el Excel normalizado o cruzado "
-        "señalan los datos usados para preparar el TXT. "
-        "Control CEP muestra los 6 campos que se consultan y el motivo de cada resultado. "
-        "Corrige las columnas originales de Movimientos, vuelve a cargar el Excel y prepara "
+        "Movimientos conserva los datos originales en verde, los seis campos TXT en azul "
+        "y los resultados oficiales CEP en naranja. Corrige directamente las columnas azules, "
+        "vuelve a cargar el Excel y prepara "
         "un TXT nuevo sin normalizar. El ZIP conserva ambos Excel cruzados y los PDF/XML."
     )
