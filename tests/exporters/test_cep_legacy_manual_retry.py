@@ -172,7 +172,7 @@ def test_generated_cross_has_compact_movements_and_three_useful_cep_sheets():
     assert "Revisión CEP" not in names and "Revisión Excel" not in names
     control, _ = read(output, "Control CEP")
     assert len(control) == 1
-    assert get(control[0], "Fecha TXT") == date(2026, 1, 3)
+    assert get(control[0], "Fecha TXT").date() == date(2026, 1, 3)
     assert get(control[0], "Clave de Rastreo TXT") == "PRUEBA20260103001"
     assert get(control[0], "Cuenta Beneficiaria TXT") == OTHER
     assert get(control[0], "Resultado CEP") == "NO_APARECE_EN_ZIP"
