@@ -6,10 +6,12 @@ import re
 from copy import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
 
 from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
@@ -185,7 +187,9 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
         elif protected and existing != found.clabe:
             notes.append(f"{column}: difiere del concepto; se conserva la edición")
     if found.bank:
-        column = "Banco Emisor" if found.direction == "RECIBIDO" else "Banco Receptor"
+        # Do not add Banco Receptor beside Banco del Beneficiario:
+        # the latter is the receiver for outgoing SPEI.
+        column = "Banco Emisor" if found.direction == "RECIBIDO" else "Banco del Beneficiario"
         if not _present(get(row, column)):
             changes[column] = found.bank
     for column, pattern in (
@@ -241,15 +245,116 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
             notes.append(f"{account_col}: varias candidatas")
     beneficiary_clabe = changes.get("CLABE del Beneficiario", account_identifier(get(row, "CLABE del Beneficiario")))
     code = clabe_bank(beneficiary_clabe)
-    if code:
-        changes["Banco del Beneficiario"] = INSTITUTIONS[code]
-        changes["Código Banco Beneficiario"] = code
-        changes["Código Plaza/Producto CLABE"] = beneficiary_clabe[3:6]
-        # Historical UI uses Sucursal for the counterpart bank. Do not replace
-        # an explicitly extracted value or claim a physical branch from CLABE.
-        if not _present(get(row, "Sucursal")):
-            changes["Sucursal"] = INSTITUTIONS[code]
+    # In received SPEI, some legacy parsers place the ORIGINATOR in these
+    # third-party fields: never call that account/bank the beneficiary.
+    direction = movement_direction(row)
+    if code and direction == "ENVIADO":
+        if not _present(get(row, "Banco del Beneficiario")):
+            changes["Banco del Beneficiario"] = INSTITUTIONS[code]
+        if not _present(get(row, "Código Banco Beneficiario")):
+            changes["Código Banco Beneficiario"] = code
+        if not _present(get(row, "Código Plaza/Producto CLABE")):
+            changes["Código Plaza/Producto CLABE"] = beneficiary_clabe[3:6]
     return changes, notes
+
+
+# Only these headers contribute to the six official fields for the CEP TXT.
+# Highlight them on normalized/crossed copies, never in the original export.
+CEP_QUERY_INPUT_HEADERS = frozenset({
+    "TIPODEOPERACION", "FECHADEOPERACION", "CLAVEDERASTREO",
+    "BANCO", "BANCODELBENEFICIARIO", "BANCOEMISOR", "BANCORECEPTOR",
+    "CLABEDELBENEFICIARIO", "CUENTADELBENEFICIARIO",
+    "CLABETITULAR", "NUMERODECUENTA", "CARGO", "ABONO",
+})
+CEP_HEADER_FILL = PatternFill("solid", fgColor="14695C")
+
+
+def highlight_cep_headers(ws) -> None:
+    """Mark the source-of-truth input columns for Banxico in one teal tone."""
+    for cell in ws[1]:
+        if header_key(cell.value) in CEP_QUERY_INPUT_HEADERS:
+            cell.fill = copy(CEP_HEADER_FILL)
+            font = copy(cell.font)
+            font.bold = True
+            font.color = "FFFFFF"
+            cell.font = font
+            ws.column_dimensions[get_column_letter(cell.column)].width = max(
+                ws.column_dimensions[get_column_letter(cell.column)].width or 0,
+                min(30, max(17, len(str(cell.value)) + 3)),
+            )
+
+
+def movement_direction(row: dict) -> str:
+    """Only one strictly positive amount determines the SPEI direction."""
+    try:
+        amounts = []
+        for label in ("Cargo", "Abono"):
+            value = str(get(row, label, 0) or 0).replace("$", "").replace(",", "").strip()
+            parsed = Decimal(value)
+            if not parsed.is_finite() or parsed < 0:
+                return ""
+            amounts.append(parsed)
+    except (InvalidOperation, ValueError):
+        return ""
+    if (amounts[0] > 0) == (amounts[1] > 0):
+        return ""
+    return "ENVIADO" if amounts[0] > 0 else "RECIBIDO"
+
+
+def canonicalize_sucursal_bank(ws, *, allow_column_removal: bool = True) -> bool:
+    """Move historical Sucursal bank meaning to the correct SPEI bank role.
+
+    ENVIADO: old Sucursal is the receiving bank, Banco del Beneficiario.
+    RECIBIDO: old Sucursal may be the *sending* bank, which must be retained
+    as Banco Emisor; Banco del Beneficiario is the account-holder's bank.
+    Physical branch names and unknown non-SPEI values are not discarded.
+    """
+    columns = {header_key(c.value): c.column for c in ws[1] if c.value is not None}
+    sucursal = columns.get("SUCURSAL")
+    if sucursal is None:
+        return False
+    rows = rows_from_sheet(ws)
+    # Only clean a legacy column when every populated value can be migrated.
+    migration = []
+    can_remove = allow_column_removal
+    for row in rows:
+        original = get(row, "Sucursal")
+        if not _present(original):
+            continue
+        direction = movement_direction(row)
+        recognized = bank_code(original)
+        owner = bank_code(get(row, "Banco"))
+        spei = (text_key(get(row, "Tipo de Operación")) == "SPEI"
+                or bool(identifier(get(row, "Clave de Rastreo")))
+                or "SPEI" in text_key(get(row, "Concepto")))
+        if not spei or not recognized or not direction:
+            can_remove = False
+            continue
+        values = {}
+        if direction == "ENVIADO":
+            if not _present(get(row, "Banco del Beneficiario")):
+                values["Banco del Beneficiario"] = original
+        else:
+            if not owner:
+                can_remove = False
+                continue
+            if not _present(get(row, "Banco del Beneficiario")):
+                values["Banco del Beneficiario"] = INSTITUTIONS[owner]
+            if recognized != owner and not _present(get(row, "Banco Emisor")):
+                values["Banco Emisor"] = original
+        migration.append((row["_row"], values))
+    # The canonical beneficiary-bank column is always available for
+    # corrections, but the original branch column stays when ambiguous.
+    if "BANCODELBENEFICIARIO" not in columns:
+        put_columns(ws, 1, {"Banco del Beneficiario": None})
+        column = next(c for c in ws[1] if header_key(c.value) == "BANCODELBENEFICIARIO")
+        set_literal(column, "Banco del Beneficiario")
+    for row_number, values in migration:
+        if values:
+            put_columns(ws, row_number, values)
+    if can_remove:
+        ws.delete_cols(sucursal)
+    return can_remove
 
 
 def collapse_holder_account(ws, *, allow_column_removal=True) -> bool:
