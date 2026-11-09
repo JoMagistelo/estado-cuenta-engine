@@ -80,9 +80,9 @@ def test_normalize_is_explicit_and_txt_is_saved_as_plain_text(monkeypatch, tmp_p
     panel.set_source(data.getvalue())
     panel.refresh()
     assert not panel.normalize_button.disabled
-    assert panel.txt_button.disabled and panel.bundle is None
-    asyncio.run(panel.normalize_excel())
     assert panel.bundle is not None and not panel.txt_button.disabled
+    assert not panel.normalized and panel.clean_button.disabled
+    assert panel.bundle.original == data.getvalue()
     assert not hasattr(panel, "raw_button")
 
     target = tmp_path / "banxico.txt"
@@ -94,3 +94,8 @@ def test_normalize_is_explicit_and_txt_is_saved_as_plain_text(monkeypatch, tmp_p
     assert len(target.read_text().splitlines()) == 3
     assert not target.read_bytes().startswith(b"PK")
     assert target.read_text().splitlines()[0].startswith("2026-01-03,SYNTHETIC001,")
+    # Re-normalization is optional; a legacy/user-corrected XLSX can generate
+    # its TXT directly without changing any source bytes.
+    asyncio.run(panel.normalize_excel())
+    assert panel.normalized and not panel.clean_button.disabled
+
