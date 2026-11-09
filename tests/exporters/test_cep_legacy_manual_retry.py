@@ -212,6 +212,8 @@ def test_conflicting_duplicate_holder_account_is_not_silently_discarded():
     with pytest.raises(ValueError, match="son distintos"):
         WorkbookBundle.from_excel(source)
     qs = queries_from_workbook(bundle.improved)
+    assert not qs[0].ready
+    assert "Cuenta Titular difiere de Número de Cuenta" in qs[0].issues[0]
     with pytest.raises(ValueError, match="son distintos"):
         append_cep(source, match_evidence(qs, CepEvidence()), qs, CepEvidence())
 
@@ -255,3 +257,21 @@ def test_legacy_conflicting_account_donors_do_not_assign_a_titular_clabe():
     assert not q.ready
     assert q.destination == ""
     assert "Falta cuenta beneficiaria" in q.issues
+
+
+def test_changing_holder_account_cannot_silently_reuse_old_donor_clabe():
+    old = workbook(old=True, received=True)
+    updated = edit(old, {"Número de Cuenta": "99999999999"})
+    q = queries_from_workbook(WorkbookBundle.from_uploaded(updated).improved)[0]
+    assert not q.ready
+    assert not q.destination
+    assert any("completa CLABE Titular" in issue for issue in q.issues)
+
+
+def test_corrected_holder_account_and_explicit_new_clabe_override_old_donor():
+    updated = clabe("012", "99999999999")
+    old = workbook(received=True)
+    corrected = edit(old, {"Número de Cuenta": "99999999999", "CLABE Titular": updated})
+    q = queries_from_workbook(WorkbookBundle.from_uploaded(corrected).improved)[0]
+    assert q.ready, q.issues
+    assert q.destination == updated
