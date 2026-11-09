@@ -148,6 +148,42 @@ python -m pip install --group dev
 
 ## 6. Ejecución
 
+### Versión 7.1.0 — CEP retrocompatible y reconsulta manual
+
+**La pestaña Extracción no cambia sus parsers ni la exportación original.**
+En CEP Banxico se pueden cargar archivos XLSX anteriores al módulo CEP,
+originales, mejorados y previamente cruzados. El TXT se habilita al cargar,
+sin renormalización obligatoria. Toda edición se hace en **Movimientos** y
+se conserva al recargar el Excel.
+
+El libro CEP simplificado tiene **Movimientos** con únicamente cinco columnas
+de resultado CEP, **Control CEP** con los datos de consulta y motivo por
+operación, y **Datos CEP** con la información XML de Banxico. Las hojas
+Revisión CEP y Revisión Excel se eliminan de las copias producidas por CEP.
+En las copias mejoradas se mantiene Número de Cuenta y CLABE Titular,
+sin el duplicado Cuenta Titular.
+
+Prueba la rama antes de fusionar el PR:
+
+```powershell
+Set-Location C:\Proyectos\estado-cuenta-engine
+git fetch origin
+git switch -c feature/cep-excel-retrocompatible-reconsulta --track origin/feature/cep-excel-retrocompatible-reconsulta
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q
+.\.venv\Scripts\python.exe app\main_desktop.py
+```
+
+Para preparar el ejecutable **después** de fusionar y validar en Windows:
+
+```powershell
+git switch master
+git pull --ff-only origin master
+.\scripts\build_windows_release.ps1 -Version "7.1.0" -PortableOffline
+```
+
+Las instrucciones de reconsulta y columnas que se deben corregir están en
+`docs/20_excel_normalizado_cep.md`.
+
 ### Versión 7.0.0 — interfaz estable y CEP separado
 
 La 7.0 mantiene la extracción bancaria y el **Excel original sin normalización**
