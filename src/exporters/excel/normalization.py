@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill, Font
+from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
 from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
@@ -346,9 +346,10 @@ def canonicalize_sucursal_bank(ws, *, allow_column_removal: bool = True) -> bool
     # The canonical beneficiary-bank column is always available for
     # corrections, but the original branch column stays when ambiguous.
     if "BANCODELBENEFICIARIO" not in columns:
-        put_columns(ws, 1, {"Banco del Beneficiario": None})
-        column = next(c for c in ws[1] if header_key(c.value) == "BANCODELBENEFICIARIO")
+        column = ws.cell(1, ws.max_column + 1)
+        column._style = copy(ws.cell(1, 1)._style)
         set_literal(column, "Banco del Beneficiario")
+        ws.column_dimensions[get_column_letter(column.column)].width = 27
     for row_number, values in migration:
         if values:
             put_columns(ws, row_number, values)
