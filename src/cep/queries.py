@@ -149,17 +149,31 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
     # donors by BOTH statement id and original filename, never by account name
     # alone. An ambiguous donor is not silently selected.
     account_index: dict[tuple[str, str], list[dict]] = {}
-    if "Datos de la Cuenta" in workbook:
-        for account in rows_from_sheet(workbook["Datos de la Cuenta"]):
-            key = (identifier(get(account, "id_estado")),
-                   str(get(account, "Nombre del Archivo", "")))
-            account_index.setdefault(key, []).append(account)
+    account_rows = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
+    for account in account_rows:
+        key = (identifier(get(account, "id_estado")),
+               str(get(account, "Nombre del Archivo", "")))
+        account_index.setdefault(key, []).append(account)
     queries = []
     for row in rows_from_sheet(workbook["Movimientos"]):
         key = (identifier(get(row, "id_estado")),
                str(get(row, "Nombre del Archivo", "")))
         donors = account_index.get(key, [])
         donor = donors[0] if len(donors) == 1 else {}
+        if not donor:
+            # Some older versions renamed exported PDFs or used different
+            # internal ids. Fall back ONLY on an exact, unique bank + account
+            # match. Never use a person's name or an approximate number.
+            movement_account = _account(get(row, "Número de Cuenta") or get(row, "Cuenta Titular"))
+            movement_bank = bank_code(get(row, "Banco"))
+            if movement_account and movement_bank:
+                matches = [
+                    candidate for candidate in account_rows
+                    if _account(get(candidate, "Número de Cuenta")) == movement_account
+                    and bank_code(get(candidate, "Banco")) == movement_bank
+                ]
+                if len(matches) == 1:
+                    donor = matches[0]
         text = text_key(str(get(row, "Concepto", "")) + " " + str(get(row, "Concepto Original", "")))
         tracking = identifier(get(row, "Clave de Rastreo")).upper()
         if not tracking:
