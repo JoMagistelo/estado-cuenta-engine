@@ -1,6 +1,6 @@
 # Excel mejorado y CEP integrado
 
-## Contrato de la versión 7.0.0
+## Contrato de las versiones 7.0.0 y 7.1.0
 
 - **Extracción:** parsers y procesador bancario sin modificaciones. `Generar Excel` sigue descargando
   `reporte_estados_de_cuenta.xlsx`, con la misma estructura y los valores originales.
@@ -23,7 +23,7 @@ Para probar la rama antes del merge:
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
 git fetch origin
-git switch -c release/7.0.0-cep-ui-estable --track origin/release/7.0.0-cep-ui-estable
+git switch -c feature/cep-excel-retrocompatible-reconsulta --track origin/feature/cep-excel-retrocompatible-reconsulta
 .\.venv\Scripts\python.exe -m pytest -m "not integration" -q
 .\.venv\Scripts\python.exe app\main_desktop.py
 ```
@@ -175,7 +175,7 @@ Desde cualquier carpeta del clon de Estado Cuenta Engine abierto en VS Code:
 ```powershell
 Set-Location (git rev-parse --show-toplevel)
 git fetch origin
-git switch -c fix/cep-aislado-extraccion-intacta --track origin/fix/cep-aislado-extraccion-intacta
+git switch -c feature/cep-excel-retrocompatible-reconsulta --track origin/feature/cep-excel-retrocompatible-reconsulta
 git pull --ff-only
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
