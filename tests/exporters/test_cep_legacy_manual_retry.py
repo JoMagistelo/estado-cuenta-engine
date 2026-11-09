@@ -275,3 +275,19 @@ def test_corrected_holder_account_and_explicit_new_clabe_override_old_donor():
     q = queries_from_workbook(WorkbookBundle.from_uploaded(corrected).improved)[0]
     assert q.ready, q.issues
     assert q.destination == updated
+
+
+def test_explicit_normalization_of_previous_cross_removes_stale_cep_metadata_only_in_copy():
+    source = workbook(crossed=True, duplicate=True)
+    bundle = WorkbookBundle.from_excel(source)
+    assert bundle.original == source
+    source_data, source_sheets = read(bundle.original)
+    assert get(source_data[0], "CEP Estado") == "EXITO"
+    assert "Control CEP" in source_sheets
+    normalized, sheets = read(bundle.improved)
+    assert all(not key.startswith("CEP ") for key in normalized[0])
+    assert get(normalized[0], "Número de Cuenta") == "12345678901"
+    assert "Cuenta Titular" not in normalized[0]
+    assert not {"Control CEP", "Datos CEP", "Revisión Excel", "Revisión CEP"} & set(sheets)
+    q = queries_from_workbook(bundle.improved)[0]
+    assert q.ready
