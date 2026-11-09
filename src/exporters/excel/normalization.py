@@ -15,10 +15,12 @@ from openpyxl.utils import get_column_letter
 from cep.catalog import account_identifier, bank_code, clabe_bank, identifier, valid_clabe
 from cep.catalog import statement_account as _account
 from cep.columns import (
-    CEP_COLUMNS, REVIEW_COLUMN, add_bank_catalog, arrange_movement_blocks,
-    has_txt_inputs, install_txt_inputs, safe_to_reorder,
+    CEP_COLUMNS, REVIEW_COLUMN, TXT_COLUMNS, add_bank_catalog, arrange_movement_blocks,
+    has_txt_inputs, install_txt_inputs, query_values, safe_to_reorder,
 )
 from cep.queries import queries_from_rows
+from cep.spei_classifier import CLASSIFICATION_COLUMN, add_classifier_catalog, classify_spei
+from cep.spei_recovery import recover_missing
 from exporters.excel.cells import (
     delete_column, get, header_key, insert_column, put_columns, rows_from_sheet, set_literal, updated_row,
 )
@@ -269,11 +271,13 @@ class NormalizationReport:
     movements: int = 0
     dates_resolved: int = 0
     dates_review: int = 0
+    classifications: dict[str, int] = field(default_factory=dict)
+    metadata_recovered: int = 0
     changes: list[dict] = field(default_factory=list)
 
 
 def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> NormalizationReport:
-    """Correct dates/holder data, preserving parser fields and existing TXT edits."""
+    """Normalize dates, classify SPEI and recover missing data on a copy only."""
     workbook = load_workbook(BytesIO(source) if isinstance(source, bytes) else source)
     try:
         if "Movimientos" not in workbook:
@@ -327,7 +331,8 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             key = (identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")))
             owner_index.setdefault(key, []).append(owner)
 
-        repairs = {}
+        baseline_rows = []
+        ambiguous_tracking = set()
         for row in rows_from_sheet(ws):
             if get(row, "Sin información"):
                 continue
@@ -336,10 +341,14 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             matches = owner_index.get(key, [])
             owner = matches[0] if len(matches) == 1 else None
             metadata = owner.row if owner else row
-            # Existing conservative recovery prepares only the blue copy.
-            # No bank parser or original movement field is rewritten.
-            recovered, notes = recover_fields(row) if not existing_txt else ({}, [])
-            repairs[row["_row"]] = recovered
+            classification = classify_spei(row)
+            if classification.label:
+                report.classifications[classification.label] = report.classifications.get(classification.label, 0) + 1
+            recovered, recovery_notes = recover_missing(row, classification)
+            if (any(note.startswith("Clave de Rastreo: varias candidatas") for note in recovery_notes)
+                    and not valid_tracking(get(row, "Clave de Rastreo"))):
+                ambiguous_tracking.add(row["_row"])
+            notes = list(classification.notes) + recovery_notes
             values = {}
             account = _account(get(row, "Número de Cuenta")) or (owner.account if owner else "")
             own_clabe = account_identifier(get(row, "CLABE Titular"))
@@ -376,15 +385,60 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
                     notes.append(f"{label}: {resolution.detail}")
                 if (resolution.value and not isinstance(old, (date, datetime))) or resolution.status == "REVISAR":
                     record(row, label, old, resolution.value or old, resolution.status + ": " + resolution.detail)
+            if existing_txt:
+                # Reproduce what the previous normalizer could infer. A blank
+                # blue cell whose old source was usable is an intentional edit;
+                # only genuinely newly recovered evidence may fill old gaps.
+                old_recovered, _ = recover_fields(row)
+                baseline_rows.append(updated_row(updated_row(row, values), old_recovered))
+            for label, value in recovered.items():
+                values[label] = value
+                record(row, label, get(row, label), value, "Recuperado del concepto SPEI; campo etiquetado o bloque bancario")
+            report.metadata_recovered += len(recovered)
+            values[CLASSIFICATION_COLUMN] = classification.label or None
             values[REVIEW_COLUMN] = "; ".join(dict.fromkeys(notes))
             put_columns(ws, row["_row"], values)
 
         movement_rows = rows_from_sheet(ws)
-        if not existing_txt:
-            movement_rows = [updated_row(row, repairs.get(row["_row"], {})) for row in movement_rows]
         current_accounts = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
-        queries = queries_from_rows(movement_rows, current_accounts, txt_inputs=existing_txt)
+        queries = queries_from_rows(movement_rows, current_accounts)
+        rows_index = {row["_row"]: row for row in movement_rows}
+        for query in queries:
+            if not query.candidate:
+                continue
+            if query.row in ambiguous_tracking:
+                query.tracking = ""
+                query.issues.append("Varias claves de rastreo: completa TXT Clave de Rastreo")
+            current = get(rows_index[query.row], REVIEW_COLUMN, "")
+            if query.issues:
+                put_columns(ws, query.row, {REVIEW_COLUMN: "; ".join(dict.fromkeys([current] + query.issues)).strip("; ")})
+            # A contradictory automatic route must not become a ready query
+            # simply by copying it into the authoritative blue block. Existing
+            # blue values still win; newly inferred conflicting banks stay blank.
+            if any("contradice banco receptor" in issue for issue in query.issues):
+                query.receiver = ""
+            if any("contradice banco emisor" in issue or "Banco emisor contradice" in issue
+                   for issue in query.issues):
+                query.issuer = ""
+            if any("Banco receptor contradice" in issue for issue in query.issues):
+                query.receiver = ""
         install_txt_inputs(ws, queries)
+        if existing_txt:
+            baseline_queries = {q.row: q for q in queries_from_rows(baseline_rows, current_accounts)}
+            for query in queries:
+                baseline = baseline_queries.get(query.row)
+                if not baseline or not query.candidate:
+                    continue
+                row = rows_index[query.row]
+                old_values = query_values(baseline)
+                new_candidate = not baseline.candidate and all(
+                    get(row, label) is None or str(get(row, label)).strip() == "" for label in TXT_COLUMNS)
+                for label, value in query_values(query).items():
+                    previous = get(row, label)
+                    blank = previous is None or str(previous).strip() == ""
+                    if blank and _present(value) and (new_candidate or not _present(old_values[label])):
+                        put_columns(ws, query.row, {label: value})
+                        record(row, label, previous, value, "Nuevo metadato recuperado; se conservan las demás celdas TXT")
         # Report exactly the issues of the authoritative blue cells.
         prepared_rows = rows_from_sheet(ws)
         prepared_index = {row["_row"]: row for row in prepared_rows}
@@ -406,6 +460,7 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
                 del workbook[old_sheet]
         arrange_movement_blocks(workbook)
         add_bank_catalog(workbook)
+        add_classifier_catalog(workbook)
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(destination)

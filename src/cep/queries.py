@@ -17,6 +17,7 @@ from cep.catalog import account_identifier, bank_code, bank_mentions, clabe_bank
 from cep.catalog import labelled_bank as _label_bank
 from cep.catalog import statement_account as _account
 from cep.columns import TXT_COLUMNS, has_txt_inputs
+from cep.spei_classifier import CLASSIFICATION_COLUMN, INTERNAL, RECEIVED, RETURNED, SENT, TRANSFER
 from exporters.excel.cells import get, rows_from_sheet
 from utils.spei_metadata import extract_spei_metadata
 from utils.statement_dates import full_date, resolve_date, text_key
@@ -122,6 +123,15 @@ def _has_tracking_cell(row: dict) -> bool:
     return bool(identifier(value)) or (isinstance(value, (int, float)) and not isinstance(value, bool))
 
 
+def _classified_candidate(row, inferred, *, explicit_txt=False):
+    label = get(row, CLASSIFICATION_COLUMN)
+    if label in {SENT, RECEIVED, RETURNED, "SPEI por revisar"}:
+        return True
+    if label in {INTERNAL, TRANSFER}:
+        return bool(explicit_txt or _has_tracking_cell(row))
+    return inferred
+
+
 def _txt_query(row: dict, today: date) -> CepQuery:
     """All six visible cells are authoritative, including deliberate blanks."""
     raw = [get(row, label) for label in TXT_COLUMNS]
@@ -130,9 +140,12 @@ def _txt_query(row: dict, today: date) -> CepQuery:
                      or _has_tracking_cell(row)
                      or text_key(get(row, "Tipo de Operación")) == "SPEI"
                      or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
+    candidate = _classified_candidate(row, candidate, explicit_txt=any(v is not None and str(v).strip() for v in raw))
     debit, credit = amount(get(row, "Cargo")), amount(get(row, "Abono"))
     direction = ("ENVIADO" if debit else "RECIBIDO") if (
         debit is not None and credit is not None and bool(debit) != bool(credit)) else ""
+    if get(row, CLASSIFICATION_COLUMN) == RETURNED:
+        direction = "DEVUELTO"
     destination = _destination(raw[4], padded=False)
     q = CepQuery(
         row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
@@ -223,6 +236,7 @@ def queries_from_rows(movements: list[dict], account_rows: list[dict], *,
         classified_spei = text_key(get(row, "Tipo de Operación")) == "SPEI"
         candidate = bool(classified_spei or tracking or _has_tracking_cell(row)
                          or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
+        candidate = _classified_candidate(row, candidate)
         q = CepQuery(row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
                      identifier(get(row, "No. de Movimiento")), candidate, tracking=tracking,
                      reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")))
@@ -247,6 +261,16 @@ def queries_from_rows(movements: list[dict], account_rows: list[dict], *,
             q.value = debit or credit
         else:
             q.issues.append("Cargo/abono ambiguos o importe inválido")
+        classification = get(row, CLASSIFICATION_COLUMN)
+        if classification == RETURNED:
+            # A refund credits the holder but is not a newly received SPEI.
+            # Its original route must be supplied explicitly in the blue block.
+            q.direction = "DEVUELTO"
+            q.issues.append("Devolución SPEI: completa los seis datos de la operación original en azul")
+        elif (classification == SENT and q.direction != "ENVIADO"
+              or classification == RECEIVED and q.direction != "RECIBIDO"):
+            q.direction = ""
+            q.issues.append("Clasificación SPEI contradice cargo/abono; revisa el sentido")
         owner_bank = bank_code(get(row, "Banco")) or bank_code(get(donor, "Banco"))
         holder_clabe = account_identifier(get(row, "CLABE Titular"))
         movement_account = _account(get(row, "Número de Cuenta"))
@@ -274,6 +298,8 @@ def queries_from_rows(movements: list[dict], account_rows: list[dict], *,
             owner_bank = next((clabe_bank(v) for v in own if clabe_bank(v)), "")
         q.issuer = bank_code(get(row, "Banco Emisor")) or _label_bank(text, "emisor")
         q.receiver = bank_code(get(row, "Banco Receptor")) or _label_bank(text, "receptor")
+        if classification == RETURNED:
+            q.issuer = q.receiver = ""
         if q.direction == "ENVIADO":
             q.origin_aliases = own
             if q.issuer and owner_bank and q.issuer != owner_bank:

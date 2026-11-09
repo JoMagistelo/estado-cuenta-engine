@@ -45,7 +45,8 @@ def render_cep_workspace(results, busy=False):
     st.caption(
         "Carga cualquier Excel de Estado Cuenta Engine (antiguo, original, mejorado o cruzado). "
         "Puedes generar TXT inmediatamente desde las correcciones de Movimientos; "
-        "normalizar es opcional. El Excel original del motor se descarga en Extracción."
+        "Normalizar también clasifica las transferencias y recupera metadatos SPEI del concepto. "
+        "El Excel original del motor se descarga en Extracción."
     )
     uploaded = st.file_uploader("Excel de movimientos", type=["xlsx"], key="cep_excel_upload")
     if uploaded:
@@ -69,7 +70,7 @@ def render_cep_workspace(results, busy=False):
     st.write(st.session_state.cep_source_name)
     if st.button("Normalizar Excel", type="primary", key="cep_normalize"):
         try:
-            with st.spinner("Homologando fechas y recuperando datos SPEI…"):
+            with st.spinner("Homologando fechas, clasificando SPEI y recuperando sus datos…"):
                 set_cep_bundle(WorkbookBundle.from_excel(source, source_name=st.session_state.cep_source_name))
         except Exception as error:
             st.error(str(error))
@@ -84,6 +85,8 @@ def render_cep_workspace(results, busy=False):
         f"{state} · {bundle.report.movements} movimientos · "
         f"{sum(q.ready for q in candidates)} candidatos con datos para TXT"
         + (f" · {bundle.report.dates_review} fechas para revisión" if st.session_state.get("cep_normalized") else "")
+        + (f" · {sum(bundle.report.classifications.values())} transferencias clasificadas"
+           f" · {bundle.report.metadata_recovered} campos recuperados" if bundle.report.classifications else "")
     )
     st.subheader("Preparar TXT")
     adjacent = st.checkbox("Fecha homologada y reintentos ±1 día", value=True, key="cep_adjacent_dates")
@@ -140,6 +143,7 @@ def render_cep_workspace(results, busy=False):
     st.caption(
         "Movimientos conserva los datos originales en verde, los seis campos TXT en azul "
         "y los resultados oficiales CEP en naranja. Corrige directamente las columnas azules, "
+        "filtra por Clasificación SPEI y consulta Revisión Normalización para los pendientes; "
         "vuelve a cargar el Excel y prepara "
         "un TXT nuevo sin normalizar. El ZIP conserva ambos Excel cruzados y los PDF/XML."
     )

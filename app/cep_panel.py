@@ -66,9 +66,10 @@ class CepPanel:
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ),
             ft.Text(
-                "Normalizar prepara el bloque azul sin modificar los campos SPEI del parser. "
+                "Normalizar clasifica las transferencias y recupera datos SPEI faltantes del concepto. "
+                "Puedes filtrar por Clasificación SPEI; revisa los pendientes en Revisión Normalización. "
                 "Si el Excel ya contiene columnas TXT, se usan sus valores, incluso tus correcciones. "
-                "El catálogo de bancos está incluido en el Excel normalizado. "
+                "Los catálogos de bancos y palabras de clasificación están incluidos. "
                 "Si hay más de 500 consultas se generan varios TXT.",
                 size=12,
             ),
@@ -119,7 +120,9 @@ class CepPanel:
         report = bundle.report
         self.message.value = (f"{bundle.source_name} · Comprobación del Excel terminada: "
                               f"{report.movements} movimientos; {report.dates_resolved} fechas homologadas; "
-                              f"{report.dates_review} fechas para revisión.")
+                              f"{report.dates_review} fechas para revisión; "
+                              f"{sum(report.classifications.values())} transferencias clasificadas; "
+                              f"{report.metadata_recovered} campos recuperados.")
         self.update_preview()
 
     def update_preview(self):

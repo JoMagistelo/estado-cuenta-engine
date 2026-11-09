@@ -14,9 +14,12 @@ from exporters.excel.batch_exporter import export_batch_excel
 from exporters.excel.normalization import NormalizationReport, get, normalize_workbook, rows_from_sheet
 from exporters.excel.cells import header_key
 from cep.columns import TXT_KEYS, has_txt_inputs
+from cep.spei_classifier import CLASSIFICATION_COLUMN, classify_spei
+from cep.spei_recovery import RECOVERABLE_FIELDS, recover_missing
+from utils.statement_dates import full_date
 
 
-def verify_pair(original: bytes, improved: bytes) -> int:
+def verify_pair(original: bytes, improved: bytes, *, report: NormalizationReport | None = None) -> int:
     """Reopen both serialized files and check row identity, money and date types."""
     raw = load_workbook(BytesIO(original), data_only=False)
     clean = load_workbook(BytesIO(improved), data_only=False)
@@ -24,16 +27,37 @@ def verify_pair(original: bytes, improved: bytes) -> int:
         a, b = rows_from_sheet(raw["Movimientos"]), rows_from_sheet(clean["Movimientos"])
         if len(a) != len(b):
             raise ValueError("La comprobación del Excel detectó un cambio en el número de movimientos")
+        recorded_changes = {}
+        if report:
+            for change in report.changes:
+                recorded_changes.setdefault(change["Fila Excel"], {})[change["Campo"]] = change
         for left, right in zip(a, b):
             allowed = {"Fecha de Operación", "Fecha de Liquidación", "Fecha de Corte", "Número de Cuenta",
                        "Cuenta Titular", "CLABE Titular", "Estado de Fecha", "Revisión Normalización",
                        "Origen Datos Titular"}
+            recovered, _ = recover_missing(left, classify_spei(left))
+            recorded = recorded_changes.get(left["_row"], {})
             for name in left:
                 if name in allowed or name == '_row' or name.startswith("CEP "):
                     # Imported previous CEP results are purposely cleared:
                     # they cannot be trusted without reloading the XML ZIP.
                     continue
                 if get(left, name) != get(right, name):
+                    if (name in RECOVERABLE_FIELDS and name in recovered
+                            and get(right, name) == recovered[name]):
+                        continue
+                    if name == CLASSIFICATION_COLUMN and get(right, name) == (classify_spei(left).label or None):
+                        continue
+                    if header_key(name) in TXT_KEYS and name in recorded:
+                        change = recorded[name]
+                        previous = get(left, name)
+                        actual = get(right, name)
+                        displayed = actual.isoformat() if isinstance(actual, (date, datetime)) else str(actual or "")
+                        equal = displayed == change["Normalizado"]
+                        if isinstance(actual, (date, datetime)):
+                            equal = full_date(actual) == full_date(change["Normalizado"])
+                        if (previous is None or str(previous).strip() == "") and equal:
+                            continue
                     raise ValueError(f"La comprobación detectó cambio en {name}, fila {left['_row']}")
             if get(right, "Estado de Fecha") not in {None, "VACIA", "REVISAR"}:
                 if not isinstance(get(right, "Fecha de Operación"), (date, datetime)):
@@ -59,7 +83,7 @@ class WorkbookBundle:
             improved_path = Path(folder) / "mejorado.xlsx"
             report = normalize_workbook(original, improved_path)
             improved = improved_path.read_bytes()
-        verify_pair(original, improved)
+        verify_pair(original, improved, report=report)
         return cls(original, improved, report, source_name, True)
 
     @classmethod
