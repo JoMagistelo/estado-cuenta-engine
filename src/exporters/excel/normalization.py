@@ -176,8 +176,14 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
         changes["Referencia Original"] = get(row, "Referencia")
     if found.clabe:
         column = "CLABE del Ordenante" if found.direction == "RECIBIDO" else "CLABE del Beneficiario"
-        if not valid_clabe(get(row, column)):
+        existing = account_identifier(get(row, column))
+        # A 16-digit card or a 00-padded card may be a deliberate manual
+        # correction. Never replace it with an older value found in CONCEPTO.
+        protected = existing.isdigit() and len(existing) in (10, 16, 18)
+        if not valid_clabe(existing) and not protected:
             changes[column] = found.clabe
+        elif protected and existing != found.clabe:
+            notes.append(f"{column}: difiere del concepto; se conserva la edición")
     if found.bank:
         column = "Banco Emisor" if found.direction == "RECIBIDO" else "Banco Receptor"
         if not _present(get(row, column)):
@@ -219,10 +225,14 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
         existing_clabe = account_identifier(get(row, clabe_col))
         existing_account = account_identifier(get(row, account_col))
         if not valid_clabe(existing_clabe):
-            if valid_clabe(existing_account):
-                changes[clabe_col] = existing_account
-            elif len(clabes) == 1:
-                changes[clabe_col] = next(iter(clabes))
+            protected = existing_clabe.isdigit() and len(existing_clabe) in (10, 16, 18)
+            if not protected:
+                if valid_clabe(existing_account):
+                    changes[clabe_col] = existing_account
+                elif len(clabes) == 1:
+                    changes[clabe_col] = next(iter(clabes))
+            elif clabes and existing_clabe not in clabes:
+                notes.append(f"{clabe_col}: valor manual distinto; se conserva para revisión")
         elif clabes and existing_clabe not in clabes:
             notes.append(f"{clabe_col}: contradicción; se conserva el dato extraído")
         if not _account(existing_account) and len(accounts) == 1:
