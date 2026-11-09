@@ -9,6 +9,7 @@ from zipfile import ZipFile
 from openpyxl import Workbook, load_workbook
 
 from cep.evidence import CepEvidence
+from cep.columns import TRACE_COLUMNS, TXT_COLUMNS
 from cep.package import export_cep_zip
 from cep.queries import batch_texts, queries_from_workbook
 from exporters.excel.normalization import get, rows_from_sheet
@@ -58,7 +59,24 @@ def run_excel_cep_self_test():
             if get(row, "CEP Archivo PDF") not in archive.namelist():
                 raise RuntimeError("El EXE perdió el PDF vinculado al movimiento")
             ws = check["Movimientos"]
+            headers = [cell.value for cell in ws[1]]
+            position = headers.index("Revisión Normalización") + 1
+            if headers[position:position + 6] != list(TXT_COLUMNS):
+                raise RuntimeError("El EXE no conservó las seis columnas TXT después de Revisión Normalización")
+            if "Control CEP" in check:
+                raise RuntimeError("El EXE volvió a generar la hoja Control CEP obsoleta")
+            from openpyxl.utils import get_column_letter
+            for label in TRACE_COLUMNS:
+                if not ws.column_dimensions[get_column_letter(headers.index(label) + 1)].hidden:
+                    raise RuntimeError("El EXE no ocultó la trazabilidad de fechas")
             column = next(c.column for c in ws[1] if c.value == "CEP Archivo PDF")
             if ws.cell(2, column).hyperlink.target != get(row, "CEP Archivo PDF"):
                 raise RuntimeError("El EXE no conservó el enlace al PDF CEP")
+            ws.cell(2, headers.index("TXT Monto") + 1).value = 2.50
+            edited = BytesIO()
+            check.save(edited)
             check.close()
+            uploaded = WorkbookBundle.from_uploaded(edited.getvalue())
+            retried = queries_from_workbook(uploaded.improved)[0]
+            if not retried.ready or not retried.line().endswith(",2.50"):
+                raise RuntimeError("El EXE no respetó la corrección del bloque TXT sin renormalizar")

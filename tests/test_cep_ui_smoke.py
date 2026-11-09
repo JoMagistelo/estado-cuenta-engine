@@ -98,4 +98,20 @@ def test_normalize_is_explicit_and_txt_is_saved_as_plain_text(monkeypatch, tmp_p
     # its TXT directly without changing any source bytes.
     asyncio.run(panel.normalize_excel())
     assert panel.normalized and not panel.clean_button.disabled
+    # A normalized workbook can be edited and reloaded directly through the
+    # real panel, retaining a different query amount from the parser's Cargo.
+    from openpyxl import load_workbook
+    wb = load_workbook(BytesIO(panel.bundle.improved))
+    ws = wb["Movimientos"]
+    column = next(c.column for c in ws[1] if c.value == "TXT Monto")
+    ws.cell(2, column).value = 9.50
+    corrected = BytesIO()
+    wb.save(corrected)
+    wb.close()
+    panel.set_source(corrected.getvalue())
+    panel.refresh()
+    assert panel.normalized and not panel.clean_button.disabled
+    assert panel.bundle.improved == corrected.getvalue()
+    asyncio.run(panel.save_txt(None))
+    assert target.read_text().splitlines()[0].endswith(",9.50")
 

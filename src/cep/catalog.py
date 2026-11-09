@@ -1,4 +1,4 @@
-"""Offline participant catalogue. Banxico CEP-SCL, verified 2026-11-07.
+"""Offline participant catalogue. Banxico CEP-SCL, verified 2026-11-09.
 
 https://www.banxico.org.mx/cep-scl/listaInstituciones.do
 CLABE's first three digits identify the institution, not a physical branch.
@@ -7,6 +7,10 @@ CLABE's first three digits identify the institution, not a physical branch.
 import re
 
 from utils.statement_dates import text_key
+
+
+CATALOG_SOURCE_URL = "https://www.banxico.org.mx/cep-scl/listaInstituciones.do"
+CATALOG_VERIFIED_ON = "2026-11-09"
 
 
 INSTITUTIONS = {
@@ -95,6 +99,11 @@ def clabe_bank(value: object) -> str:
 def account_identifier(value: object) -> str:
     s = identifier(value)
     return s.replace("-", "") if re.fullmatch(r"[0-9]+(?:-[0-9]+)*", s) else s
+
+
+def statement_account(value: object) -> str:
+    value = account_identifier(value)
+    return value if re.fullmatch(r"[0-9]{5,17}", value) or valid_clabe(value) else ""
 
 
 def bank_mentions(text: str) -> set[str]:

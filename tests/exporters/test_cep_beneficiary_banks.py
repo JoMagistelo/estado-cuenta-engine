@@ -11,9 +11,10 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
 from cep.evidence import CepEvidence, match_evidence
+from cep.columns import TXT_COLUMNS
 from cep.package import append_cep
 from cep.queries import queries_from_workbook
-from exporters.excel.normalization import CEP_QUERY_INPUT_HEADERS, get, header_key, rows_from_sheet
+from exporters.excel.normalization import get, rows_from_sheet
 from exporters.excel.workbook_bundle import WorkbookBundle
 
 
@@ -84,10 +85,12 @@ def test_received_banks_use_the_holder_and_no_sender_clabe_is_invented(old):
     bundle = WorkbookBundle.from_excel(original)
     row = movement(bundle.improved)
     assert bundle.original == original
-    assert get(row, "Banco del Beneficiario") == "BANAMEX"
-    assert get(row, "Código Banco Beneficiario") == "40002"
-    assert get(row, "Código Plaza/Producto CLABE") == "180"
-    assert get(row, "Banco Emisor") == "BBVA MEXICO"
+    assert get(row, "Banco del Beneficiario") is None
+    assert get(row, "Código Banco Beneficiario") is None
+    assert get(row, "Código Plaza/Producto CLABE") is None
+    assert get(row, "TXT Banco Receptor") == "40002"
+    assert get(row, "TXT Banco Emisor") == "40012"
+    assert get(row, "TXT Cuenta Beneficiaria") == HOLDER
     assert get(row, "CLABE del Ordenante") is None
     assert get(row, "Sucursal") == "BBVA MEXICO"
     after = queries_from_workbook(bundle.improved)[0]
@@ -99,7 +102,8 @@ def test_received_banks_use_the_holder_and_no_sender_clabe_is_invented(old):
     assert queries_from_workbook(again)[0].line() == after.line()
     wb = load_workbook(BytesIO(again))
     labels = [c.value for c in wb["Movimientos"][1]]
-    assert labels.count("Banco del Beneficiario") == labels.count("Banco Emisor") == 1
+    assert labels.count("Banco del Beneficiario") == labels.count("TXT Banco Emisor") == 1
+    assert "Banco Emisor" not in labels
     wb.close()
 
 
@@ -109,8 +113,10 @@ def test_sent_card_gets_labelled_bank_and_code_but_no_fabricated_plaza(bank, cod
     before = queries_from_workbook(original)[0]
     bundle = WorkbookBundle.from_excel(original)
     row = movement(bundle.improved)
-    assert get(row, "Banco del Beneficiario") == bank
-    assert get(row, "Código Banco Beneficiario") == code
+    assert get(row, "Banco del Beneficiario") is None
+    assert get(row, "Código Banco Beneficiario") is None
+    assert get(row, "TXT Banco Receptor") == code
+    assert get(row, "TXT Cuenta Beneficiaria") == CARD
     assert get(row, "Código Plaza/Producto CLABE") is None
     assert get(row, "CLABE del Beneficiario") == "00" + CARD
     after = queries_from_workbook(bundle.improved)[0]
@@ -132,7 +138,7 @@ def test_received_sender_clabe_is_preserved_when_the_statement_actually_provides
     bundle = WorkbookBundle.from_excel(original)
     assert get(movement(bundle.improved), "CLABE del Ordenante") == SENDER
     q = queries_from_workbook(bundle.improved)[0]
-    assert q.ready and q.destination == HOLDER and SENDER in q.origin_aliases
+    assert q.ready and q.destination == HOLDER and q.issuer == "40012"
 
 
 def test_user_corrections_in_bank_columns_are_preserved():
@@ -145,7 +151,7 @@ def test_user_corrections_in_bank_columns_are_preserved():
 
 
 @pytest.mark.parametrize("cross", [False, True])
-def test_yellow_txt_headers_keep_other_green_headers_and_body_styles(cross):
+def test_original_headers_remain_green_and_blue_txt_headers_are_separate(cross):
     original = source()
     bundle = WorkbookBundle.from_excel(original)
     evidence = CepEvidence()
@@ -159,18 +165,16 @@ def test_yellow_txt_headers_keep_other_green_headers_and_body_styles(cross):
         final_headers = {c.value: c for c in final_ws[1]}
         for label, old in old_headers.items():
             new = final_headers[label]
-            if header_key(label) in CEP_QUERY_INPUT_HEADERS:
-                assert new.fill.fgColor.rgb == "00FFF2CC"
-                assert new.font.color.rgb == "00202124"
-                assert (new.font.name, new.font.bold, new.font.sz) == (old.font.name, old.font.bold, old.font.sz)
-            else:
-                assert copy(new.fill) == copy(old.fill)
-                assert copy(new.font) == copy(old.font)
-                assert new.fill.fgColor.rgb == "001F4D3A"
+            assert copy(new.fill) == copy(old.fill)
+            assert copy(new.font) == copy(old.font)
+            assert new.fill.fgColor.rgb == "001F4D3A"
             old_body = source_ws.cell(2, old.column)
             new_body = final_ws.cell(2, new.column)
             assert copy(new_body.fill) == copy(old_body.fill)
             assert copy(new_body.font) == copy(old_body.font)
+        for label in TXT_COLUMNS:
+            assert final_headers[label].fill.fgColor.rgb == "00156082"
+            assert final_headers[label].font.color.rgb == "00FFFFFF"
     finally:
         wb.close()
         result.close()

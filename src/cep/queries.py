@@ -15,7 +15,9 @@ from openpyxl import load_workbook
 
 from cep.catalog import account_identifier, bank_code, bank_mentions, clabe_bank, identifier, valid_clabe
 from cep.catalog import labelled_bank as _label_bank
-from exporters.excel.normalization import _account, get, rows_from_sheet
+from cep.catalog import statement_account as _account
+from cep.columns import TXT_COLUMNS, has_txt_inputs
+from exporters.excel.cells import get, rows_from_sheet
 from utils.spei_metadata import extract_spei_metadata
 from utils.statement_dates import full_date, resolve_date, text_key
 
@@ -54,24 +56,19 @@ def _valid_card16(value: str) -> bool:
     return total % 10 == 0
 
 
-def _destination(value):
-    """Select only a supported Banxico account identifier, without modifying Excel.
+def _destination(value, *, padded=True):
+    """Preserve account identifiers instead of discarding non-CLABE SPEI.
 
     Some bank statements print a debit-card number as 00 + its 16 digits.
     Strip 00 only when the 18-digit value is NOT a valid CLABE and the
     remaining 16 digits pass the Luhn checksum. Do not guess any other digits.
     """
     s = account_identifier(value)
-    if len(s) == 18:
-        # All-zero placeholders can satisfy the CLABE checksum by accident.
-        if len(set(s)) == 1:
-            return ""
-        if valid_clabe(s):
-            return s
-        if s.startswith("00") and _valid_card16(s[2:]):
-            return s[2:]
+    if not re.fullmatch(r"[0-9]+", s) or set(s) == {"0"}:
         return ""
-    return s if re.fullmatch(r"[0-9]{10}|[0-9]{16}", s) else ""
+    if padded and len(s) == 18 and not valid_clabe(s) and s.startswith("00") and _valid_card16(s[2:]):
+        return s[2:]
+    return s
 
 
 @dataclass
@@ -120,23 +117,82 @@ class CepQuery:
         }
 
 
+def _has_tracking_cell(row: dict) -> bool:
+    value = get(row, "Clave de Rastreo")
+    return bool(identifier(value)) or (isinstance(value, (int, float)) and not isinstance(value, bool))
+
+
+def _txt_query(row: dict, today: date) -> CepQuery:
+    """All six visible cells are authoritative, including deliberate blanks."""
+    raw = [get(row, label) for label in TXT_COLUMNS]
+    text = text_key(get(row, "Concepto", ""))
+    candidate = bool(any(v is not None and str(v).strip() for v in raw)
+                     or _has_tracking_cell(row)
+                     or text_key(get(row, "Tipo de Operación")) == "SPEI"
+                     or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
+    debit, credit = amount(get(row, "Cargo")), amount(get(row, "Abono"))
+    direction = ("ENVIADO" if debit else "RECIBIDO") if (
+        debit is not None and credit is not None and bool(debit) != bool(credit)) else ""
+    destination = _destination(raw[4], padded=False)
+    q = CepQuery(
+        row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
+        identifier(get(row, "No. de Movimiento")), candidate,
+        direction=direction, operation_date=full_date(raw[0]), tracking=identifier(raw[1]),
+        reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")),
+        issuer=bank_code(raw[2]), receiver=bank_code(raw[3]), destination=destination,
+        destination_aliases=(destination,) if destination else (), value=amount(raw[5]),
+        destination_format=("CLABE_18" if valid_clabe(destination) else "TARJETA_16" if len(destination) == 16
+                            else "CELULAR_10" if len(destination) == 10 else "CUENTA" if destination else ""),
+    )
+    if not candidate:
+        return q
+    for label, value in zip(TXT_COLUMNS, (q.operation_date, q.tracking, q.issuer, q.receiver, q.destination, q.value)):
+        if value is None or value == "":
+            q.issues.append(f"Completa o corrige {label}")
+    for label, raw_value, code in ((TXT_COLUMNS[2], raw[2], q.issuer), (TXT_COLUMNS[3], raw[3], q.receiver)):
+        if raw_value and not code:
+            q.issues.append(f"{label}: institución no reconocida; consulta Catálogo Bancos")
+    if q.tracking and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,39}", q.tracking):
+        q.issues.append("Corrige TXT Clave de Rastreo: formato no admitido")
+    if q.value is not None and q.value <= 0:
+        q.issues.append("TXT Monto debe ser mayor que cero")
+    if q.operation_date and not date(2018, 3, 16) <= q.operation_date <= today:
+        q.issues.append("TXT Fecha de Operación fuera del intervalo de consulta CEP por lotes")
+    if raw[4] and not destination:
+        q.issues.append("TXT Cuenta Beneficiaria: conserva los dígitos como texto, sin redondear")
+    return q
+
+
 def queries_from_workbook(source: bytes | str | Path, *, today: date | None = None) -> list[CepQuery]:
-    today = today or mexico_today()
     workbook = load_workbook(BytesIO(source) if isinstance(source, bytes) else source, data_only=True)
-    if "Movimientos" not in workbook:
+    try:
+        if "Movimientos" not in workbook:
+            raise ValueError("El Excel no contiene la hoja Movimientos")
+        ws = workbook["Movimientos"]
+        accounts = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
+        return queries_from_rows(rows_from_sheet(ws), accounts, today=today,
+                                 txt_inputs=has_txt_inputs(ws[1]))
+    finally:
         workbook.close()
-        raise ValueError("El Excel no contiene la hoja Movimientos")
+
+
+def queries_from_rows(movements: list[dict], account_rows: list[dict], *,
+                      today: date | None = None, txt_inputs=False) -> list[CepQuery]:
+    """Prepare legacy exports, or read an existing explicit TXT block verbatim."""
+    today = today or mexico_today()
     # Legacy exports kept the holder CLABE only in Datos de la Cuenta. Link
     # donors by BOTH statement id and original filename, never by account name
     # alone. An ambiguous donor is not silently selected.
     account_index: dict[tuple[str, str], list[dict]] = {}
-    account_rows = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
     for account in account_rows:
         key = (identifier(get(account, "id_estado")),
                str(get(account, "Nombre del Archivo", "")))
         account_index.setdefault(key, []).append(account)
     queries = []
-    for row in rows_from_sheet(workbook["Movimientos"]):
+    for row in movements:
+        if txt_inputs:
+            queries.append(_txt_query(row, today))
+            continue
         key = (identifier(get(row, "id_estado")),
                str(get(row, "Nombre del Archivo", "")))
         donors = account_index.get(key, [])
@@ -165,7 +221,8 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
                 get(row, "Concepto"), get(row, "Concepto Original")
             ).tracking
         classified_spei = text_key(get(row, "Tipo de Operación")) == "SPEI"
-        candidate = bool(classified_spei or tracking or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
+        candidate = bool(classified_spei or tracking or _has_tracking_cell(row)
+                         or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
         q = CepQuery(row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
                      identifier(get(row, "No. de Movimiento")), candidate, tracking=tracking,
                      reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")))
@@ -206,7 +263,7 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
                 "Número de Cuenta corregido difiere de Datos de la Cuenta: completa CLABE Titular"
             )
         own = tuple(dict.fromkeys(v for v in (
-            holder_clabe if valid_clabe(holder_clabe) else "",
+            holder_clabe if _destination(holder_clabe) else "",
             donor_clabe if valid_clabe(donor_clabe) else "",
             movement_account,
             legacy_account,  # previous improved layouts
@@ -235,12 +292,14 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
                 for raw in (raw_beneficiary, raw_account)
             ):
                 q.destination_format = "TARJETA_16_DESDE_00"
-            elif len(q.destination) == 18:
+            elif valid_clabe(q.destination):
                 q.destination_format = "CLABE_18"
             elif len(q.destination) == 16:
                 q.destination_format = "TARJETA_16"
             elif len(q.destination) == 10:
                 q.destination_format = "CELULAR_10"
+            elif q.destination:
+                q.destination_format = "CUENTA"
             inferred = clabe_bank(q.destination)
             explicit = q.receiver or bank_code(get(row, "Banco del Beneficiario")) or bank_code(get(row, "Sucursal"))
             if inferred and explicit and inferred != explicit:
@@ -254,14 +313,16 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
             # For a received SPEI the beneficiary is the HOLDER, never the
             # transfer sender. Prefer the movement's corrected CLABE; otherwise
             # use the same statement's legacy Datos de la Cuenta.
-            if holder_clabe and not valid_clabe(holder_clabe):
-                q.issues.append("CLABE Titular inválida; corrígela en Movimientos")
+            if holder_clabe and not _destination(holder_clabe):
+                q.issues.append("Cuenta/CLABE Titular inválida; corrígela en Movimientos")
                 q.destination = ""
             else:
-                q.destination = next((v for v in own if _destination(v)), "")
-            q.destination_format = ("CLABE_18" if len(q.destination) == 18
+                q.destination = next((v for v in own if _destination(v)), "") if (
+                    donor_agrees or _destination(holder_clabe)) else ""
+            q.destination_format = ("CLABE_18" if valid_clabe(q.destination)
                                     else "TARJETA_16" if len(q.destination) == 16
-                                    else "CELULAR_10" if len(q.destination) == 10 else "")
+                                    else "CELULAR_10" if len(q.destination) == 10
+                                    else "CUENTA" if q.destination else "")
             inferred = clabe_bank(identifier(get(row, "CLABE del Ordenante")))
             if inferred and q.issuer and inferred != q.issuer:
                 q.issues.append("CLABE ordenante contradice banco emisor")
@@ -304,7 +365,6 @@ def queries_from_workbook(source: bytes | str | Path, *, today: date | None = No
         if q.destination and valid_clabe(q.destination) and clabe_bank(q.destination) not in ("", q.receiver):
             q.issues.append("CLABE de destino contradice banco receptor")
         queries.append(q)
-    workbook.close()
     return queries
 
 

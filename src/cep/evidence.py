@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree as ET
 
 from cep.catalog import account_identifier, bank_code, identifier
+from cep.columns import CEP_COLUMNS
 from cep.queries import CepQuery, amount
 from utils.statement_dates import full_date, text_key
 
@@ -187,15 +188,6 @@ class CepEvidence:
                     + "__" + safe_name(d["tracking"], 35) + "_" + record.signature[:8])
             record.xml_path = "XML/" + base + ".xml"
             record.pdf_path = "PDF/" + base + ".pdf" if record.pdf else ""
-
-
-CEP_COLUMNS = (
-    "CEP Estado", "CEP Detalle", "CEP Fecha", "CEP Diferencia Días", "CEP Monto",
-    "CEP Clave de Rastreo", "CEP Referencia", "CEP Banco Emisor", "CEP Banco Receptor",
-    "CEP Nombre Ordenante", "CEP RFC Ordenante", "CEP Cuenta Ordenante",
-    "CEP Nombre Beneficiario", "CEP RFC Beneficiario", "CEP Cuenta Beneficiaria",
-    "CEP Concepto", "CEP Tiene PDF", "CEP Archivo PDF", "CEP Archivo XML",
-)
 
 
 def _compatible(query: CepQuery, record: CepRecord):
