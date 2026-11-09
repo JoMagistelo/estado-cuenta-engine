@@ -58,6 +58,14 @@ class CepPanel:
             ft.Text("2. Descarga el TXT para Banxico", size=15, weight=ft.FontWeight.BOLD),
             self.adjacent,
             ft.Text(
+                "Para corregir una consulta, edita en Movimientos: Fecha de Operación, "
+                "Clave de Rastreo, Banco Emisor, Banco Receptor, Cargo/Abono; "
+                "CLABE del Beneficiario en cargos o CLABE Titular en abonos. "
+                "Guarda el XLSX, vuelve a cargarlo y genera TXT directamente.",
+                size=12,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ),
+            ft.Text(
                 "El TXT lee los datos editados de Movimientos. Resuelve fechas antiguas usando "
                 "el periodo, sin cambiar tu archivo. En abonos usa preferentemente CLABE Titular. "
                 "Si hay más de 500 consultas se generan varios TXT.",
