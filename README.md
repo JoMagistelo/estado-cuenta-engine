@@ -164,14 +164,19 @@ trazabilidad de fechas se conservan ocultas.
 instituciones del listado oficial Banxico. No se generan Control CEP,
 Revisión CEP ni Revisión Excel. Se conserva Número de Cuenta y CLABE Titular,
 sin duplicar Cuenta Titular. Los campos SPEI originales del parser quedan
-intactos: la recuperación adicional prepara únicamente los datos del bloque TXT.
+conservados cuando ya tienen un valor; **Normalizar Excel** ahora clasifica las
+transferencias y completa metadatos faltantes del concepto tanto en sus campos
+de Movimientos como en el bloque TXT. Incluye 57 reglas de palabras/OCR en
+**Clasificador SPEI**, distingue devoluciones y traspasos, y añade
+**Clasificación SPEI** para filtrar. Un abono sin indicios no se considera SPEI.
+Las correcciones de consulta siguen haciéndose directamente en azul.
 
 Prueba la rama antes de fusionar el PR:
 
 ```powershell
 Set-Location C:\Proyectos\estado-cuenta-engine
 git fetch origin
-git switch --detach origin/fix/cep-bancos-recibidos-resaltado
+git switch --detach origin/feat/cep-clasificador-recuperacion
 .\.venv\Scripts\python.exe -m pytest -m "not integration" -q
 .\.venv\Scripts\python.exe app\main_desktop.py
 ```

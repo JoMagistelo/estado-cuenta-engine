@@ -100,7 +100,7 @@ def test_normalization_replaces_date_cells_and_preserves_original_bytes_and_edit
     assert get(row, "Cuenta Titular") is None
     assert get(row, "CLABE Titular") == OWN
     assert get(row, "Sucursal") == "SUCURSAL 123"
-    assert get(row, "Banco del Beneficiario") is None
+    assert get(row, "Banco del Beneficiario") == "40072"
     assert get(row, "TXT Banco Receptor") == "40072"
     assert get(row, "Referencia") == "0000123"
     assert get(row, "Beneficiario manual") == "Conservar edición"
@@ -131,7 +131,7 @@ def test_recover_labelled_accounts_tracking_and_reference():
         "Concepto": text, "Concepto Original": text})]))
     row = rows(bundle.improved)[0]
     assert get(row, "CLABE del Beneficiario") == "MAL"
-    assert get(row, "Clave de Rastreo") is None
+    assert get(row, "Clave de Rastreo") == "NUEVARASTREO01"
     assert get(row, "Referencia") is None
     assert get(row, "TXT Cuenta Beneficiaria") == OTHER
     assert get(row, "TXT Clave de Rastreo") == "NUEVARASTREO01"
@@ -372,11 +372,11 @@ def test_bbva_statement_reference_and_payment_reference_are_distinct_and_audited
     row = rows(bundle.improved)[0]
     assert get(row, "Referencia") == "0000001234 072"
     assert get(row, "Referencia Original") is None
-    assert get(row, "Referencia SPEI") is None
+    assert get(row, "Referencia SPEI") == "0000007"
     from exporters.excel.normalization import recover_fields
     recovered, _ = recover_fields(row)
     assert recovered["Referencia"] == "0000001234"
-    assert recovered["Referencia SPEI"] == "0000007"
+    assert "Referencia SPEI" not in recovered  # Already recovered on the normalized copy.
     assert get(row, "TXT Cuenta Beneficiaria") == OTHER
     reloaded = rows(WorkbookBundle.from_excel(bundle.improved).improved)[0]
     assert get(reloaded, "Referencia") == "0000001234 072"

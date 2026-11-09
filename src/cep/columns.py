@@ -43,6 +43,13 @@ def has_txt_inputs(headers) -> bool:
     return any(key in TXT_KEYS for key in keys)
 
 
+def query_values(query):
+    return dict(zip(TXT_COLUMNS, (
+        query.operation_date, query.tracking, query.issuer, query.receiver, query.destination,
+        float(query.value) if query.value is not None else None,
+    )))
+
+
 def install_txt_inputs(ws, queries) -> None:
     """Initialize once. Even a blank or partial existing block is authoritative."""
     existing = has_txt_inputs(ws[1])
@@ -51,10 +58,7 @@ def install_txt_inputs(ws, queries) -> None:
         return
     for q in queries:
         if q.candidate:
-            put_columns(ws, q.row, dict(zip(TXT_COLUMNS, (
-                q.operation_date, q.tracking, q.issuer, q.receiver, q.destination,
-                float(q.value) if q.value is not None else None,
-            ))))
+            put_columns(ws, q.row, query_values(q))
 
 
 def safe_to_reorder(workbook) -> bool:

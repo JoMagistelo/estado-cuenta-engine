@@ -50,16 +50,55 @@ Las siguientes columnas se conservan, pero quedan **ocultas**:
 - Fecha de Liquidación Original
 - Fecha de Corte Original
 
-Los valores SPEI extraídos por el parser (concepto, referencia, rastreo,
-beneficiario, cuentas, Sucursal, etc.) **no se reescriben**. La recuperación
-conservadora ya existente puede preparar una copia para las columnas TXT.
-La ampliación mediante un catálogo de patrones SPEI por banco queda pendiente;
-no se incorpora ni se cambia ningún parser en esta revisión.
+Concepto, Concepto Original, Cargo, Abono, Tipo de Operación y Sucursal se
+conservan. La recuperación completa los campos SPEI **faltantes** de la copia
+normalizada: rastreo, referencia SPEI, cuenta/CLABE del beneficiario u ordenante
+y banco de la contraparte. Los datos ya presentes se conservan; si difieren del
+concepto, Revisión Normalización señala la discrepancia sin sustituirlos.
+El archivo original conserva sus bytes y ningún parser se modifica.
+
+## Clasificación y recuperación SPEI al normalizar
+
+**Clasificación SPEI**, con encabezado verde, permite filtrar SPEI Enviado,
+SPEI Recibido, SPEI Devuelto, Traspaso y Transferencia cuentas del mismo banco.
+No sustituye el Tipo de Operación original. Cuando hay indicios SPEI pero el
+importe/sentido es ambiguo, la clasificación queda como SPEI por revisar.
+
+El programa incluye las 57 filas del vocabulario de clasificación, con ambas
+columnas de palabras clave y sus variantes OCR. La hoja **Clasificador SPEI**
+las muestra como referencia. No contiene los movimientos utilizados para
+analizar formatos; editar esa hoja de referencia no cambia el clasificador
+incluido en el programa. El reconocimiento tolera mayúsculas, acentos y saltos
+de línea. No sustituye letras o dígitos dentro de cuentas ni rastreos.
+
+Las palabras ambiguas se resuelven con cargo/abono y las señales del
+encabezado. PAGO RECIBIDO DE puede representar un traspaso interno o un SPEI:
+se considera también el banco explícito y el rastreo. Un abono por sí solo no
+es evidencia SPEI. CGO se clasifica conforme al vocabulario, pero se señala
+para revisión porque puede no incluir los datos necesarios para consultar.
+
+La recuperación reconoce etiquetas y bloques de Banamex, Banorte, BBVA,
+Santander y Azteca, incluidas variaciones de OCR. Los ejemplos de HSBC y
+Mercado Pago también sirven para clasificar; algunos solo describen el pago o
+un movimiento interno y no contienen rastreo/cuenta recuperables. Otros
+bancos pueden usar la recuperación de campos explícitamente etiquetados.
+No se elige un número largo cualquiera, una autorización o una referencia
+como rastreo. Las posiciones bancarias permiten recuperar el rastreo de BBVA
+aunque la cuenta sea tarjeta u otro identificador sin checksum CLABE válido;
+el pie de Banorte permite recuperar los datos situados después del concepto.
+Si hay varias candidatas o datos contradictorios, la consulta queda pendiente.
+
+En enviados el destino es el tercero; en recibidos es el titular. La cuenta
+del ordenante identifica al remitente, **no** es el destino de un SPEI recibido.
+Una devolución se mantiene visible, pero no se enruta automáticamente como un
+nuevo SPEI recibido: sus datos de la operación original deben comprobarse y
+completarse en azul para consultar.
 
 ## Normalizar una vez y corregir directamente
 
 1. Cargar el Excel original, antiguo, mejorado o previamente cruzado.
-2. Si todavía no tiene el bloque TXT, pulsar **Normalizar Excel**.
+2. Pulsar **Normalizar Excel** para clasificar y recuperar datos faltantes,
+   o para preparar el bloque azul en un archivo antiguo.
 3. Descargar el Excel normalizado. Revisar o corregir las seis celdas azules
    del movimiento que interese y guardar el archivo.
 4. Volver a cargar ese archivo. **Generar TXT sin normalizar de nuevo**.
@@ -72,7 +111,11 @@ no se incorpora ni se cambia ningún parser en esta revisión.
 Si ya existe cualquiera de las seis columnas TXT, ese bloque es autoritativo:
 una celda vacía se informa como pendiente y **no** se sustituye por un valor
 antiguo del parser. Tampoco se sobrescriben las ediciones si se solicita una
-segunda normalización. Los encabezados TXT duplicados requieren corrección;
+segunda normalización. Cuando el concepto permite recuperar un dato nuevo que
+el normalizador anterior tampoco podía obtener, Normalizar puede completar
+ese hueco azul; no repone vacíos cuyo dato de origen ya era utilizable.
+Generar TXT directamente siempre lee las seis celdas existentes sin cambios.
+Los encabezados TXT duplicados requieren corrección;
 no se elige silenciosamente una columna.
 
 Las fechas del bloque azul son independientes de las fechas verdes:

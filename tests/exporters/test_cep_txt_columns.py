@@ -65,7 +65,7 @@ def test_exported_original_keeps_the_v5_v6_movement_contract():
 
 
 @pytest.mark.parametrize("generation", ["v5", "v6", "v7_original", "v7_normalizado", "v7_cruzado"])
-def test_every_legacy_generation_can_be_prepared_without_rewriting_spei_columns(generation):
+def test_every_legacy_generation_can_fill_missing_fields_and_preserve_existing_spei_values(generation):
     original = workbook(old=generation in {"v5", "v6"}, crossed=generation == "v7_cruzado")
     if generation == "v7_normalizado":
         original = edit(original, {
@@ -81,6 +81,9 @@ def test_every_legacy_generation_can_be_prepared_without_rewriting_spei_columns(
     after = read(bundle.improved)[0]
     for label in ("Concepto", "Clave de Rastreo", "Referencia", "CLABE del Beneficiario",
                   "Cuenta del Beneficiario", "Cargo", "Abono", "Banco del Beneficiario"):
+        if get(before, label) is not None and str(get(before, label)).strip():
+            assert get(before, label) == get(after, label)
+    for label in ("Concepto", "Cargo", "Abono", "Tipo de Operación"):
         assert get(before, label) == get(after, label)
     q = queries_from_workbook(bundle.improved)[0]
     assert q.ready, q.issues

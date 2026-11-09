@@ -103,7 +103,8 @@ def test_received_banks_use_the_holder_and_no_sender_clabe_is_invented(old):
     wb = load_workbook(BytesIO(again))
     labels = [c.value for c in wb["Movimientos"][1]]
     assert labels.count("Banco del Beneficiario") == labels.count("TXT Banco Emisor") == 1
-    assert "Banco Emisor" not in labels
+    assert labels.count("Banco Emisor") == 1
+    assert get(movement(again), "Banco Emisor") == "40012"
     wb.close()
 
 
@@ -113,8 +114,8 @@ def test_sent_card_gets_labelled_bank_and_code_but_no_fabricated_plaza(bank, cod
     before = queries_from_workbook(original)[0]
     bundle = WorkbookBundle.from_excel(original)
     row = movement(bundle.improved)
-    assert get(row, "Banco del Beneficiario") is None
-    assert get(row, "Código Banco Beneficiario") is None
+    assert get(row, "Banco del Beneficiario") == code
+    assert get(row, "Código Banco Beneficiario") == code
     assert get(row, "TXT Banco Receptor") == code
     assert get(row, "TXT Cuenta Beneficiaria") == CARD
     assert get(row, "Código Plaza/Producto CLABE") is None

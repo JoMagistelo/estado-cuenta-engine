@@ -34,6 +34,15 @@ def run_excel_cep_self_test():
     workbook.save(content)
     workbook.close()
     bundle = WorkbookBundle.from_excel(content.getvalue())
+    normalized = load_workbook(BytesIO(bundle.improved))
+    try:
+        prepared = rows_from_sheet(normalized["Movimientos"])[0]
+        if (get(prepared, "Clasificación SPEI") != "SPEI Enviado"
+                or get(prepared, "Clave de Rastreo") != "SYNTHETIC001"
+                or normalized["Clasificador SPEI"].max_row != 58):
+            raise RuntimeError("El EXE no clasificó/recuperó el SPEI con el catálogo incluido")
+    finally:
+        normalized.close()
     queries = queries_from_workbook(bundle.improved)
     if len(batch_texts(queries)["lote_001.txt"].splitlines()) != 3:
         raise RuntimeError("El EXE no generó las tres consultas de fecha")
