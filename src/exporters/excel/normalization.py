@@ -13,7 +13,6 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
-from exporters.excel.writer import write_table_sheet
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
 from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata, metadata_search_text, valid_tracking
 
@@ -243,6 +242,41 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
     return changes, notes
 
 
+def collapse_holder_account(ws, *, allow_column_removal=True) -> bool:
+    """Keep Número de Cuenta as the only account column (CLABE Titular stays).
+
+    Never discard competing manually entered values. Removing a column in a
+    workbook containing formulas may invalidate external cell references;
+    callers should opt out for those complex workbooks.
+    """
+    headers = {header_key(cell.value): cell.column for cell in ws[1] if cell.value is not None}
+    redundant = headers.get("CUENTATITULAR")
+    canonical = headers.get("NUMERODECUENTA")
+    if not redundant:
+        return False
+    if not canonical:
+        ws.cell(1, redundant).value = "Número de Cuenta"
+        return True
+    for index in range(2, ws.max_row + 1):
+        current = account_identifier(ws.cell(index, canonical).value)
+        previous = account_identifier(ws.cell(index, redundant).value)
+        if current and previous and current != previous:
+            raise ValueError(
+                f"Fila {index}: Cuenta Titular y Número de Cuenta son distintos. "
+                "Corrige Número de Cuenta en Movimientos antes de normalizar/cruzar."
+            )
+    if not allow_column_removal:
+        return False
+    for index in range(2, ws.max_row + 1):
+        canonical_cell = ws.cell(index, canonical)
+        old = account_identifier(ws.cell(index, redundant).value)
+        if not account_identifier(canonical_cell.value) and old:
+            canonical_cell.value = old
+            canonical_cell.data_type = "s"
+    ws.delete_cols(redundant)
+    return True
+
+
 def set_literal(cell, value):
     cell.value = value
     if isinstance(value, str):
@@ -296,12 +330,18 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
     movable = not workbook.defined_names and not any(
         sheet.tables or sheet._charts or any(c.data_type == "f" for cells in sheet.iter_rows() for c in cells)
         for sheet in workbook.worksheets)
-    if movable and "FECHADECORTE" in headers and "CUENTATITULAR" not in headers and "CLABETITULAR" not in headers:
+    if "CUENTATITULAR" in headers and "NUMERODECUENTA" in headers and not movable:
+        raise ValueError(
+            "El Excel tiene fórmulas o tablas que impiden quitar con seguridad Cuenta Titular. "
+            "Puedes generar el TXT directamente sin normalizar este archivo."
+        )
+    collapse_holder_account(ws, allow_column_removal=movable)
+    headers = {header_key(c.value): c.column for c in ws[1] if c.value is not None}
+    if movable and "FECHADECORTE" in headers and "CLABETITULAR" not in headers:
         position = headers["FECHADECORTE"] + 1
-        ws.insert_cols(position, 2)
-        for column, label in ((position, "Cuenta Titular"), (position + 1, "CLABE Titular")):
-            ws.cell(1, column, label)._style = copy(ws.cell(1, 1)._style)
-            ws.column_dimensions[get_column_letter(column)].width = 24
+        ws.insert_cols(position, 1)
+        ws.cell(1, position, "CLABE Titular")._style = copy(ws.cell(1, 1)._style)
+        ws.column_dimensions[get_column_letter(position)].width = 24
 
     def record(row, field_name, old, new, detail):
         report.changes.append({
@@ -341,10 +381,15 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
         owner = matches[0] if len(matches) == 1 else None
         metadata = owner.row if owner else row
         values, notes = recover_fields(row)
-        account = (owner.account if owner else "") or _account(get(row, "Cuenta Titular") or get(row, "Número de Cuenta"))
-        clabe = (owner.clabe if owner else "") or account_identifier(get(row, "CLABE Titular"))
-        values.update({"Cuenta Titular": account, "CLABE Titular": clabe if valid_clabe(clabe) else ""})
-        if account and account != _account(get(row, "Número de Cuenta")):
+        # The analyst's movement columns take precedence over donor data.
+        account = _account(get(row, "Número de Cuenta")) or (owner.account if owner else "")
+        own_clabe = account_identifier(get(row, "CLABE Titular"))
+        clabe = own_clabe if valid_clabe(own_clabe) else (owner.clabe if owner else "")
+        if not _present(own_clabe):
+            values["CLABE Titular"] = clabe if valid_clabe(clabe) else ""
+        elif not valid_clabe(own_clabe):
+            notes.append("CLABE Titular inválida; se conserva para corrección manual")
+        if account and not _account(get(row, "Número de Cuenta")):
             values["Número de Cuenta"] = account
         if owner and owner.sources:
             values["Origen Datos Titular"] = "; ".join(owner.sources)
@@ -393,24 +438,13 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
                     notes.append(f"{field_name}: identificador numérico con posible pérdida de precisión")
         values["Revisión Normalización"] = "; ".join(dict.fromkeys(notes))
         put_columns(ws, row["_row"], values)
-    previous_changes = rows_from_sheet(workbook["Revisión Excel"]) if "Revisión Excel" in workbook else []
+    # Audit differences are retained in the in-memory report, not in a
+    # separate Revisión Excel sheet. The final user's corrections live in
+    # Movimientos, and the generated Control CEP reports query problems.
     if "Revisión Excel" in workbook:
         del workbook["Revisión Excel"]
-    audit = workbook.create_sheet("Revisión Excel")
-    combined = []
-    seen = set()
-    for change in previous_changes + report.changes:
-        change = {k: v for k, v in change.items() if k != '_row'}
-        signature = tuple((k, _display(v)) for k, v in change.items())
-        if signature not in seen:
-            combined.append(change)
-            seen.add(signature)
-    write_table_sheet(audit, combined or [{"Detalle": "Sin cambios ni incidencias"}])
-    # All external text in the audit is literal, never an Excel formula.
-    for cells in audit.iter_rows():
-        for cell in cells:
-            if isinstance(cell.value, str):
-                cell.data_type = "s"
+    if "Revisión CEP" in workbook:
+        del workbook["Revisión CEP"]
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(destination)
