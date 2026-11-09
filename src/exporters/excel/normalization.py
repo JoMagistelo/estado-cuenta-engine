@@ -451,10 +451,23 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
     # Audit differences are retained in the in-memory report, not in a
     # separate Revisión Excel sheet. The final user's corrections live in
     # Movimientos, and the generated Control CEP reports query problems.
-    if "Revisión Excel" in workbook:
-        del workbook["Revisión Excel"]
-    if "Revisión CEP" in workbook:
-        del workbook["Revisión CEP"]
+    # A previously crossed workbook may contain stale CEP status/results.
+    # They are not evidence for this new run; rebuilding them requires
+    # importing the official Banxico ZIP again. Never alter the source XLSX.
+    previous_cep_columns = [
+        cell.column for cell in ws[1]
+        if cell.value and header_key(cell.value).startswith("CEP")
+    ]
+    if previous_cep_columns and not movable:
+        raise ValueError(
+            "El Excel tiene fórmulas que impiden retirar los resultados CEP anteriores. "
+            "Genera TXT sin normalizar o trabaja sobre una copia sin dependencias."
+        )
+    for column in sorted(previous_cep_columns, reverse=True):
+        ws.delete_cols(column)
+    for old_sheet in ("Revisión Excel", "Revisión CEP", "Control CEP", "Datos CEP"):
+        if old_sheet in workbook:
+            del workbook[old_sheet]
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(destination)
