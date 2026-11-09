@@ -96,7 +96,8 @@ def test_normalization_replaces_date_cells_and_preserves_original_bytes_and_edit
     assert get(row, "Fecha de Operación") == datetime(2026, 1, 3)
     assert get(row, "Fecha de Operación Original") == "03 ENE"
     assert get(row, "Fecha de Liquidación") == datetime(2026, 1, 4)
-    assert get(row, "Cuenta Titular") == "12345678901"
+    assert get(row, "Número de Cuenta") == "12345678901"
+    assert get(row, "Cuenta Titular") is None
     assert get(row, "CLABE Titular") == OWN
     assert get(row, "Sucursal") == "BANORTE"
     assert get(row, "Banco del Beneficiario") == "BANORTE"
@@ -117,7 +118,9 @@ def test_holder_columns_follow_cutoff_in_engine_layout():
     bundle = WorkbookBundle.from_excel(excel())
     headers = list(rows(bundle.improved)[0])
     index = headers.index("Fecha de Corte")
-    assert headers[index + 1:index + 3] == ["Cuenta Titular", "CLABE Titular"]
+    assert headers[index + 1] == "CLABE Titular"
+    assert headers.count("Número de Cuenta") == 1
+    assert "Cuenta Titular" not in headers
 
 
 def test_recover_labelled_accounts_tracking_and_reference():
@@ -166,7 +169,8 @@ def test_holder_identifiers_already_in_movement_are_kept_when_metadata_is_missin
         movements=[movement_row(**{"Número de Cuenta": None, "Cuenta Titular": "12345678901", "CLABE Titular": OWN,
                                   "Cargo": 0, "Abono": 125.25, "Concepto": "SPEI RECIBIDO BANORTE"})]))
     row = rows(bundle.improved)[0]
-    assert get(row, "Cuenta Titular") == "12345678901"
+    assert get(row, "Número de Cuenta") == "12345678901"
+    assert get(row, "Cuenta Titular") is None
     assert get(row, "CLABE Titular") == OWN
     query = queries_from_workbook(bundle.improved)[0]
     assert query.ready and query.destination == OWN
@@ -249,20 +253,32 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
         assert get(raw[0], "Fecha de Operación") == "03 ENE"
         assert get(clean[0], "Fecha de Operación") == datetime(2026, 1, 3)
         for row in (raw[0], clean[0]):
-            assert get(row, "CEP Nombre Beneficiario") == "BENEFICIARIO XML"
+            assert get(row, "CEP Nombre Beneficiario") is None
+            assert get(row, "CEP Estado") == "EXITO"
             assert get(row, "CEP Archivo PDF") in archive.namelist()
             assert get(row, "CEP Archivo XML") in archive.namelist()
         for name in ("excel_original_con_CEP.xlsx", "excel_mejorado_con_CEP.xlsx"):
             workbook = load_workbook(BytesIO(archive.read(name)))
             ws = workbook["Movimientos"]
             columns = {cell.value: cell.column for cell in ws[1]}
+            assert "Revisión Excel" not in workbook.sheetnames
+            assert "Revisión CEP" not in workbook.sheetnames
+            assert "Control CEP" in workbook.sheetnames
+            assert "Datos CEP" in workbook.sheetnames
+            assert "CEP Nombre Beneficiario" not in columns
+            control = rows_from_sheet(workbook["Control CEP"])
+            data = rows_from_sheet(workbook["Datos CEP"])
+            assert len(control) == 2
+            assert get(control[0], "Cuenta Beneficiaria TXT") == OTHER
+            assert get(control[0], "Resultado CEP") == "EXITO"
+            assert get(data[0], "beneficiary_name") == "BENEFICIARIO XML"
             for label in ("CEP Archivo PDF", "CEP Archivo XML"):
                 cell = ws.cell(2, columns[label])
                 assert cell.hyperlink.target == cell.value
                 assert cell.hyperlink.target in archive.namelist()
             assert ws.cell(3, columns["CEP Archivo PDF"]).hyperlink is None
             workbook.close()
-        assert get(raw[1], "CEP Nombre Beneficiario") is None
+        assert get(raw[1], "CEP Estado") == "NO_APARECE_EN_ZIP"
 
 
 @pytest.mark.parametrize("kwargs", [{"value": "125.26"}, {"destination": OWN}, {"origin": OTHER}, {"when": "05/01/2026"}])
@@ -305,12 +321,15 @@ def test_exact_date_wins_over_competing_adjacent_day_row():
     assert result[3]["CEP Estado"] == "REVISAR"
 
 
-def test_reloading_normalized_workbook_keeps_dates_and_audit_history():
+def test_reloading_normalized_workbook_keeps_original_date_without_review_sheet():
     bundle = WorkbookBundle.from_excel(excel())
     reloaded = WorkbookBundle.from_excel(bundle.improved)
     assert get(rows(reloaded.improved)[0], "Fecha de Operación Original") == "03 ENE"
     assert get(rows(reloaded.improved)[0], "Fecha de Operación") == datetime(2026, 1, 3)
-    assert len(rows(reloaded.improved, "Revisión Excel")) >= len(rows(bundle.improved, "Revisión Excel"))
+    for content in (bundle.improved, reloaded.improved):
+        wb = load_workbook(BytesIO(content))
+        assert "Revisión Excel" not in wb.sheetnames
+        wb.close()
 
 
 def test_batch_splitting_501_queries_does_not_leave_a_single_line():
