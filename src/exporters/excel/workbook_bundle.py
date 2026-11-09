@@ -75,8 +75,8 @@ class WorkbookBundle:
                 raise ValueError("El Excel debe contener la hoja Movimientos")
             ws = workbook["Movimientos"]
             headers = {str(c.value or "").strip().casefold() for c in next(ws.iter_rows(max_row=1))}
-            if not {"fecha de operación", "clave de rastreo", "cargo", "abono"} <= headers:
-                raise ValueError("Faltan columnas básicas de Movimientos (fecha, rastreo, cargo o abono)")
+            if not {"fecha de operación", "cargo", "abono"} <= headers:
+                raise ValueError("Faltan columnas básicas de Movimientos (fecha, cargo o abono)")
             count = sum(1 for values in ws.iter_rows(min_row=2, values_only=True)
                         if any(v is not None for v in values))
         finally:
