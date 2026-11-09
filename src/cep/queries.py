@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from openpyxl import load_workbook
 
 from cep.catalog import account_identifier, bank_code, bank_mentions, clabe_bank, identifier, valid_clabe
+from cep.catalog import labelled_bank as _label_bank
 from exporters.excel.normalization import _account, get, rows_from_sheet
 from utils.spei_metadata import extract_spei_metadata
 from utils.statement_dates import full_date, resolve_date, text_key
@@ -71,26 +72,6 @@ def _destination(value):
             return s[2:]
         return ""
     return s if re.fullmatch(r"[0-9]{10}|[0-9]{16}", s) else ""
-
-
-def _label_bank(text: str, direction: str) -> str:
-    role = r"(?:EMISOR[AO]?|ORDENANTE|ORIGEN)" if direction == "emisor" else r"(?:RECEPTOR[AO]?|BENEFICIARI[AO]|DESTINO)"
-    patterns = [rf"\b(?:BANCO|INSTITUCION)\s+(?:DEL?\s+)?{role}\s*[:#=-]?\s*",
-                r"\bRECIBIDO\s+DE\s+" if direction == "emisor" else r"\bENVIADO\s+A\s+"]
-    options = set()
-    for pattern in patterns:
-        for match in re.finditer(pattern, text):
-            tail = text[match.end():match.end() + 50]
-            number = re.match(r"([0-9]{3,5})\b", tail)
-            if number and bank_code(number[1]):
-                options.add(bank_code(number[1]))
-            # Longest matching name prevents NU from matching unrelated words.
-            from cep.catalog import ALIASES
-            for name in sorted(ALIASES, key=len, reverse=True):
-                if re.match(re.escape(name) + r"(?![A-Z0-9])", tail):
-                    options.add(ALIASES[name])
-                    break
-    return next(iter(options)) if len(options) == 1 else ""
 
 
 @dataclass

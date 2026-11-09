@@ -75,7 +75,9 @@ o se genera un nuevo Excel cruzado.
 columnas, guardando el XLSX y volviéndolo a cargar:
 
 En el Excel **normalizado y en los cruzados**, los encabezados de los datos
-que intervienen al preparar el TXT aparecen en **verde con letras blancas**.
+que intervienen al preparar el TXT aparecen en **amarillo con texto oscuro**.
+Los demás encabezados conservan exactamente su formato de entrada, incluido
+el verde de los archivos anteriores; no se invierte la paleta del libro.
 El color también incluye los respaldos históricos: Sucursal, datos del
 ordenante, Concepto/Concepto Original y contexto de fechas. Se usan cuando
 falta el dato preferido; para corregir una fecha o rastreo, edita directamente
@@ -91,7 +93,9 @@ El Excel original de Extracción conserva su presentación habitual.
 | `Clave de Rastreo` | Rastreo real; lo escrito manualmente prevalece sobre el concepto |
 | `Cargo` / `Abono` | Importe y sentido; no inventar un valor faltante |
 | `Banco Emisor`, `Banco Receptor` | Si están presentes, admiten código Banxico de cinco dígitos o nombre reconocido |
-| `Banco`, `Banco del Beneficiario`, `Sucursal` | Banco del titular y respaldos del participante SPEI; Sucursal conserva su nombre y sus valores |
+| `Banco` | Banco del titular del estado de cuenta |
+| `Banco del Beneficiario` | Banco receptor: en cargos pertenece al tercero; en abonos, al titular |
+| `Sucursal` | Respaldo histórico del banco participante; conserva su nombre y sus valores |
 | `CLABE del Beneficiario` | **Cargos/enviados**: preferido; se admite CLABE18, tarjeta16 o celular10 según la validación del módulo |
 | `Cuenta del Beneficiario` | Cargos/enviados: respaldo cuando falta la CLABE/identificador preferido |
 | `CLABE Titular` | **Abonos/recibidos**: preferida y única cuenta beneficiaria si existe; no confundir con ordenante |
@@ -108,6 +112,17 @@ archivo, o por una coincidencia única de banco y cuenta. La normalización
 añade `CLABE Titular` a Movimientos; si sigue vacía, completa esa celda
 como texto para conservar ceros. Una cuenta de 11 dígitos
 no debe convertirse por suposiciones en una CLABE de 18.
+
+`Banco del Beneficiario` y `Código Banco Beneficiario` se completan en
+**enviados y recibidos** cuando existe evidencia del banco. El código de
+plaza/producto exige una CLABE válida del beneficiario: en abonos se obtiene
+de `CLABE Titular`. Una tarjeta puede tener banco identificado y plaza vacía.
+`CLABE del Ordenante` solo se llena si el estado proporciona ese dato; una
+clave de rastreo no permite reconstruir la cuenta de quien envió.
+
+El TXT contiene fecha, rastreo, **dos códigos de institución** (emisor y
+receptor), **una cuenta destino** e importe. No incluye una CLABE por cada
+banco ni necesita la CLABE del ordenante para consultar un SPEI recibido.
 
 ### Hojas y resultados
 
@@ -164,7 +179,7 @@ BBVA puede entregar la referencia de diez dígitos junto al código de banco de 
 8. **Importar ZIP:** lectura de XML oficiales, vinculación de PDF y cruce por rastreo, importe exacto, fecha original/±1 y cuentas/bancos disponibles. En Movimientos se añaden únicamente CEP Estado, CEP Detalle, CEP Tiene PDF y vínculos PDF/XML; los datos oficiales completos quedan en Datos CEP. Un rastreo coincidente con importe/cuenta/banco contradictorios se marca REVISAR y no recibe datos de otro movimiento.
 9. **Paquete final:** `excel_original_con_CEP.xlsx`, `excel_mejorado_con_CEP.xlsx`, PDF/XML con nombres que incluyen fecha y participantes, y archivos recibidos de Banxico preservados. Admite varios ZIP acumulados y elimina duplicados de evidencia sin perder filas. CEP Estado identifica pendientes y CEP Archivo PDF/XML contiene vínculos clicables al comprobante correspondiente.
 10. **Regresión y empaquetado:** pruebas de fechas, cuentas, TXT, XLSX reabierto, ZIP, contradicciones de cruce, controles Flet y WM_DROPFILES real en Windows. El constructor ejecuta `--self-test-excel-cep` dentro del EXE generado, además de las comprobaciones existentes de OCR y paralelismo.
-11. **Catálogo bancario:** catálogo local de participantes Banxico, códigos oficiales y alias de los parsers. En enviados, los primeros tres dígitos de una CLABE válida permiten completar Banco del Beneficiario y Código Banco Beneficiario. Sucursal se conserva con su nombre y sus valores históricos; su encabezado se colorea porque puede servir como respaldo del banco participante. Los dígitos 4–6 se muestran como código de plaza/producto.
+11. **Catálogo bancario:** catálogo local de participantes Banxico, códigos oficiales y alias de los parsers. Banco del Beneficiario y Código Banco Beneficiario se completan tanto en enviados como en recibidos: en un abono corresponden al titular. Cuando el destino es una tarjeta, el banco se recupera de la institución rotulada en el concepto o de los campos de banco, nunca del prefijo de la tarjeta. El código de plaza/producto solo se completa desde los dígitos 4–6 de una CLABE válida del beneficiario; para recibidos se usa CLABE Titular. CLABE del Ordenante permanece vacía si el estado no la proporciona. Sucursal conserva su nombre y valores.
 
 ## Formatos revisados en todos los parsers registrados
 

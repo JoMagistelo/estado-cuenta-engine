@@ -58,7 +58,7 @@ class CepPanel:
             ft.Text("2. Descarga el TXT para Banxico", size=15, weight=ft.FontWeight.BOLD),
             self.adjacent,
             ft.Text(
-                "Los encabezados verdes de Movimientos en el Excel normalizado o cruzado "
+                "Los encabezados amarillos de Movimientos en el Excel normalizado o cruzado "
                 "señalan los datos usados para preparar el TXT. Para corregir, edita: Fecha de Operación, "
                 "Clave de Rastreo, Banco Emisor, Banco Receptor, Cargo/Abono; "
                 "CLABE del Beneficiario en cargos o CLABE Titular en abonos. "

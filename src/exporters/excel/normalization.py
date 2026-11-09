@@ -14,7 +14,10 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
-from cep.catalog import INSTITUTIONS, account_identifier, bank_code, clabe_bank, identifier, valid_clabe
+from cep.catalog import (
+    INSTITUTIONS, account_identifier, bank_code, bank_mentions, clabe_bank,
+    identifier, labelled_bank, valid_clabe,
+)
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
 from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata, metadata_search_text, valid_tracking
 
@@ -243,19 +246,59 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
             changes[account_col] = next(iter(accounts))
         if len(clabes) > 1 or len(accounts) > 1:
             notes.append(f"{account_col}: varias candidatas")
-    beneficiary_clabe = changes.get("CLABE del Beneficiario", account_identifier(get(row, "CLABE del Beneficiario")))
-    code = clabe_bank(beneficiary_clabe)
-    # In received SPEI, some legacy parsers place the ORIGINATOR in these
-    # third-party fields: never call that account/bank the beneficiary.
-    direction = movement_direction(row)
-    if code and direction == "ENVIADO":
-        if not _present(get(row, "Banco del Beneficiario")):
-            changes["Banco del Beneficiario"] = INSTITUTIONS[code]
-        if not _present(get(row, "Código Banco Beneficiario")):
-            changes["Código Banco Beneficiario"] = code
-        if not _present(get(row, "Código Plaza/Producto CLABE")):
-            changes["Código Plaza/Producto CLABE"] = beneficiary_clabe[3:6]
     return changes, notes
+
+
+def complete_spei_banks(row: dict, values: dict) -> None:
+    """Expose known query banks in Excel, keeping supplied corrections intact.
+
+    The beneficiary of a received SPEI is the holder. A tracking key or a
+    16-digit debit card cannot supply a sender CLABE or a CLABE plaza code.
+    """
+    def current(label):
+        return values[label] if label in values else get(row, label)
+
+    text = metadata_search_text(str(current("Banco") or ""), current("Concepto"), current("Concepto Original"))
+    direction = movement_direction(row)
+    candidate = (identifier(current("Clave de Rastreo"))
+                 or text_key(current("Tipo de Operación")) == "SPEI"
+                 or re.search(r"\bSPEI\b|INTERBANCARI|\bRASTREO\b", text))
+    if not direction or not candidate:
+        return
+    owner_bank = bank_code(current("Banco")) or clabe_bank(current("CLABE Titular"))
+    if direction == "RECIBIDO":
+        beneficiary_clabe = account_identifier(current("CLABE Titular"))
+        receiver = clabe_bank(beneficiary_clabe) or owner_bank
+        sender = (bank_code(current("Banco Emisor")) or labelled_bank(text, "emisor")
+                  or clabe_bank(current("CLABE del Ordenante")))
+        participant = bank_code(current("Sucursal")) or bank_code(current("Banco del Beneficiario"))
+        if not sender and participant and participant != receiver:
+            sender = participant
+        if not sender:
+            other_banks = bank_mentions(text) - {receiver}
+            if len(other_banks) == 1:
+                sender = next(iter(other_banks))
+        if sender and not _present(get(row, "Banco Emisor")):
+            values["Banco Emisor"] = INSTITUTIONS[sender]
+    else:
+        beneficiary_clabe = next((account_identifier(current(label)) for label in
+                                  ("CLABE del Beneficiario", "Cuenta del Beneficiario")
+                                  if valid_clabe(current(label))), "")
+        receiver = (bank_code(current("Banco Receptor")) or labelled_bank(text, "receptor")
+                    or bank_code(current("Banco del Beneficiario"))
+                    or bank_code(current("Sucursal")) or clabe_bank(beneficiary_clabe))
+        if not receiver:
+            other_banks = bank_mentions(text) - {owner_bank}
+            if len(other_banks) == 1:
+                receiver = next(iter(other_banks))
+    if receiver:
+        if not _present(get(row, "Banco del Beneficiario")):
+            values["Banco del Beneficiario"] = INSTITUTIONS[receiver]
+        if not _present(current("Código Banco Beneficiario")):
+            values["Código Banco Beneficiario"] = receiver
+    if (valid_clabe(beneficiary_clabe) and clabe_bank(beneficiary_clabe) == receiver
+            and not _present(current("Código Plaza/Producto CLABE"))):
+        values["Código Plaza/Producto CLABE"] = beneficiary_clabe[3:6]
 
 
 # Inputs to the CEP TXT, including legacy fallbacks used when a preferred
@@ -269,17 +312,16 @@ CEP_QUERY_INPUT_HEADERS = frozenset({
     "SUCURSAL", "CLABEDELORDENANTE", "CUENTADELORDENANTE",
     "CONCEPTO", "CONCEPTOORIGINAL", "FECHADECORTE", "PERIODODEINICIO", "PERIODODEFIN",
 })
-CEP_HEADER_FILL = PatternFill("solid", fgColor="14695C")
+CEP_HEADER_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 
 def highlight_cep_headers(ws) -> None:
-    """Mark the source-of-truth input columns for Banxico in one teal tone."""
+    """Use yellow only on TXT inputs; every other header keeps its own style."""
     for cell in ws[1]:
         if header_key(cell.value) in CEP_QUERY_INPUT_HEADERS:
             cell.fill = copy(CEP_HEADER_FILL)
             font = copy(cell.font)
-            font.bold = True
-            font.color = "FFFFFF"
+            font.color = "202124"
             cell.font = font
 
 
@@ -508,6 +550,7 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             values["Número de Cuenta"] = account
         if owner and owner.sources:
             values["Origen Datos Titular"] = "; ".join(owner.sources)
+        complete_spei_banks(row, values)
         for field_name in ("Fecha de Operación", "Fecha de Liquidación", "Fecha de Corte"):
             old = get(row, field_name)
             if not _present(old) and field_name == "Fecha de Corte":
