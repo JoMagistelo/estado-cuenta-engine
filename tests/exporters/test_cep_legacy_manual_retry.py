@@ -225,3 +225,33 @@ def test_normalized_redundant_holder_column_removed_without_mutating_original():
     assert get(data[0], "Número de Cuenta") == "12345678901"
     assert get(data[0], "CLABE Titular") == OWN
     assert "Revisión Excel" not in sheets
+
+def test_legacy_unique_bank_and_account_donor_recovers_after_file_was_renamed():
+    source = workbook(old=True, received=True)
+    wb = load_workbook(BytesIO(source))
+    account = wb["Datos de la Cuenta"]
+    account.cell(2, 1, 999)
+    account.cell(2, 2, "old_renamed_file.pdf")
+    data = BytesIO()
+    wb.save(data)
+    wb.close()
+    q = queries_from_workbook(WorkbookBundle.from_uploaded(data.getvalue()).improved)[0]
+    assert q.ready and q.destination == OWN
+
+
+def test_legacy_conflicting_account_donors_do_not_assign_a_titular_clabe():
+    source = workbook(old=True, received=True)
+    wb = load_workbook(BytesIO(source))
+    account = wb["Datos de la Cuenta"]
+    account.cell(2, 1, 999)
+    account.cell(2, 2, "old_renamed_file.pdf")
+    account.append([998, "other_old_file.pdf", "bbva", "12345678901",
+                    clabe("012", "99999999999"),
+                    "15/12/2025", "14/01/2026", "14/01/2026"])
+    data = BytesIO()
+    wb.save(data)
+    wb.close()
+    q = queries_from_workbook(WorkbookBundle.from_uploaded(data.getvalue()).improved)[0]
+    assert not q.ready
+    assert q.destination == ""
+    assert "Falta cuenta beneficiaria" in q.issues
