@@ -30,7 +30,9 @@ def verify_pair(original: bytes, improved: bytes) -> int:
                        "Código Banco Beneficiario", "Código Plaza/Producto CLABE"}
             allowed.update({"Banco Emisor", "Banco Receptor", "Referencia SPEI", "Referencia Original"})
             for name in left:
-                if name in allowed or name == '_row':
+                if name in allowed or name == '_row' or name.startswith("CEP "):
+                    # Imported previous CEP results are purposely cleared:
+                    # they cannot be trusted without reloading the XML ZIP.
                     continue
                 if get(left, name) != get(right, name):
                     raise ValueError(f"La comprobación detectó cambio en {name}, fila {left['_row']}")
