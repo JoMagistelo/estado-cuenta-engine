@@ -258,13 +258,16 @@ def recover_fields(row: dict) -> tuple[dict, list[str]]:
     return changes, notes
 
 
-# Only these headers contribute to the six official fields for the CEP TXT.
-# Highlight them on normalized/crossed copies, never in the original export.
+# Inputs to the CEP TXT, including legacy fallbacks used when a preferred
+# field is absent. Do not mark references or CEP results as editable inputs.
+# Highlight normalized/crossed copies only, never the original export.
 CEP_QUERY_INPUT_HEADERS = frozenset({
     "TIPODEOPERACION", "FECHADEOPERACION", "CLAVEDERASTREO",
     "BANCO", "BANCODELBENEFICIARIO", "BANCOEMISOR", "BANCORECEPTOR",
     "CLABEDELBENEFICIARIO", "CUENTADELBENEFICIARIO",
-    "CLABETITULAR", "NUMERODECUENTA", "CARGO", "ABONO",
+    "CLABETITULAR", "NUMERODECUENTA", "CUENTATITULAR", "CARGO", "ABONO",
+    "SUCURSAL", "CLABEDELORDENANTE", "CUENTADELORDENANTE",
+    "CONCEPTO", "CONCEPTOORIGINAL", "FECHADECORTE", "PERIODODEINICIO", "PERIODODEFIN",
 })
 CEP_HEADER_FILL = PatternFill("solid", fgColor="14695C")
 
@@ -278,10 +281,6 @@ def highlight_cep_headers(ws) -> None:
             font.bold = True
             font.color = "FFFFFF"
             cell.font = font
-            ws.column_dimensions[get_column_letter(cell.column)].width = max(
-                ws.column_dimensions[get_column_letter(cell.column)].width or 0,
-                min(30, max(17, len(str(cell.value)) + 3)),
-            )
 
 
 def movement_direction(row: dict) -> str:
@@ -574,6 +573,7 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
     for old_sheet in ("Revisión Excel", "Revisión CEP", "Control CEP", "Datos CEP"):
         if old_sheet in workbook:
             del workbook[old_sheet]
+    highlight_cep_headers(ws)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(destination)

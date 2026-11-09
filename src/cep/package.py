@@ -12,7 +12,9 @@ from openpyxl import load_workbook
 
 from cep.evidence import CepEvidence, match_evidence
 from cep.queries import CepQuery
-from exporters.excel.normalization import collapse_holder_account, header_key, put_columns, set_literal
+from exporters.excel.normalization import (
+    collapse_holder_account, header_key, highlight_cep_headers, put_columns, set_literal,
+)
 from exporters.excel.workbook_bundle import WorkbookBundle
 from exporters.excel.writer import write_table_sheet
 
@@ -113,6 +115,7 @@ def append_cep(source: bytes, matches: dict[int, dict], queries: list[CepQuery],
             for cell in cells:
                 if isinstance(cell.value, str):
                     set_literal(cell, cell.value)
+    highlight_cep_headers(ws)
     output = BytesIO()
     workbook.save(output)
     workbook.close()

@@ -89,7 +89,7 @@ def test_december_cutoff_in_january_and_leap_year():
 
 
 def test_normalization_replaces_date_cells_and_preserves_original_bytes_and_edits():
-    original = excel(formula=True)
+    original = excel(formula=True, movements=[movement_row(**{"Sucursal": "SUCURSAL 123"})])
     bundle = WorkbookBundle.from_excel(original)
     assert bundle.original == original
     row = rows(bundle.improved)[0]
@@ -99,7 +99,7 @@ def test_normalization_replaces_date_cells_and_preserves_original_bytes_and_edit
     assert get(row, "Número de Cuenta") == "12345678901"
     assert get(row, "Cuenta Titular") is None
     assert get(row, "CLABE Titular") == OWN
-    assert get(row, "Sucursal") == "BANORTE"
+    assert get(row, "Sucursal") == "SUCURSAL 123"
     assert get(row, "Banco del Beneficiario") == "BANORTE"
     assert get(row, "Referencia") == "0000123"
     assert get(row, "Beneficiario manual") == "Conservar edición"
