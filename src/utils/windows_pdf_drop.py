@@ -2,7 +2,7 @@
 
 An owned, nonactivating WS_POPUP avoids attaching a Python child HWND to the
 Flutter renderer (which can reset DPI state or leave a grey rendering surface).
-It follows the reserved 96-DIP area and hides on tab changes/minimize/dialogs.
+It follows the reserved footer and hides on tab changes/minimize/dialogs.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import threading
 from pathlib import Path
 
 
-PDF_DROP_HEIGHT_DIP = 96
-PDF_DROP_MARGIN_DIP = 14
+PDF_DROP_HEIGHT_DIP = 38
+PDF_DROP_MARGIN_DIP = 8
 
 
 def drop_window_geometry(client_width: int, client_height: int, x: int, y: int, scale: float) -> tuple[int, int, int, int]:
