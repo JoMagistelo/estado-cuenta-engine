@@ -23,7 +23,12 @@ from engine.ocr_reprocessing import reprocess_with_secondary_ocr
 from engine.pipeline import process_bank_statements_incremental
 from exporters.excel import export_batch_excel
 from exporters.excel.batch_exporter import pending_ocr_selection_files
-from utils.windows_pdf_drop import PDF_DROP_HEIGHT_DIP, WindowsPdfDropZone, pdf_drop_paths
+from utils.windows_pdf_drop import (
+    PDF_DROP_HEIGHT_DIP,
+    PDF_DROP_MARGIN_DIP,
+    WindowsPdfDropZone,
+    pdf_drop_paths,
+)
 from cep_panel import CepPanel
 from utils.result_state import (
     movement_matches_kind,
@@ -149,7 +154,19 @@ def main(page: ft.Page):
     page.window.maximizable = True
     page.window.maximized = False
     page.window.prevent_close = True
-    page.padding = 14
+    page.padding = PDF_DROP_MARGIN_DIP
+    button_style = ft.ButtonStyle(
+        text_style=ft.TextStyle(size=11),
+        icon_size=16,
+        padding=ft.Padding.symmetric(horizontal=12, vertical=7),
+        visual_density=ft.VisualDensity.COMPACT,
+    )
+    page.theme = ft.Theme(
+        visual_density=ft.VisualDensity.COMPACT,
+        filled_button_theme=ft.FilledButtonTheme(style=button_style),
+        outlined_button_theme=ft.OutlinedButtonTheme(style=button_style),
+        text_button_theme=ft.TextButtonTheme(style=button_style),
+    )
     page.theme_mode = ft.ThemeMode.LIGHT
     page.bgcolor = ft.Colors.SURFACE
     page.scroll = None
@@ -545,7 +562,7 @@ def main(page: ft.Page):
                 spacing=4,
                 expand=True,
             ),
-            height=260,
+            height=190,
             padding=6,
             border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
             border_radius=8,
@@ -1062,8 +1079,8 @@ def main(page: ft.Page):
                     text_align=ft.TextAlign.CENTER,
                 ),
                 width=width,
-                height=32,
-                padding=ft.Padding.symmetric(horizontal=5, vertical=7),
+                height=28,
+                padding=ft.Padding.symmetric(horizontal=5, vertical=4),
                 bgcolor=GOB_GREEN_DARK,
                 alignment=ft.Alignment.CENTER,
                 border=ft.Border.only(right=ft.BorderSide(1, GOB_GREEN)),
@@ -1078,7 +1095,7 @@ def main(page: ft.Page):
                 selectable=True,
             ),
             width=width,
-            height=38,
+            height=32,
             padding=ft.Padding.symmetric(horizontal=5, vertical=4),
             alignment=ft.Alignment.CENTER_LEFT,
             border=ft.Border.only(right=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)),
@@ -1097,7 +1114,9 @@ def main(page: ft.Page):
             [movement_cell(name, label, width, header=True) for name, label, width in MOVEMENT_COLUMNS],
             spacing=0,
         )
-        body = ft.Column(spacing=0, height=292, scroll=ft.ScrollMode.AUTO)
+        # One vertical scroll for the page, including every movement. A nested
+        # fixed-height scroller here traps the mouse wheel inside the table.
+        body = ft.Column(spacing=0)
         filter_field = ft.TextField(
             hint_text='Filtrar movimientos',
             width=245,
@@ -2893,12 +2912,14 @@ def main(page: ft.Page):
     )
     config_button = ft.IconButton(
         icon=ft.Icons.SETTINGS,
+        icon_size=18, width=30, height=30, padding=4,
         tooltip='Configuración',
         icon_color=ft.Colors.ON_SURFACE_VARIANT,
         on_click=show_settings,
     )
     help_button = ft.IconButton(
         icon=ft.Icons.HELP_OUTLINE,
+        icon_size=18, width=30, height=30, padding=4,
         tooltip='Ayuda',
         icon_color=ft.Colors.ON_SURFACE_VARIANT,
         on_click=show_help,
@@ -2912,9 +2933,9 @@ def main(page: ft.Page):
     if LOGO_PATH.exists():
         header.append(
             ft.Container(
-                ft.Image(src=str(LOGO_PATH), width=145, height=72, fit=ft.BoxFit.CONTAIN),
-                width=152,
-                height=76,
+                ft.Image(src=str(LOGO_PATH), width=108, height=42, fit=ft.BoxFit.CONTAIN),
+                width=116,
+                height=46,
                 alignment=ft.Alignment.CENTER,
             )
         )
@@ -2996,7 +3017,7 @@ def main(page: ft.Page):
             ft.Divider(height=7),
             ft.Row(
                 [
-                    ft.Text('📄 Extractor de Movimientos Financieros', size=22, weight=ft.FontWeight.BOLD),
+                    ft.Text('📄 Extractor de Movimientos Financieros', size=17, weight=ft.FontWeight.BOLD),
                     ft.Container(expand=True),
                     ft.Container(
                         ft.Text(f'Versión {APP_VERSION}', size=8, weight=ft.FontWeight.BOLD),
@@ -3025,7 +3046,7 @@ def main(page: ft.Page):
                     spacing=6,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=ft.Padding.symmetric(vertical=7),
+                padding=ft.Padding.symmetric(vertical=4),
             ),
             audit_section,
             export_section,
@@ -3041,7 +3062,7 @@ def main(page: ft.Page):
                                      spacing=0, expand=True)
     drop_footer = ft.Container(
         content=ft.Text('Arrastra aquí tus estados de cuenta PDF · Se añadirán al lote actual',
-                        size=12, text_align=ft.TextAlign.CENTER),
+                        size=10, text_align=ft.TextAlign.CENTER),
         height=PDF_DROP_HEIGHT_DIP, alignment=ft.Alignment.CENTER,
         bgcolor=GOB_GREEN_LIGHT, border_radius=7,
         visible=False,
@@ -3058,14 +3079,16 @@ def main(page: ft.Page):
 
     cep_panel.control.visible = False
     workspaces = ft.Tabs(length=2, selected_index=0, on_change=workspace_changed,
-        content=ft.TabBar(tabs=[ft.Tab(label='Extracción de movimientos', icon=ft.Icons.TABLE_CHART),
-                            ft.Tab(label='CEP Banxico', icon=ft.Icons.ACCOUNT_BALANCE)],
+        content=ft.TabBar(tabs=[ft.Tab(label='Extracción de movimientos', height=32),
+                            ft.Tab(label='CEP Banxico', height=32)],
+                      label_text_style=ft.TextStyle(size=11, weight=ft.FontWeight.W_600),
+                      unselected_label_text_style=ft.TextStyle(size=11),
                       indicator_color=GOB_GREEN, label_color=GOB_GREEN))
     # Both workspaces stay mounted; only the active one participates in layout.
     # This also keeps live extraction updates valid while viewing CEP.
     workspace_body = ft.Column([extraction_workspace, cep_panel.control], expand=True, spacing=0)
     app_content = ft.Column([*app_content.controls[:3], workspaces, workspace_body, drop_footer],
-                            spacing=5, expand=True)
+                            spacing=3, expand=True)
     page.run_task(poller)
     page.add(app_content)
     drop_zone = WindowsPdfDropZone(page.title,

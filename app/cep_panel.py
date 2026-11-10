@@ -28,10 +28,10 @@ class CepPanel:
         self.queries = []
         self.evidence = CepEvidence()
         self.busy = False
-        self.message = ft.Text("Carga un Excel exportado o usa los resultados actuales.", selectable=True, size=12)
-        self.summary = ft.Text("", size=12, weight=ft.FontWeight.BOLD)
-        self.preview = ft.Column(spacing=4)
-        self.adjacent = ft.Checkbox(label="Fecha homologada y reintentos de un día antes y después", value=True)
+        self.message = ft.Text("", selectable=True, size=11)
+        self.summary = ft.Text("", size=11, weight=ft.FontWeight.BOLD)
+        self.adjacent = ft.Checkbox(label="Fecha homologada y reintentos de un día antes y después",
+                                    label_style=ft.TextStyle(size=11), value=True)
         self.load_button = ft.OutlinedButton(content="Cargar Excel", icon=ft.Icons.UPLOAD_FILE, on_click=self.load_excel)
         self.current_button = ft.FilledButton(content="Usar extracción actual", icon=ft.Icons.TABLE_VIEW, on_click=self.use_current)
         self.normalize_button = ft.FilledButton(content="Normalizar Excel", icon=ft.Icons.AUTO_FIX_HIGH,
@@ -43,45 +43,19 @@ class CepPanel:
         self.actions = [self.load_button, self.current_button, self.normalize_button, self.clean_button,
                         self.txt_button, self.zip_button, self.final_button]
         self.control = ft.Column([
-            ft.Text("CEP Banxico", size=22, weight=ft.FontWeight.BOLD),
-            ft.Text("1. Selecciona tus movimientos", size=15, weight=ft.FontWeight.BOLD),
-            ft.Text(
-                "Acepta Excel antiguos, originales, mejorados o ya cruzados. "
-                "Después de corregir Movimientos puedes descargar TXT directamente, "
-                "sin volver a normalizar. La descarga del Excel original sigue en Extracción.",
-                size=12,
-            ),
+            ft.Text("CEP Banxico", size=17, weight=ft.FontWeight.BOLD),
+            ft.Text("1. Selecciona tus movimientos", size=13, weight=ft.FontWeight.BOLD),
             ft.Row([self.load_button, self.current_button], wrap=True),
             self.message, self.summary,
             ft.Row([self.normalize_button, self.clean_button], wrap=True),
             ft.Divider(),
-            ft.Text("2. Descarga el TXT para Banxico", size=15, weight=ft.FontWeight.BOLD),
+            ft.Text("2. Descarga el TXT para Banxico", size=13, weight=ft.FontWeight.BOLD),
             self.adjacent,
-            ft.Text(
-                "En Movimientos: verde para los datos originales, azul para las seis columnas TXT "
-                "y naranja para los resultados CEP. Corrige directamente las columnas azules: "
-                "fecha, rastreo, banco emisor, banco receptor, cuenta beneficiaria e importe. "
-                "Guarda el XLSX, vuelve a cargarlo y genera TXT directamente.",
-                size=12,
-                color=ft.Colors.ON_SURFACE_VARIANT,
-            ),
-            ft.Text(
-                "Normalizar clasifica las transferencias y recupera datos SPEI faltantes del concepto. "
-                "Filtra los SPEI en Tipo de Operación y corrige los seis datos azules. "
-                "Si el Excel ya contiene columnas TXT, se usan sus valores, incluso tus correcciones. "
-                "La clasificación es automática y sus reglas están incluidas en la aplicación. "
-                "Si hay más de 500 consultas se generan varios TXT.",
-                size=12,
-            ),
             ft.Row([self.txt_button, ft.TextButton(content="Abrir consulta por lotes en Banxico", on_click=self.open_banxico)], wrap=True),
-            ft.Text("Carga los TXT en Banxico y solicita PDF y XML. Después importa aquí los ZIP descargados.", size=12),
             ft.Divider(),
-            ft.Text("3. Cruza los comprobantes con tus movimientos", size=15, weight=ft.FontWeight.BOLD),
-            ft.Text("Los datos oficiales se añaden al final de cada fila coincidente. Puedes acumular varios ZIP de originales y reintentos.", size=12),
+            ft.Text("3. Cruza los comprobantes con tus movimientos", size=13, weight=ft.FontWeight.BOLD),
             ft.Row([self.zip_button, self.final_button], wrap=True),
-            ft.Text("El ZIP final incluye ambos Excel cruzados y los PDF/XML renombrados. Extrae todo su contenido para abrir cada PDF desde el vínculo del Excel.", size=12),
-            self.preview,
-        ], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+        ], spacing=7, scroll=ft.ScrollMode.AUTO, expand=True)
 
     def refresh(self):
         for button in self.actions:
@@ -123,9 +97,9 @@ class CepPanel:
                               f"{report.dates_review} fechas para revisión; "
                               f"{sum(report.classifications.values())} transferencias clasificadas; "
                               f"{report.metadata_recovered} campos recuperados.")
-        self.update_preview()
+        self.update_summary()
 
-    def update_preview(self):
+    def update_summary(self):
         candidates = [q for q in self.queries if q.candidate]
         ready = sum(q.ready for q in candidates)
         matches = match_evidence(self.queries, self.evidence) if self.evidence.preserved else {}
@@ -133,13 +107,7 @@ class CepPanel:
         self.summary.value = f"{len(candidates)} candidatos · {ready} con datos para TXT · {len(candidates) - ready} para revisión"
         if matches:
             self.summary.value += f" · {counts['EXITO'] + counts['EXITO_FECHA_ALTERNATIVA']} con CEP · {counts['REVISAR']} cruces para revisar"
-        self.preview.controls = [ft.Text("Vista previa de candidatos (primeros 50; el Excel conserva todos)", size=12, weight=ft.FontWeight.BOLD)]
-        for q in candidates[:50]:
-            status = matches[q.row]["CEP Estado"] if matches else "LISTO" if q.ready else "NO_CONSULTABLE"
-            self.preview.controls.append(ft.Text(
-                f"Fila {q.row} · {q.filename} · {q.operation_date or 'Fecha pendiente'} · {q.direction} · "
-                f"{q.value or ''} · {q.tracking or 'Sin rastreo'} · {status}"
-                + (" · " + "; ".join(q.issues) if q.issues else ""), size=11, selectable=True))
+
 
     def set_source(self, source, name="movimientos.xlsx"):
         # Validate and prepare direct queries before switching the UI. Uploaded
@@ -155,7 +123,7 @@ class CepPanel:
             + ("TXT listo para generarse desde las columnas azules, sin volver a normalizar."
                if bundle.prepared else "Normalizar prepara las columnas azules. También puedes generar TXT directamente.")
         )
-        self.update_preview()
+        self.update_summary()
 
     async def normalize_excel(self, event=None):
         if self.source is None:
@@ -248,7 +216,7 @@ class CepPanel:
         def finish(evidence):
             self.evidence = evidence
             self.message.value = f"{len(evidence.records)} XML CEP leídos; {len(evidence.review)} documentos para revisión."
-            self.update_preview()
+            self.update_summary()
         await self.perform(work, finish)
 
     async def save_package(self, event):

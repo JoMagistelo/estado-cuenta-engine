@@ -6,6 +6,7 @@ import pytest
 
 from utils.windows_pdf_drop import (
     PDF_DROP_HEIGHT_DIP,
+    PDF_DROP_MARGIN_DIP,
     WindowsPdfDropZone,
     drop_window_geometry,
     pdf_drop_paths,
@@ -28,13 +29,13 @@ def test_dpi_drop_receiver_fits_the_reserved_footer_and_never_covers_export():
             width, height, x, y, scale
         )
         assert actual_height == round(PDF_DROP_HEIGHT_DIP * scale)
-        assert actual_height >= 96
+        assert 32 * scale <= actual_height < 48 * scale
         assert left > x
         assert top >= y
         assert left + actual_width <= x + width
         assert top + actual_height < y + height
         # Exportación is outside the reserved native footer.
-        assert top == y + height - round(14 * scale) - actual_height
+        assert top == y + height - round(PDF_DROP_MARGIN_DIP * scale) - actual_height
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Native Windows Explorer drop lane")
