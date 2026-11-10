@@ -80,11 +80,12 @@ def test_every_legacy_generation_can_fill_missing_fields_and_preserve_existing_s
     assert bundle.original == original
     after = read(bundle.improved)[0]
     for label in ("Concepto", "Clave de Rastreo", "Referencia", "CLABE del Beneficiario",
-                  "Cuenta del Beneficiario", "Cargo", "Abono", "Banco del Beneficiario"):
+                  "Cuenta del Beneficiario", "Cargo", "Abono"):
         if get(before, label) is not None and str(get(before, label)).strip():
             assert get(before, label) == get(after, label)
-    for label in ("Concepto", "Cargo", "Abono", "Tipo de Operación"):
+    for label in ("Concepto", "Cargo", "Abono"):
         assert get(before, label) == get(after, label)
+    assert get(after, "Tipo de Operación") == "SPEI Enviado"
     q = queries_from_workbook(bundle.improved)[0]
     assert q.ready, q.issues
     assert get(after, "TXT Cuenta Beneficiaria") == OTHER
@@ -197,7 +198,10 @@ def test_filtered_hidden_rows_and_spei_without_destination_remain_in_movimientos
     assert queries[0].ready
     assert queries[1].candidate and queries[1].tracking == "SINDESTINO001"
     assert not queries[1].ready
-    assert "TXT Cuenta Beneficiaria" in get(rows[1], "Revisión Normalización")
+    result = match_evidence(queries, CepEvidence())[queries[1].row]
+    assert result["CEP Estado"] == "NO_CONSULTABLE"
+    assert "TXT Cuenta Beneficiaria" in result["CEP Detalle"]
+    assert "Revisión Normalización" not in rows[1]
 
 
 def test_original_widths_and_filters_follow_their_columns_when_legacy_layout_is_prepared():
@@ -252,8 +256,9 @@ def test_layout_hides_trace_and_puts_complete_official_results_after_blue_inputs
     try:
         ws = wb["Movimientos"]
         headers = [c.value for c in ws[1]]
-        start = headers.index("Revisión Normalización") + 1
+        start = headers.index(TXT_COLUMNS[0])
         assert headers[start:start + 6] == list(TXT_COLUMNS)
+        assert headers[start - len(TRACE_COLUMNS):start] == list(TRACE_COLUMNS)
         assert headers[start + 6:] == list(CEP_COLUMNS)
         for c in ws[1]:
             expected = "00156082" if c.value in TXT_COLUMNS else "00F4B183" if c.value in CEP_COLUMNS else "001F4D3A"

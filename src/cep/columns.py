@@ -8,7 +8,8 @@ from openpyxl.utils import get_column_letter
 
 from cep.catalog import CATALOG_SOURCE_URL, CATALOG_VERIFIED_ON, INSTITUTIONS
 from exporters.excel.cells import (
-    ensure_columns, header_key, put_columns, remap_filter_columns, set_literal,
+    delete_column, ensure_columns, header_key, put_columns, remap_filter_columns,
+    rows_from_sheet, set_literal,
 )
 from exporters.excel.styles import GOB_GREEN, HEADER_FONT
 from exporters.excel.writer import write_table_sheet
@@ -23,7 +24,15 @@ TRACE_COLUMNS = (
     "Fecha de Operación Original", "Estado de Fecha",
     "Fecha de Liquidación Original", "Fecha de Corte Original",
 )
-REVIEW_COLUMN = "Revisión Normalización"
+# Read older versions before removing these generated intermediary fields.
+# They are not part of the original parser layout or the six-field TXT.
+RETIRED_MOVEMENT_COLUMNS = (
+    "Banco del Beneficiario", "Código Banco Beneficiario", "Código Plaza/Producto CLABE",
+    "Banco Emisor", "Banco Receptor", "Cuenta del Ordenante", "CLABE del Ordenante",
+    "Revisión Normalización", "Clasificación SPEI", "Referencia SPEI",
+    "Referencia Original", "Origen Datos Titular",
+)
+RETIRED_KEYS = frozenset(map(header_key, RETIRED_MOVEMENT_COLUMNS))
 CEP_COLUMNS = (
     "CEP Estado", "CEP Detalle", "CEP Fecha", "CEP Diferencia Días", "CEP Monto",
     "CEP Clave de Rastreo", "CEP Referencia", "CEP Banco Emisor", "CEP Banco Receptor",
@@ -53,7 +62,7 @@ def query_values(query):
 def install_txt_inputs(ws, queries) -> None:
     """Initialize once. Even a blank or partial existing block is authoritative."""
     existing = has_txt_inputs(ws[1])
-    ensure_columns(ws, (REVIEW_COLUMN,) + TXT_COLUMNS)
+    ensure_columns(ws, TXT_COLUMNS)
     if existing:
         return
     for q in queries:
@@ -70,13 +79,38 @@ def safe_to_reorder(workbook) -> bool:
     )
 
 
-def arrange_movement_blocks(workbook, cep_columns=()) -> None:
-    """Original columns, review, six TXT inputs, then official CEP results."""
+def _compact_generated_fields(workbook, queries):
+    """One output boundary for normalized copies and both crossed workbooks."""
+    from cep.spei_classifier import CLASSIFICATION_COLUMN, stored_classification
     ws = workbook["Movimientos"]
-    columns = ensure_columns(ws, (REVIEW_COLUMN,) + TXT_COLUMNS + tuple(cep_columns))
-    generated = {header_key(REVIEW_COLUMN)} | TXT_KEYS | {header_key(h) for h in cep_columns}
+    obsolete = [cell.column for cell in ws[1] if header_key(cell.value) in RETIRED_KEYS]
+    classifier_sheets = [sheet for sheet in workbook
+                         if header_key(sheet.title) in {"CLASIFICADORSPEI", "CLLASIFICADORSPEI"}]
+    if (obsolete or classifier_sheets) and not safe_to_reorder(workbook):
+        raise ValueError(
+            "El Excel tiene fórmulas/tablas que impiden retirar las columnas auxiliares sin mover referencias. "
+            "Puedes generar TXT directamente o exportar desde una copia sin esas dependencias."
+        )
+    query_types = {q.row: q.classification for q in queries if q.classification}
+    for row in rows_from_sheet(ws):
+        label = query_types.get(row["_row"]) or stored_classification(row)
+        if label:
+            put_columns(ws, row["_row"], {CLASSIFICATION_COLUMN: label})
+    for column in sorted(obsolete, reverse=True):
+        delete_column(ws, column)
+    for sheet in classifier_sheets:
+        workbook.remove(sheet)
+
+
+def arrange_movement_blocks(workbook, cep_columns=(), *, queries=()) -> None:
+    """Parser fields, hidden date trace, six TXT fields, official CEP results."""
+    _compact_generated_fields(workbook, queries)
+    ws = workbook["Movimientos"]
+    columns = ensure_columns(ws, TXT_COLUMNS + tuple(cep_columns))
+    trace = [columns[header_key(h)] for h in TRACE_COLUMNS if header_key(h) in columns]
+    generated = TXT_KEYS | {header_key(h) for h in (*TRACE_COLUMNS, *cep_columns)}
     base = [c.column for c in ws[1] if header_key(c.value) not in generated]
-    order = base + [columns[header_key(h)] for h in (REVIEW_COLUMN,) + TXT_COLUMNS + tuple(cep_columns)]
+    order = base + trace + [columns[header_key(h)] for h in TXT_COLUMNS + tuple(cep_columns)]
     if order != list(range(1, ws.max_column + 1)):
         if not safe_to_reorder(workbook):
             raise ValueError(

@@ -67,9 +67,9 @@ class CepPanel:
             ),
             ft.Text(
                 "Normalizar clasifica las transferencias y recupera datos SPEI faltantes del concepto. "
-                "Puedes filtrar por Clasificación SPEI; revisa los pendientes en Revisión Normalización. "
+                "Filtra los SPEI en Tipo de Operación y corrige los seis datos azules. "
                 "Si el Excel ya contiene columnas TXT, se usan sus valores, incluso tus correcciones. "
-                "Los catálogos de bancos y palabras de clasificación están incluidos. "
+                "La clasificación es automática y sus reglas están incluidas en la aplicación. "
                 "Si hay más de 500 consultas se generan varios TXT.",
                 size=12,
             ),

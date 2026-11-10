@@ -143,7 +143,7 @@ def render_cep_workspace(results, busy=False):
     st.caption(
         "Movimientos conserva los datos originales en verde, los seis campos TXT en azul "
         "y los resultados oficiales CEP en naranja. Corrige directamente las columnas azules, "
-        "filtra por Clasificación SPEI y consulta Revisión Normalización para los pendientes; "
+        "filtra por Tipo de Operación y revisa el resultado del cruce en CEP Estado / CEP Detalle; "
         "vuelve a cargar el Excel y prepara "
         "un TXT nuevo sin normalizar. El ZIP conserva ambos Excel cruzados y los PDF/XML."
     )

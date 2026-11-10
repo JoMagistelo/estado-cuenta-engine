@@ -15,14 +15,14 @@ from openpyxl.utils import get_column_letter
 from cep.catalog import account_identifier, bank_code, clabe_bank, identifier, valid_clabe
 from cep.catalog import statement_account as _account
 from cep.columns import (
-    CEP_COLUMNS, REVIEW_COLUMN, TXT_COLUMNS, add_bank_catalog, arrange_movement_blocks,
+    CEP_COLUMNS, RETIRED_KEYS, TXT_COLUMNS, add_bank_catalog, arrange_movement_blocks,
     has_txt_inputs, install_txt_inputs, query_values, safe_to_reorder,
 )
 from cep.queries import queries_from_rows
-from cep.spei_classifier import CLASSIFICATION_COLUMN, add_classifier_catalog, classify_spei
-from cep.spei_recovery import recover_missing
+from cep.spei_classifier import CLASSIFICATION_COLUMN, classify_spei, operation_type, stored_classification
+from cep.spei_recovery import SOURCE_RECOVERY_FIELDS, recover_missing
 from exporters.excel.cells import (
-    delete_column, get, header_key, insert_column, put_columns, rows_from_sheet, set_literal, updated_row,
+    delete_column, ensure_columns, get, header_key, insert_column, put_columns, rows_from_sheet, set_literal, updated_row,
 )
 from utils.statement_dates import MONTHS, resolve_date, statement_interval, text_key
 from utils.spei_metadata import bbva_statement_reference, extract_spei_metadata, metadata_search_text, valid_tracking
@@ -287,6 +287,7 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
         existing_txt = has_txt_inputs(ws[1])
         movable = safe_to_reorder(workbook)
         headers = {header_key(c.value): c.column for c in ws[1]}
+        legacy_schema = bool(RETIRED_KEYS & headers.keys())
         if not existing_txt and "CUENTATITULAR" in headers and "NUMERODECUENTA" in headers and not movable:
             raise ValueError(
                 "El Excel tiene fórmulas o tablas que impiden quitar con seguridad Cuenta Titular. "
@@ -300,6 +301,9 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             insert_column(ws, position)
             ws.cell(1, position, "CLABE Titular")._style = copy(ws.cell(1, 1)._style)
             ws.column_dimensions[get_column_letter(position)].width = 24
+        # Legacy workbooks occasionally omitted the type. Add it before the
+        # trace columns so formula-bearing files keep their existing positions.
+        ensure_columns(ws, (CLASSIFICATION_COLUMN,))
 
         def record(row, label, old, new, detail):
             report.changes.append({
@@ -332,11 +336,15 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             owner_index.setdefault(key, []).append(owner)
 
         baseline_rows = []
+        query_rows = []
+        authoritative_txt_rows = set()
         ambiguous_tracking = set()
         for row in rows_from_sheet(ws):
             if get(row, "Sin información"):
                 continue
             report.movements += 1
+            if existing_txt and not legacy_schema and stored_classification(row):
+                authoritative_txt_rows.add(row["_row"])
             key = (identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")))
             matches = owner_index.get(key, [])
             owner = matches[0] if len(matches) == 1 else None
@@ -348,19 +356,14 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             if (any(note.startswith("Clave de Rastreo: varias candidatas") for note in recovery_notes)
                     and not valid_tracking(get(row, "Clave de Rastreo"))):
                 ambiguous_tracking.add(row["_row"])
-            notes = list(classification.notes) + recovery_notes
             values = {}
             account = _account(get(row, "Número de Cuenta")) or (owner.account if owner else "")
             own_clabe = account_identifier(get(row, "CLABE Titular"))
             agrees = not (owner and owner.account and account and owner.account != account)
             if not _present(own_clabe):
                 values["CLABE Titular"] = owner.clabe if owner and agrees else ""
-            elif not valid_clabe(own_clabe):
-                notes.append("Cuenta/CLABE Titular conservada; revisa el destino copiado al bloque TXT")
             if account and not _account(get(row, "Número de Cuenta")):
                 values["Número de Cuenta"] = account
-            if owner and owner.sources:
-                values["Origen Datos Titular"] = "; ".join(owner.sources)
             for label in ("Fecha de Operación", "Fecha de Liquidación", "Fecha de Corte"):
                 old = get(row, label)
                 if not _present(old) and label == "Fecha de Corte":
@@ -381,37 +384,34 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
                     values["Estado de Fecha"] = resolution.status
                     if resolution.status in {"VACIA", "REVISAR", "FUERA_DE_PERIODO", "POR_ARCHIVO"}:
                         report.dates_review += 1
-                if resolution.status in {"REVISAR", "FUERA_DE_PERIODO", "POR_ARCHIVO"}:
-                    notes.append(f"{label}: {resolution.detail}")
                 if (resolution.value and not isinstance(old, (date, datetime))) or resolution.status == "REVISAR":
                     record(row, label, old, resolution.value or old, resolution.status + ": " + resolution.detail)
-            if existing_txt:
+            if existing_txt and row["_row"] not in authoritative_txt_rows:
                 # Reproduce what the previous normalizer could infer. A blank
                 # blue cell whose old source was usable is an intentional edit;
                 # only genuinely newly recovered evidence may fill old gaps.
                 old_recovered, _ = recover_fields(row)
                 baseline_rows.append(updated_row(updated_row(row, values), old_recovered))
             for label, value in recovered.items():
-                values[label] = value
-                record(row, label, get(row, label), value, "Recuperado del concepto SPEI; campo etiquetado o bloque bancario")
+                # Only already-existing parser fields can be completed in
+                # green. Bank/ordenante/reference intermediates stay in memory.
+                if label in SOURCE_RECOVERY_FIELDS and any(header_key(k) == header_key(label) for k in row):
+                    values[label] = value
+                    record(row, label, get(row, label), value, "Recuperado del concepto SPEI")
             report.metadata_recovered += len(recovered)
-            values[CLASSIFICATION_COLUMN] = classification.label or None
-            values[REVIEW_COLUMN] = "; ".join(dict.fromkeys(notes))
+            values[CLASSIFICATION_COLUMN] = operation_type(row, classification)
+            query_rows.append(updated_row(updated_row(row, values), recovered))
             put_columns(ws, row["_row"], values)
 
-        movement_rows = rows_from_sheet(ws)
         current_accounts = rows_from_sheet(workbook["Datos de la Cuenta"]) if "Datos de la Cuenta" in workbook else []
-        queries = queries_from_rows(movement_rows, current_accounts)
-        rows_index = {row["_row"]: row for row in movement_rows}
+        queries = queries_from_rows(query_rows, current_accounts)
+        rows_index = {row["_row"]: row for row in query_rows}
         for query in queries:
             if not query.candidate:
                 continue
             if query.row in ambiguous_tracking:
                 query.tracking = ""
                 query.issues.append("Varias claves de rastreo: completa TXT Clave de Rastreo")
-            current = get(rows_index[query.row], REVIEW_COLUMN, "")
-            if query.issues:
-                put_columns(ws, query.row, {REVIEW_COLUMN: "; ".join(dict.fromkeys([current] + query.issues)).strip("; ")})
             # A contradictory automatic route must not become a ready query
             # simply by copying it into the authoritative blue block. Existing
             # blue values still win; newly inferred conflicting banks stay blank.
@@ -427,7 +427,7 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
             baseline_queries = {q.row: q for q in queries_from_rows(baseline_rows, current_accounts)}
             for query in queries:
                 baseline = baseline_queries.get(query.row)
-                if not baseline or not query.candidate:
+                if query.row in authoritative_txt_rows or not baseline or not query.candidate:
                     continue
                 row = rows_index[query.row]
                 old_values = query_values(baseline)
@@ -439,14 +439,6 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
                     if blank and _present(value) and (new_candidate or not _present(old_values[label])):
                         put_columns(ws, query.row, {label: value})
                         record(row, label, previous, value, "Nuevo metadato recuperado; se conservan las demás celdas TXT")
-        # Report exactly the issues of the authoritative blue cells.
-        prepared_rows = rows_from_sheet(ws)
-        prepared_index = {row["_row"]: row for row in prepared_rows}
-        for q in queries_from_rows(prepared_rows, current_accounts, txt_inputs=True):
-            if q.candidate and q.issues:
-                current = get(prepared_index[q.row], REVIEW_COLUMN, "")
-                put_columns(ws, q.row, {REVIEW_COLUMN: "; ".join(dict.fromkeys([current] + q.issues)).strip("; ")})
-
         stale = [c.column for c in ws[1] if c.value in CEP_COLUMNS]
         if stale and not movable:
             raise ValueError(
@@ -458,9 +450,8 @@ def normalize_workbook(source: str | Path | bytes, destination: str | Path) -> N
         for old_sheet in ("Revisión Excel", "Revisión CEP", "Control CEP", "Datos CEP"):
             if old_sheet in workbook:
                 del workbook[old_sheet]
-        arrange_movement_blocks(workbook)
+        arrange_movement_blocks(workbook, queries=queries)
         add_bank_catalog(workbook)
-        add_classifier_catalog(workbook)
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         workbook.save(destination)

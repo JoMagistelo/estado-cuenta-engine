@@ -17,7 +17,7 @@ from cep.catalog import account_identifier, bank_code, bank_mentions, clabe_bank
 from cep.catalog import labelled_bank as _label_bank
 from cep.catalog import statement_account as _account
 from cep.columns import TXT_COLUMNS, has_txt_inputs
-from cep.spei_classifier import CLASSIFICATION_COLUMN, INTERNAL, RECEIVED, RETURNED, SENT, TRANSFER
+from cep.spei_classifier import INTERNAL, RECEIVED, RETURNED, SENT, TRANSFER, stored_classification
 from exporters.excel.cells import get, rows_from_sheet
 from utils.spei_metadata import extract_spei_metadata
 from utils.statement_dates import full_date, resolve_date, text_key
@@ -92,6 +92,7 @@ class CepQuery:
     origin_aliases: tuple[str, ...] = ()
     value: Decimal | None = None
     issues: list[str] = field(default_factory=list)
+    classification: str = ""
 
     @property
     def ready(self):
@@ -124,7 +125,7 @@ def _has_tracking_cell(row: dict) -> bool:
 
 
 def _classified_candidate(row, inferred, *, explicit_txt=False):
-    label = get(row, CLASSIFICATION_COLUMN)
+    label = stored_classification(row)
     if label in {SENT, RECEIVED, RETURNED, "SPEI por revisar"}:
         return True
     if label in {INTERNAL, TRANSFER}:
@@ -144,7 +145,7 @@ def _txt_query(row: dict, today: date) -> CepQuery:
     debit, credit = amount(get(row, "Cargo")), amount(get(row, "Abono"))
     direction = ("ENVIADO" if debit else "RECIBIDO") if (
         debit is not None and credit is not None and bool(debit) != bool(credit)) else ""
-    if get(row, CLASSIFICATION_COLUMN) == RETURNED:
+    if stored_classification(row) == RETURNED:
         direction = "DEVUELTO"
     destination = _destination(raw[4], padded=False)
     q = CepQuery(
@@ -154,6 +155,7 @@ def _txt_query(row: dict, today: date) -> CepQuery:
         reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")),
         issuer=bank_code(raw[2]), receiver=bank_code(raw[3]), destination=destination,
         destination_aliases=(destination,) if destination else (), value=amount(raw[5]),
+        classification=stored_classification(row),
         destination_format=("CLABE_18" if valid_clabe(destination) else "TARJETA_16" if len(destination) == 16
                             else "CELULAR_10" if len(destination) == 10 else "CUENTA" if destination else ""),
     )
@@ -239,7 +241,8 @@ def queries_from_rows(movements: list[dict], account_rows: list[dict], *,
         candidate = _classified_candidate(row, candidate)
         q = CepQuery(row["_row"], identifier(get(row, "id_estado")), str(get(row, "Nombre del Archivo", "")),
                      identifier(get(row, "No. de Movimiento")), candidate, tracking=tracking,
-                     reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")))
+                     reference=identifier(get(row, "Referencia SPEI") or get(row, "Referencia")),
+                     classification=stored_classification(row))
         date_input = get(row, "Fecha de Operación")
         explicit_date = full_date(date_input)
         q.operation_date = explicit_date
@@ -261,7 +264,7 @@ def queries_from_rows(movements: list[dict], account_rows: list[dict], *,
             q.value = debit or credit
         else:
             q.issues.append("Cargo/abono ambiguos o importe inválido")
-        classification = get(row, CLASSIFICATION_COLUMN)
+        classification = q.classification
         if classification == RETURNED:
             # A refund credits the holder but is not a newly received SPEI.
             # Its original route must be supplied explicitly in the blue block.

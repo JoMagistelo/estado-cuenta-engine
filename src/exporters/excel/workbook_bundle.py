@@ -13,9 +13,9 @@ from openpyxl import load_workbook
 from exporters.excel.batch_exporter import export_batch_excel
 from exporters.excel.normalization import NormalizationReport, get, normalize_workbook, rows_from_sheet
 from exporters.excel.cells import header_key
-from cep.columns import TXT_KEYS, has_txt_inputs
-from cep.spei_classifier import CLASSIFICATION_COLUMN, classify_spei
-from cep.spei_recovery import RECOVERABLE_FIELDS, recover_missing
+from cep.columns import RETIRED_KEYS, TXT_KEYS, has_txt_inputs
+from cep.spei_classifier import CLASSIFICATION_COLUMN, classify_spei, operation_type
+from cep.spei_recovery import SOURCE_RECOVERY_FIELDS, recover_missing
 from utils.statement_dates import full_date
 
 
@@ -30,26 +30,30 @@ def verify_pair(original: bytes, improved: bytes, *, report: NormalizationReport
         recorded_changes = {}
         if report:
             for change in report.changes:
-                recorded_changes.setdefault(change["Fila Excel"], {})[change["Campo"]] = change
+                recorded_changes.setdefault(change["Fila Excel"], {})[header_key(change["Campo"])] = change
         for left, right in zip(a, b):
             allowed = {"Fecha de Operación", "Fecha de Liquidación", "Fecha de Corte", "Número de Cuenta",
-                       "Cuenta Titular", "CLABE Titular", "Estado de Fecha", "Revisión Normalización",
-                       "Origen Datos Titular"}
+                       "Cuenta Titular", "CLABE Titular", "Estado de Fecha"}
+            allowed_keys = {header_key(name) for name in allowed}
             recovered, _ = recover_missing(left, classify_spei(left))
+            recovered = {header_key(name): value for name, value in recovered.items()
+                         if name in SOURCE_RECOVERY_FIELDS}
             recorded = recorded_changes.get(left["_row"], {})
             for name in left:
-                if name in allowed or name == '_row' or name.startswith("CEP "):
+                key = header_key(name)
+                if (key in allowed_keys or name == '_row' or key in RETIRED_KEYS
+                        or isinstance(name, str) and name.startswith("CEP ")):
                     # Imported previous CEP results are purposely cleared:
                     # they cannot be trusted without reloading the XML ZIP.
                     continue
                 if get(left, name) != get(right, name):
-                    if (name in RECOVERABLE_FIELDS and name in recovered
-                            and get(right, name) == recovered[name]):
+                    if key in recovered and get(right, name) == recovered[key]:
                         continue
-                    if name == CLASSIFICATION_COLUMN and get(right, name) == (classify_spei(left).label or None):
+                    if (header_key(name) == header_key(CLASSIFICATION_COLUMN)
+                            and get(right, name) == operation_type(left)):
                         continue
-                    if header_key(name) in TXT_KEYS and name in recorded:
-                        change = recorded[name]
+                    if key in TXT_KEYS and key in recorded:
+                        change = recorded[key]
                         previous = get(left, name)
                         actual = get(right, name)
                         displayed = actual.isoformat() if isinstance(actual, (date, datetime)) else str(actual or "")

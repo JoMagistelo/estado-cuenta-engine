@@ -154,8 +154,8 @@ python -m pip install --group dev
 En CEP Banxico se pueden cargar archivos XLSX anteriores al módulo CEP,
 originales, mejorados y previamente cruzados. El TXT se habilita al cargar,
 sin renormalización obligatoria. Normalizar prepara en **Movimientos** tres
-bloques: datos originales en verde, seis columnas **TXT** editables en azul
-después de **Revisión Normalización**, y resultados oficiales **CEP** en
+bloques: campos del movimiento en verde, seis columnas **TXT** editables en azul
+después de la trazabilidad de fechas oculta, y resultados oficiales **CEP** en
 naranja. Al recargar, el TXT usa exclusivamente las celdas azules existentes,
 sin restaurar valores del parser ni sustituir vacíos. Las cuatro columnas de
 trazabilidad de fechas se conservan ocultas.
@@ -165,10 +165,13 @@ instituciones del listado oficial Banxico. No se generan Control CEP,
 Revisión CEP ni Revisión Excel. Se conserva Número de Cuenta y CLABE Titular,
 sin duplicar Cuenta Titular. Los campos SPEI originales del parser quedan
 conservados cuando ya tienen un valor; **Normalizar Excel** ahora clasifica las
-transferencias y completa metadatos faltantes del concepto tanto en sus campos
-de Movimientos como en el bloque TXT. Incluye 57 reglas de palabras/OCR en
-**Clasificador SPEI**, distingue devoluciones y traspasos, y añade
-**Clasificación SPEI** para filtrar. Un abono sin indicios no se considera SPEI.
+transferencias en **Tipo de Operación** y completa metadatos faltantes del
+concepto para el bloque TXT. Las 57 reglas de palabras/OCR están incluidas en
+la aplicación; no se exporta una hoja Clasificador SPEI ni una columna de
+clasificación adicional. Los bancos y cuentas intermedios se usan en memoria,
+sin duplicarlos fuera del bloque azul. Se retira Revisión Normalización; los
+resultados del cruce permanecen en CEP Estado / CEP Detalle.
+Un abono sin indicios no se considera SPEI.
 Las correcciones de consulta siguen haciéndose directamente en azul.
 
 Prueba la rama antes de fusionar el PR:
@@ -176,7 +179,7 @@ Prueba la rama antes de fusionar el PR:
 ```powershell
 Set-Location C:\Proyectos\estado-cuenta-engine
 git fetch origin
-git switch --detach origin/feat/cep-clasificador-recuperacion
+git switch --detach origin/fix/cep-excel-sin-columnas-auxiliares
 .\.venv\Scripts\python.exe -m pytest -m "not integration" -q
 .\.venv\Scripts\python.exe app\main_desktop.py
 ```
