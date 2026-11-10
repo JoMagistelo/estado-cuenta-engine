@@ -16,11 +16,8 @@ from utils.spei_metadata import extract_spei_metadata, valid_tracking
 from utils.statement_dates import text_key
 
 
-RECOVERABLE_FIELDS = frozenset({
-    "Clave de Rastreo", "Referencia", "Referencia SPEI", "Referencia Original",
-    "Cuenta del Beneficiario", "CLABE del Beneficiario", "Cuenta del Ordenante",
-    "CLABE del Ordenante", "Banco del Beneficiario", "Banco Emisor",
-    "Código Banco Beneficiario", "Código Plaza/Producto CLABE",
+SOURCE_RECOVERY_FIELDS = frozenset({
+    "Clave de Rastreo", "Referencia", "Cuenta del Beneficiario", "CLABE del Beneficiario",
 })
 TOKEN = re.compile(r"[A-Z0-9][A-Z0-9._/-]{2,39}(?![A-Z0-9._/-])", re.I)
 NUMBER = (
@@ -240,7 +237,7 @@ def _missing(value):
 
 
 def recover_missing(row: dict, classification: Classification) -> tuple[dict, list[str]]:
-    """Fill missing fields, preserving all existing usable/manual identifiers."""
+    """Build query inputs in memory; the exporter selects the original fields."""
     found = extract_metadata(row, classification)
     changes, notes = {}, list(found.notes)
 
@@ -267,9 +264,6 @@ def recover_missing(row: dict, classification: Classification) -> tuple[dict, li
             notes.append(f"Cuenta del {role}: no valida como CLABE; se conserva para consulta/revisión")
     if classification.label == SENT:
         offer("Banco del Beneficiario", found.bank, equivalent=bank_code)
-        offer("Código Banco Beneficiario", found.bank, equivalent=bank_code)
-        if valid_clabe(found.destination):
-            offer("Código Plaza/Producto CLABE", found.destination[3:6])
     elif classification.label == RECEIVED:
         offer("Banco Emisor", found.bank, equivalent=bank_code)
     if classification.label == RETURNED:

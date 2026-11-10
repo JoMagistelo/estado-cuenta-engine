@@ -23,8 +23,8 @@ El formato verde/azul/naranja se aplica a las copias de trabajo CEP.
 
 | Bloque | Contenido | Edición |
 | --- | --- | --- |
-| Verde | Campos originales, fechas normalizadas y datos del titular | La extracción original permanece disponible; las correcciones de consulta se hacen en azul |
-| Azul | Los seis campos del TXT, después de Revisión Normalización | Fuente de verdad del TXT y del cruce |
+| Verde | Campos del movimiento; clasificación en Tipo de Operación, fechas normalizadas y datos del titular | La extracción original permanece disponible; las correcciones de consulta se hacen en azul |
+| Azul | Los seis campos del TXT, después de la trazabilidad de fechas oculta | Fuente de verdad del TXT y del cruce |
 | Naranja | Resultado de la búsqueda y datos oficiales del XML CEP | Se recalcula al importar los ZIP |
 
 Las seis columnas azules aparecen en este orden, sin campos intermedios:
@@ -50,32 +50,44 @@ Las siguientes columnas se conservan, pero quedan **ocultas**:
 - Fecha de Liquidación Original
 - Fecha de Corte Original
 
-Concepto, Concepto Original, Cargo, Abono, Tipo de Operación y Sucursal se
-conservan. La recuperación completa los campos SPEI **faltantes** de la copia
-normalizada: rastreo, referencia SPEI, cuenta/CLABE del beneficiario u ordenante
-y banco de la contraparte. Los datos ya presentes se conservan; si difieren del
-concepto, Revisión Normalización señala la discrepancia sin sustituirlos.
+Concepto, Concepto Original, Cargo, Abono y Sucursal se conservan. La
+clasificación automática se escribe en **Tipo de Operación**. La recuperación
+completa campos SPEI faltantes del parser que ya existan en Movimientos
+(rastreo, referencia o cuenta/CLABE beneficiaria), sin crear más columnas
+verdes. Los bancos, cuentas del ordenante y referencias intermedias se usan
+en memoria para preparar el bloque azul. Los valores existentes se conservan.
 El archivo original conserva sus bytes y ningún parser se modifica.
+
+El formato de salida retira las antiguas columnas Banco del Beneficiario,
+Código Banco Beneficiario, Código Plaza/Producto CLABE, Banco Emisor, Banco
+Receptor, Cuenta del Ordenante, CLABE del Ordenante, Referencia SPEI,
+Referencia Original, Origen Datos Titular, Revisión Normalización y
+Clasificación SPEI. Se leen al importar versiones anteriores cuando son
+necesarias para preparar la consulta; no se vuelven a exportar. Las
+anotaciones particulares del analista se conservan.
+
+Este mismo contrato se aplica al normalizado y a ambos Excel cruzados del ZIP.
+La hoja Clasificador SPEI también se retira de archivos de versiones anteriores.
 
 ## Clasificación y recuperación SPEI al normalizar
 
-**Clasificación SPEI**, con encabezado verde, permite filtrar SPEI Enviado,
+**Tipo de Operación**, con encabezado verde, permite filtrar SPEI Enviado,
 SPEI Recibido, SPEI Devuelto, Traspaso y Transferencia cuentas del mismo banco.
-No sustituye el Tipo de Operación original. Cuando hay indicios SPEI pero el
-importe/sentido es ambiguo, la clasificación queda como SPEI por revisar.
+Los tipos de movimientos ajenos a estas reglas se conservan. Cuando hay
+indicios SPEI pero el importe/sentido es ambiguo, la clasificación queda como
+SPEI por revisar.
 
 El programa incluye las 57 filas del vocabulario de clasificación, con ambas
-columnas de palabras clave y sus variantes OCR. La hoja **Clasificador SPEI**
-las muestra como referencia. No contiene los movimientos utilizados para
-analizar formatos; editar esa hoja de referencia no cambia el clasificador
-incluido en el programa. El reconocimiento tolera mayúsculas, acentos y saltos
+columnas de palabras clave y sus variantes OCR. El clasificador funciona dentro
+de la aplicación; no se exportan sus reglas en una hoja ni se incorpora
+ningún movimiento utilizado para analizar formatos. El reconocimiento tolera mayúsculas, acentos y saltos
 de línea. No sustituye letras o dígitos dentro de cuentas ni rastreos.
 
 Las palabras ambiguas se resuelven con cargo/abono y las señales del
 encabezado. PAGO RECIBIDO DE puede representar un traspaso interno o un SPEI:
 se considera también el banco explícito y el rastreo. Un abono por sí solo no
-es evidencia SPEI. CGO se clasifica conforme al vocabulario, pero se señala
-para revisión porque puede no incluir los datos necesarios para consultar.
+es evidencia SPEI. CGO se clasifica conforme al vocabulario, pero puede no
+incluir los datos necesarios para consultar: esos campos azules quedan vacíos.
 
 La recuperación reconoce etiquetas y bloques de Banamex, Banorte, BBVA,
 Santander y Azteca, incluidas variaciones de OCR. Los ejemplos de HSBC y
@@ -138,8 +150,9 @@ fechas ±1 día genera reintentos respecto a la fecha azul; se puede desactivar.
   prepararse como tarjeta16; las ediciones posteriores del bloque azul se
   respetan literalmente, incluidos sus ceros.
 - No se inventan bancos, dígitos ni importes. Si falta uno de los seis datos,
-  o su valor no se puede usar, Revisión Normalización y CEP Detalle indican
-  qué celda TXT corregir. El movimiento permanece en el Excel.
+  o su valor no se puede usar, el movimiento permanece en el Excel y no entra
+  al TXT. La vista previa y CEP Estado / CEP Detalle al cruzar indican qué
+  celda TXT corregir, sin agregar columnas de revisión.
 - Identificadores de más de 15 dígitos que Excel ya haya redondeado deben
   corregirse como texto; nunca se recuperan dígitos por suposición.
 - Cuando reordenar columnas pueda romper fórmulas, tablas u otras referencias,
@@ -182,7 +195,8 @@ copia, sin alterar el archivo de entrada.
 ## Verificación
 
 La suite cubre el contrato original histórico, fechas y cuentas del titular,
-preservación de campos de parser, ediciones independientes de los seis campos
+preservación de importes y conceptos de parser, clasificación en Tipo de
+Operación, retiro de intermediarios/hoja de clasificación, ediciones independientes de los seis campos
 TXT, vacíos sin respaldos silenciosos, compatibilidad entre generaciones,
 cuentas de distintas longitudes, identificación textual, filas filtradas,
 colores, orden, trazabilidad oculta, catálogo y cruce/reimportación de ZIP.

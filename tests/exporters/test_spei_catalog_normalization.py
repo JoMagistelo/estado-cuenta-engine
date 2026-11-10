@@ -6,14 +6,15 @@ from io import BytesIO
 import pytest
 from openpyxl import load_workbook
 
-from cep.columns import TXT_COLUMNS
+from cep.columns import RETIRED_KEYS, TRACE_COLUMNS, TXT_COLUMNS
+from cep.evidence import CepEvidence, match_evidence
 from cep.queries import queries_from_workbook
 from cep.spei_classifier import (
     CLASSIFICATION_COLUMN, CLASSIFIER_RULES, INTERNAL, RECEIVED, RETURNED, SENT,
     TRANSFER, classify_spei,
 )
 from cep.spei_recovery import extract_metadata
-from exporters.excel.cells import get, put_columns, rows_from_sheet
+from exporters.excel.cells import get, header_key, put_columns
 from exporters.excel.workbook_bundle import WorkbookBundle, verify_pair
 
 from test_normalized_cep_workflow import account_row, clabe, excel, movement_row, rows
@@ -81,10 +82,10 @@ def test_classification_distinguishes_credits_returns_and_internal_movements(con
     original, _ = source("banamex", concept, received=received)
     bundle = WorkbookBundle.from_excel(original)
     row = rows(bundle.improved)[0]
-    assert (get(row, CLASSIFICATION_COLUMN) or "") == label
+    assert get(row, "Tipo de Operación") == (label or ("ABONO" if received else "CARGO"))
+    assert "Clasificación SPEI" not in row
     query = queries_from_workbook(bundle.improved)[0]
     assert query.candidate == label.startswith("SPEI")
-    assert get(row, "Tipo de Operación") == ("ABONO" if received else "CARGO")
     assert bundle.original == original
 
 
@@ -138,14 +139,19 @@ def test_recovery_fills_source_columns_and_all_six_txt_fields_with_correct_roles
     query = queries_from_workbook(bundle.improved)[0]
     assert query.ready, query.issues
     assert get(row, "Clave de Rastreo") == get(row, TXT_COLUMNS[1]) == KEY
-    assert get(row, "Referencia SPEI") == "0000007"
+    assert "Referencia SPEI" not in row
+    original_row = rows(original)[0]
+    assert extract_metadata(original_row, classify_spei(original_row)).reference == "0000007"
     assert query.operation_date == datetime(2026, 1, 3).date()
     assert str(query.value) == "125.25"
     assert query.destination == (own if received else counterparty)
     assert (query.issuer if received else query.receiver) == other_bank
-    role = "Ordenante" if received else "Beneficiario"
-    assert get(row, "Cuenta del " + role) == counterparty
-    for field in ("Concepto", "Concepto Original", "Cargo", "Abono", "Tipo de Operación", "Sucursal"):
+    if received:
+        assert "Cuenta del Ordenante" not in row and "CLABE del Ordenante" not in row
+    else:
+        assert get(row, "Cuenta del Beneficiario") == counterparty
+    assert get(row, "Tipo de Operación") == (RECEIVED if received else SENT)
+    for field in ("Concepto", "Concepto Original", "Cargo", "Abono", "Sucursal"):
         assert get(row, field) == get(rows(original)[0], field)
     assert bundle.original == original
     assert bundle.report.metadata_recovered > 0
@@ -249,7 +255,9 @@ def test_returns_are_visible_but_not_routed_as_received_credits():
     assert query.candidate and query.direction == "DEVUELTO" and not query.ready
     assert query.tracking == KEY and not query.destination
     assert not query.issuer and not query.receiver
-    assert "Devolución" in get(rows(bundle.improved)[0], "Revisión Normalización")
+    status = match_evidence([query], CepEvidence())[query.row]
+    assert status["CEP Estado"] == "NO_CONSULTABLE"
+    assert "TXT Cuenta Beneficiaria" in status["CEP Detalle"]
     corrected = edit(bundle.improved, dict(zip(TXT_COLUMNS, ["03/01/2026", KEY, "40072", "40012", CARD, 125.25])))
     assert queries_from_workbook(corrected)[0].ready
 
@@ -264,7 +272,7 @@ def test_existing_source_identifiers_and_all_manual_blue_values_win_over_recover
     for label, value in manual.items():
         assert get(row, label) == value
     assert get(row, "Clave de Rastreo") == "MANUALGREEN001"
-    assert "se conserva" in get(row, "Revisión Normalización")
+    assert "Revisión Normalización" not in row
 
 
 @pytest.mark.parametrize("second_label", ["RASTREO", "RASTREQ"])
@@ -277,7 +285,10 @@ def test_multiple_labeled_keys_and_conflicting_banks_require_review(second_label
     assert get(row, TXT_COLUMNS[1]) is None
     assert get(row, TXT_COLUMNS[3]) is None
     assert not queries_from_workbook(bundle.improved)[0].ready
-    assert "varias candidatas" in get(row, "Revisión Normalización")
+    query = queries_from_workbook(bundle.improved)[0]
+    status = match_evidence([query], CepEvidence())[query.row]
+    assert status["CEP Estado"] == "NO_CONSULTABLE"
+    assert "TXT Clave de Rastreo" in status["CEP Detalle"]
 
 
 def test_verification_rejects_changes_to_existing_source_and_manual_txt_data():
@@ -292,18 +303,21 @@ def test_verification_rejects_changes_to_existing_source_and_manual_txt_data():
         verify_pair(prepared, edit(rerun.improved, {TXT_COLUMNS[5]: 9999}), report=rerun.report)
 
 
-def test_generic_catalogues_are_bundled_and_layout_colors_remain_separate():
+def test_classifier_is_only_in_the_application_and_layout_colors_remain_separate():
     original, _ = source("banamex", CASES[0][2])
     bundle = WorkbookBundle.from_excel(original)
     wb = load_workbook(BytesIO(bundle.improved))
     try:
-        assert wb["Clasificador SPEI"].max_row == 58
+        assert "Clasificador SPEI" not in wb
+        assert len(CLASSIFIER_RULES) == 57
         assert wb["Catálogo Bancos"].max_row == 98
-        assert all("Concepto" not in r for r in rows_from_sheet(wb["Clasificador SPEI"]))
         ws = wb["Movimientos"]
         headers = {cell.value: cell for cell in ws[1]}
         assert headers[CLASSIFICATION_COLUMN].fill.fgColor.rgb == "001F4D3A"
-        assert headers[TXT_COLUMNS[0]].column == headers["Revisión Normalización"].column + 1
+        names = list(headers)
+        start = names.index(TXT_COLUMNS[0])
+        assert names[start - len(TRACE_COLUMNS):start] == list(TRACE_COLUMNS)
+        assert not any(header_key(name) in RETIRED_KEYS for name in names)
         assert all(headers[label].fill.fgColor.rgb == "00156082" for label in TXT_COLUMNS)
     finally:
         wb.close()

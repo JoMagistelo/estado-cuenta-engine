@@ -15,9 +15,11 @@ from utils.spei_metadata import valid_tracking
 from utils.statement_dates import text_key
 
 
-CLASSIFICATION_COLUMN = "Clasificación SPEI"
+CLASSIFICATION_COLUMN = "Tipo de Operación"
+LEGACY_CLASSIFICATION_COLUMN = "Clasificación SPEI"
 SENT, RECEIVED, RETURNED = "SPEI Enviado", "SPEI Recibido", "SPEI Devuelto"
 INTERNAL, TRANSFER = "Transferencia cuentas del mismo banco", "Traspaso"
+CLASSIFICATIONS = frozenset({SENT, RECEIVED, RETURNED, INTERNAL, TRANSFER, "SPEI por revisar"})
 RECOVERY_TRACKING_LABEL = re.compile(
     r"\b(?:(?:CLAVE|CVE|CLV)\.?\s*(?:DE\s+)?"
     r"(?:RA[S5][T7](?:RE[O0Q]|R)?|RAS\s+R)\.?|RA[S5][T7]RE[O0Q])"
@@ -189,15 +191,17 @@ def classify_spei(row: dict) -> Classification:
     return Classification(chosen, heading[0][2], tuple(notes))
 
 
-def add_classifier_catalog(workbook):
-    """Expose the bundled generic vocabulary, never the training concepts."""
-    from exporters.excel.writer import write_table_sheet
-    name = "Clasificador SPEI"
-    columns = ("Palabra sin errores", "Palabra con errores", "Clasificación")
-    if name in workbook:
-        ws = workbook[name]
-        if tuple(c.value for c in ws[1]) != columns:
-            return
-        workbook.remove(ws)
-    ws = workbook.create_sheet(name)
-    write_table_sheet(ws, [dict(zip(columns, rule)) for rule in CLASSIFIER_RULES])
+def stored_classification(row: dict) -> str:
+    """Read the current type first, then the superseded PR97 column on import."""
+    labels = {text_key(label): label for label in CLASSIFICATIONS}
+    for column in (CLASSIFICATION_COLUMN, LEGACY_CLASSIFICATION_COLUMN):
+        label = labels.get(text_key(get(row, column)))
+        if label:
+            return label
+    return ""
+
+
+def operation_type(row: dict, classification: Classification | None = None):
+    """Classify in the existing operation field; retain unrelated bank types."""
+    classification = classify_spei(row) if classification is None else classification
+    return classification.label or stored_classification(row) or get(row, CLASSIFICATION_COLUMN)

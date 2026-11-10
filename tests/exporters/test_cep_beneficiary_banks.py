@@ -11,10 +11,11 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
 from cep.evidence import CepEvidence, match_evidence
-from cep.columns import TXT_COLUMNS
+from cep.columns import RETIRED_KEYS, TXT_COLUMNS
 from cep.package import append_cep
 from cep.queries import queries_from_workbook
 from exporters.excel.normalization import get, rows_from_sheet
+from exporters.excel.cells import header_key
 from exporters.excel.workbook_bundle import WorkbookBundle
 
 
@@ -102,9 +103,8 @@ def test_received_banks_use_the_holder_and_no_sender_clabe_is_invented(old):
     assert queries_from_workbook(again)[0].line() == after.line()
     wb = load_workbook(BytesIO(again))
     labels = [c.value for c in wb["Movimientos"][1]]
-    assert labels.count("Banco del Beneficiario") == labels.count("TXT Banco Emisor") == 1
-    assert labels.count("Banco Emisor") == 1
-    assert get(movement(again), "Banco Emisor") == "40012"
+    assert labels.count("TXT Banco Emisor") == 1
+    assert not any(header_key(label) in RETIRED_KEYS for label in labels)
     wb.close()
 
 
@@ -114,8 +114,8 @@ def test_sent_card_gets_labelled_bank_and_code_but_no_fabricated_plaza(bank, cod
     before = queries_from_workbook(original)[0]
     bundle = WorkbookBundle.from_excel(original)
     row = movement(bundle.improved)
-    assert get(row, "Banco del Beneficiario") == code
-    assert get(row, "Código Banco Beneficiario") == code
+    assert "Banco del Beneficiario" not in row
+    assert "Código Banco Beneficiario" not in row
     assert get(row, "TXT Banco Receptor") == code
     assert get(row, "TXT Cuenta Beneficiaria") == CARD
     assert get(row, "Código Plaza/Producto CLABE") is None
@@ -134,21 +134,24 @@ def test_unknown_card_bank_is_not_guessed_from_the_sixteen_digits():
     assert not queries_from_workbook(bundle.improved)[0].ready
 
 
-def test_received_sender_clabe_is_preserved_when_the_statement_actually_provides_it():
+def test_received_sender_clabe_is_consumed_on_import_without_an_extra_export_column():
     original = source(changes={"CLABE del Ordenante": SENDER})
     bundle = WorkbookBundle.from_excel(original)
-    assert get(movement(bundle.improved), "CLABE del Ordenante") == SENDER
+    assert get(movement(original), "CLABE del Ordenante") == SENDER
+    assert "CLABE del Ordenante" not in movement(bundle.improved)
     q = queries_from_workbook(bundle.improved)[0]
     assert q.ready and q.destination == HOLDER and q.issuer == "40012"
 
 
-def test_user_corrections_in_bank_columns_are_preserved():
-    original = source(changes={"Banco del Beneficiario": "CITIBANAMEX",
+def test_legacy_bank_edits_are_used_in_the_blue_route_then_auxiliary_columns_are_removed():
+    original = source(received=False, third_bank="DESCONOCIDO", changes={"Banco del Beneficiario": "AZTECA",
         "Código Banco Beneficiario": "002", "Código Plaza/Producto CLABE": "999"})
+    expected = queries_from_workbook(original)[0]
     row = movement(WorkbookBundle.from_excel(original).improved)
-    assert get(row, "Banco del Beneficiario") == "CITIBANAMEX"
-    assert get(row, "Código Banco Beneficiario") == "002"
-    assert get(row, "Código Plaza/Producto CLABE") == "999"
+    assert get(row, "TXT Banco Receptor") == expected.receiver == "40127"
+    assert "Banco del Beneficiario" not in row
+    assert "Código Banco Beneficiario" not in row
+    assert "Código Plaza/Producto CLABE" not in row
 
 
 @pytest.mark.parametrize("cross", [False, True])
@@ -165,6 +168,9 @@ def test_original_headers_remain_green_and_blue_txt_headers_are_separate(cross):
         old_headers = {c.value: c for c in source_ws[1]}
         final_headers = {c.value: c for c in final_ws[1]}
         for label, old in old_headers.items():
+            if header_key(label) in RETIRED_KEYS:
+                assert label not in final_headers
+                continue
             new = final_headers[label]
             assert copy(new.fill) == copy(old.fill)
             assert copy(new.font) == copy(old.font)

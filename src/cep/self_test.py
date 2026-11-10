@@ -9,10 +9,12 @@ from zipfile import ZipFile
 from openpyxl import Workbook, load_workbook
 
 from cep.evidence import CepEvidence
-from cep.columns import TRACE_COLUMNS, TXT_COLUMNS
+from cep.columns import RETIRED_KEYS, TRACE_COLUMNS, TXT_COLUMNS
 from cep.package import export_cep_zip
 from cep.queries import batch_texts, queries_from_workbook
 from exporters.excel.normalization import get, rows_from_sheet
+from exporters.excel.cells import header_key
+from cep.spei_classifier import CLASSIFIER_RULES
 from exporters.excel.workbook_bundle import WorkbookBundle
 
 
@@ -37,9 +39,9 @@ def run_excel_cep_self_test():
     normalized = load_workbook(BytesIO(bundle.improved))
     try:
         prepared = rows_from_sheet(normalized["Movimientos"])[0]
-        if (get(prepared, "Clasificación SPEI") != "SPEI Enviado"
+        if (get(prepared, "Tipo de Operación") != "SPEI Enviado"
                 or get(prepared, "Clave de Rastreo") != "SYNTHETIC001"
-                or normalized["Clasificador SPEI"].max_row != 58):
+                or len(CLASSIFIER_RULES) != 57 or "Clasificador SPEI" in normalized):
             raise RuntimeError("El EXE no clasificó/recuperó el SPEI con el catálogo incluido")
     finally:
         normalized.close()
@@ -69,9 +71,11 @@ def run_excel_cep_self_test():
                 raise RuntimeError("El EXE perdió el PDF vinculado al movimiento")
             ws = check["Movimientos"]
             headers = [cell.value for cell in ws[1]]
-            position = headers.index("Revisión Normalización") + 1
+            position = headers.index(TXT_COLUMNS[0])
             if headers[position:position + 6] != list(TXT_COLUMNS):
-                raise RuntimeError("El EXE no conservó las seis columnas TXT después de Revisión Normalización")
+                raise RuntimeError("El EXE no conservó juntas las seis columnas TXT")
+            if any(header_key(h) in RETIRED_KEYS for h in headers):
+                raise RuntimeError("El EXE volvió a exportar columnas auxiliares retiradas")
             if "Control CEP" in check:
                 raise RuntimeError("El EXE volvió a generar la hoja Control CEP obsoleta")
             from openpyxl.utils import get_column_letter

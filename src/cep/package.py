@@ -77,7 +77,7 @@ def append_cep(source: bytes, matches: dict[int, dict], queries: list[CepQuery],
             for cell in cells:
                 if isinstance(cell.value, str):
                     set_literal(cell, cell.value)
-    arrange_movement_blocks(workbook, MOVEMENT_CEP_COLUMNS)
+    arrange_movement_blocks(workbook, MOVEMENT_CEP_COLUMNS, queries=queries)
     add_bank_catalog(workbook)
     output = BytesIO()
     workbook.save(output)
