@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import pytest
+from openpyxl import load_workbook
 
+from exporters.excel import export_batch_excel
+from models.processing_result import ProcessingResult
 from parsers.bbva.extractors.datos import extract_datos_cuenta_words
 from parsers.bbva.extractors.movimientos import (
     extract_movimientos_words,
     normalize_bbva_date,
 )
+from parsers.bbva.parser import parse_bbva
 from parsers.bbva.utils.words_footer_filter import remove_bbva_footer
+from readers.models.document_data import DocumentData
 
 
 def word(
@@ -315,6 +320,58 @@ def test_ocr_missing_operation_date_uses_liquidation_and_amount_as_start() -> No
     )
     assert damaged.cargo == pytest.approx(10000.00)
     assert damaged.referencia == "0002838638"
+
+
+@pytest.mark.parametrize("reference_x", [321.0, 221.0], ids=["normal", "premium"])
+@pytest.mark.parametrize(
+    ("detail_lines", "beneficiary", "payment_concept"),
+    [
+        (
+            ("0000000042 BNET 0012345678 Transf a Persona Sintética", "No. de"),
+            "Persona Sintética",
+            None,
+        ),
+        (
+            ("No. de", "No. de", "0000000043 bnet 0012345678 Cuota de prueba"),
+            "0012345678",
+            "Cuota de prueba",
+        ),
+        (
+            ("BNET 0012345678 Transferencia local de prueba",),
+            "0012345678",
+            "Transferencia local de prueba",
+        ),
+    ],
+    ids=["reference-with-name", "interleaved-header-with-concept", "legacy-bnet"],
+)
+def test_bbva_third_party_payment_fields_reach_excel(
+    tmp_path, reference_x, detail_lines, beneficiary, payment_concept,
+) -> None:
+    title = "PAGO CUENTA DE TERCERO"
+    words = [
+        word("REFERENCIA", reference_x, reference_x + 54.0, 70.0),
+        word("03/AGO", 20.0, 51.0, 100.0),
+        word("03/AGO", 55.0, 84.0, 100.0),
+        word(title, 110.0, 250.0, 100.0),
+        word("25.50", 390.0, 418.0, 100.0),
+        *(word(line, 110.0, 307.0, 112.0 + i * 12.0)
+          for i, line in enumerate(detail_lines)),
+    ]
+    statement = parse_bbva(DocumentData(spatial_words=words))
+    result = ProcessingResult("sintetico.pdf", "bbva", statement, "", "")
+    path = export_batch_excel([result], tmp_path / "movimientos.xlsx")
+    workbook = load_workbook(path, read_only=True)
+    try:
+        headers, values = workbook["Movimientos"].values
+        row = dict(zip(headers, values))
+    finally:
+        workbook.close()
+    assert row["Cuenta del Beneficiario"] == "0012345678"
+    assert row["Beneficiario"] == beneficiary
+    assert row["Concepto Original"] == payment_concept
+    assert row["Concepto"] == "\n".join((title, *detail_lines))
+    assert row["Cargo"] == 25.50
+    assert row["Fecha de Operación"] == "03/AGO"
 
 
 def test_ocr_abono_without_balances_is_not_omitted() -> None:

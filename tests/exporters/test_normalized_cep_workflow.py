@@ -9,7 +9,7 @@ from openpyxl import Workbook, load_workbook
 
 from cep.catalog import INSTITUTIONS, bank_code, valid_clabe
 from cep.evidence import CepEvidence, match_evidence, parse_cep_xml
-from cep.package import export_cep_zip
+from cep.package import append_cep, export_cep_zip
 from cep.queries import batch_texts, queries_from_workbook
 from exporters.excel.normalization import filename_family, get, reconstruct_owners, rows_from_sheet
 from exporters.excel.workbook_bundle import WorkbookBundle, verify_pair
@@ -226,11 +226,12 @@ def test_hsbc_received_uses_participant_bank_and_keeps_sender_distinct_from_hold
     assert match_evidence(qs, wrong)[2]["CEP Estado"] == "EXITO"
 
 
-def xml_cep(tracking="PRUEBASINTETICA001", value="125.25", when="03/01/2026", destination=OTHER, origin=OWN):
+def xml_cep(tracking="PRUEBASINTETICA001", value="125.25", when="03/01/2026",
+            destination=OTHER, origin=OWN, *, concept="PRUEBA"):
     return (f'<SPEI_Tercero fechaOperacion="{when}" claveRastreo="{tracking}">'
             f'<Ordenante nombre="ORDENANTE XML" rfc="XXXX010101XXX" cuenta="{origin}" bancoEmisor="40012"/>'
             f'<Beneficiario nombre="BENEFICIARIO XML" rfc="YYYY010101XXX" cuenta="{destination}" bancoReceptor="40072"/>'
-            f'<DatosPago monto="{value}" concepto="PRUEBA" referenciaNumerica="0000123"/>'
+            f'<DatosPago monto="{value}" concepto="{concept}" referenciaNumerica="0000123"/>'
             '</SPEI_Tercero>').encode()
 
 
@@ -243,13 +244,18 @@ def zipped(xml=None, *, pdf=True):
     return output.getvalue()
 
 
-def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
+@pytest.mark.parametrize(("when", "concept", "status"), [
+    ("03/01/2026", "Pago sintético", "EXITO"),
+    ("04/01/2026", "=1+1", "EXITO_FECHA_ALTERNATIVA"),
+    ("03/01/2026", "", "EXITO"),
+], ids=["exact-date", "alternative-date", "empty-concept"])
+def test_official_zip_matching_and_both_enriched_workbooks(tmp_path, when, concept, status):
     bundle = WorkbookBundle.from_excel(excel(movements=[movement_row(), movement_row(2, **{"Clave de Rastreo": "OTRORASTREO02", "Cargo": 200})]))
     queries = queries_from_workbook(bundle.improved)
     evidence = CepEvidence()
-    evidence.add_zip(zipped())
+    evidence.add_zip(zipped(xml_cep(when=when, concept=concept)))
     matches = match_evidence(queries, evidence)
-    assert matches[2]["CEP Estado"] == "EXITO"
+    assert matches[2]["CEP Estado"] == status
     assert matches[3]["CEP Estado"] == "NO_APARECE_EN_ZIP"
     output = tmp_path / "final.zip"
     export_cep_zip(bundle, queries, evidence, output)
@@ -260,7 +266,9 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
         assert get(clean[0], "Fecha de Operación") == datetime(2026, 1, 3)
         for row in (raw[0], clean[0]):
             assert get(row, "CEP Nombre Beneficiario") == "BENEFICIARIO XML"
-            assert get(row, "CEP Estado") == "EXITO"
+            assert get(row, "CEP Estado") == status
+            assert get(row, "Concepto") == "SPEI ENVIADO BANORTE"
+            assert get(row, "Concepto Original") == (concept or "SPEI ENVIADO BANORTE")
             assert get(row, "CEP Archivo PDF") in archive.namelist()
             assert get(row, "CEP Archivo XML") in archive.namelist()
         for name in ("excel_original_con_CEP.xlsx", "excel_mejorado_con_CEP.xlsx"):
@@ -275,7 +283,8 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
             assert "TXT Cuenta Beneficiaria" in columns
             data = rows_from_sheet(workbook["Datos CEP"])
             assert get(rows_from_sheet(ws)[0], "TXT Cuenta Beneficiaria") == OTHER
-            assert get(rows_from_sheet(ws)[0], "CEP Estado") == "EXITO"
+            assert get(rows_from_sheet(ws)[0], "CEP Estado") == status
+            assert ws.cell(2, columns["Concepto Original"]).data_type == "s"
             assert get(data[0], "beneficiary_name") == "BENEFICIARIO XML"
             for label in ("CEP Archivo PDF", "CEP Archivo XML"):
                 cell = ws.cell(2, columns[label])
@@ -284,14 +293,20 @@ def test_official_zip_matching_and_both_enriched_workbooks(tmp_path):
             assert ws.cell(3, columns["CEP Archivo PDF"]).hyperlink is None
             workbook.close()
         assert get(raw[1], "CEP Estado") == "NO_APARECE_EN_ZIP"
+        assert get(raw[1], "Concepto Original") == "SPEI ENVIADO BANORTE"
+        assert get(clean[1], "Concepto Original") == "SPEI ENVIADO BANORTE"
 
 
 @pytest.mark.parametrize("kwargs", [{"value": "125.26"}, {"destination": OWN}, {"when": "05/01/2026"}])
 def test_same_tracking_never_overrides_conflicting_financial_evidence(kwargs):
-    qs = queries_from_workbook(WorkbookBundle.from_excel(excel()).improved)
+    source = WorkbookBundle.from_excel(excel()).improved
+    qs = queries_from_workbook(source)
     evidence = CepEvidence()
     evidence.add_zip(zipped(xml_cep(**kwargs)))
-    assert match_evidence(qs, evidence)[2]["CEP Estado"] == "REVISAR"
+    matches = match_evidence(qs, evidence)
+    assert matches[2]["CEP Estado"] == "REVISAR"
+    crossed = append_cep(source, matches, qs, evidence)
+    assert get(rows(crossed)[0], "Concepto Original") == "SPEI ENVIADO BANORTE"
 
 
 def test_zip_date_retry_duplicates_pdf_upgrade_and_ambiguous_xml():
