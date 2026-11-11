@@ -19,15 +19,17 @@ CLASSIFICATION_COLUMN = "Tipo de Operación"
 LEGACY_CLASSIFICATION_COLUMN = "Clasificación SPEI"
 SENT, RECEIVED, RETURNED = "SPEI Enviado", "SPEI Recibido", "SPEI Devuelto"
 INTERNAL, TRANSFER = "Transferencia cuentas del mismo banco", "Traspaso"
-CLASSIFICATIONS = frozenset({SENT, RECEIVED, RETURNED, INTERNAL, TRANSFER, "SPEI por revisar"})
+CARD_PAYMENT = "Pago Tarjeta de Tercero"
+CLASSIFICATIONS = frozenset({
+    SENT, RECEIVED, RETURNED, INTERNAL, TRANSFER, CARD_PAYMENT, "SPEI por revisar",
+})
 RECOVERY_TRACKING_LABEL = re.compile(
     r"\b(?:(?:CLAVE|CVE|CLV)\.?\s*(?:DE\s+)?"
     r"(?:RA[S5][T7](?:RE[O0Q]|R)?|RAS\s+R)\.?|RA[S5][T7]RE[O0Q])"
     r"\s*(?:SPE[IL!1]\b\s*)?[:#=.,-]?\s*[\[(]?\s*", re.I,
 )
 
-# The supplied classifier's 57 rows: generic keywords only, including its OCR
-# variants and duplicate/ambiguous entries. Never bundle payment examples.
+# Generic keywords, including OCR variants and ambiguous entries.
 CLASSIFIER_RULES = (
     ("ABONO TRANSFERENCIA SPEI", "ABONO TRANSFERENCIA SPE!", RECEIVED),
     ("ABONO TRANSFERENCIA SPEI", "ABONO TRANSFERENCIA SPEI", RECEIVED),
@@ -64,6 +66,7 @@ CLASSIFIER_RULES = (
     ("PAGO INTERBANCARIO", "PAGO INTERBANÇARIO", SENT),
     ("PAGO RECIBIDO", "PAGO RECIBIDO", RECEIVED),
     ("PAGO RECIBIDO DE", "PAGO RECIBIDO DE", INTERNAL),
+    ("PAGO TARJETA DE TERCEROS", "PAGO TARJETA DE TERCERO", CARD_PAYMENT),
     ("PAGO TRANSF RAPIDA SPEI", "PAGO TRANSF RAPIDA SPEI", SENT),
     ("PAGO TRANSFERENCIA SPEI", "PAGO TRANSFERENCIA SPE ", SENT),
     ("PAGO TRANSFERENCIA SPEI", "PAGO TRANSFERENCIA SPE!", SENT),

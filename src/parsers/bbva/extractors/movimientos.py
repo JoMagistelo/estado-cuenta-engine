@@ -1341,6 +1341,10 @@ def extract_cuenta_beneficiario_from_concepto(
             concepto
         )
 
+    if re.match(r"^\s*PAGO\s+TARJETA\s+DE\s+TERCEROS?\b", concepto or "", re.IGNORECASE):
+        match = re.search(r"\bCUENTA\s*:\s*([0-9]{16})\b", concepto, re.IGNORECASE)
+        return match[1] if match else None
+
     return None
 
 

@@ -17,7 +17,9 @@ from cep.catalog import account_identifier, bank_code, bank_mentions, clabe_bank
 from cep.catalog import labelled_bank as _label_bank
 from cep.catalog import statement_account as _account
 from cep.columns import TXT_COLUMNS, has_txt_inputs
-from cep.spei_classifier import INTERNAL, RECEIVED, RETURNED, SENT, TRANSFER, stored_classification
+from cep.spei_classifier import (
+    CARD_PAYMENT, INTERNAL, RECEIVED, RETURNED, SENT, TRANSFER, stored_classification,
+)
 from exporters.excel.cells import get, rows_from_sheet
 from utils.spei_metadata import extract_spei_metadata
 from utils.statement_dates import full_date, resolve_date, text_key
@@ -128,7 +130,7 @@ def _classified_candidate(row, inferred, *, explicit_txt=False):
     label = stored_classification(row)
     if label in {SENT, RECEIVED, RETURNED, "SPEI por revisar"}:
         return True
-    if label in {INTERNAL, TRANSFER}:
+    if label in {INTERNAL, TRANSFER, CARD_PAYMENT}:
         return bool(explicit_txt or _has_tracking_cell(row))
     return inferred
 

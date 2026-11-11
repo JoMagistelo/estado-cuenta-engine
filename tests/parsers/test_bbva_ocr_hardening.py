@@ -324,30 +324,42 @@ def test_ocr_missing_operation_date_uses_liquidation_and_amount_as_start() -> No
 
 @pytest.mark.parametrize("reference_x", [321.0, 221.0], ids=["normal", "premium"])
 @pytest.mark.parametrize(
-    ("detail_lines", "beneficiary", "payment_concept"),
+    ("title", "detail_lines", "account", "beneficiary", "payment_concept"),
     [
         (
+            "PAGO CUENTA DE TERCERO",
             ("0000000042 BNET 0012345678 Transf a Persona Sintética", "No. de"),
+            "0012345678",
             "Persona Sintética",
             None,
         ),
         (
+            "PAGO CUENTA DE TERCERO",
             ("No. de", "No. de", "0000000043 bnet 0012345678 Cuota de prueba"),
+            "0012345678",
             "0012345678",
             "Cuota de prueba",
         ),
         (
+            "PAGO CUENTA DE TERCERO",
             ("BNET 0012345678 Transferencia local de prueba",),
+            "0012345678",
             "0012345678",
             "Transferencia local de prueba",
         ),
+        (
+            "PAGO TARJETA DE TERCEROS",
+            ("0000000044 CUENTA: 0000111122223333 MBAN",),
+            "0000111122223333",
+            None,
+            None,
+        ),
     ],
-    ids=["reference-with-name", "interleaved-header-with-concept", "legacy-bnet"],
+    ids=["reference-with-name", "interleaved-header-with-concept", "legacy-bnet", "card-payment"],
 )
 def test_bbva_third_party_payment_fields_reach_excel(
-    tmp_path, reference_x, detail_lines, beneficiary, payment_concept,
+    tmp_path, reference_x, title, detail_lines, account, beneficiary, payment_concept,
 ) -> None:
-    title = "PAGO CUENTA DE TERCERO"
     words = [
         word("REFERENCIA", reference_x, reference_x + 54.0, 70.0),
         word("03/AGO", 20.0, 51.0, 100.0),
@@ -366,7 +378,8 @@ def test_bbva_third_party_payment_fields_reach_excel(
         row = dict(zip(headers, values))
     finally:
         workbook.close()
-    assert row["Cuenta del Beneficiario"] == "0012345678"
+    assert row["Cuenta del Beneficiario"] == account
+    assert row["CLABE del Beneficiario"] is None
     assert row["Beneficiario"] == beneficiary
     assert row["Concepto Original"] == payment_concept
     assert row["Concepto"] == "\n".join((title, *detail_lines))
