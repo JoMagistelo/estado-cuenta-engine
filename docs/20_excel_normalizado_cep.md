@@ -72,12 +72,13 @@ La hoja Clasificador SPEI también se retira de archivos de versiones anteriores
 ## Clasificación y recuperación SPEI al normalizar
 
 **Tipo de Operación**, con encabezado verde, permite filtrar SPEI Enviado,
-SPEI Recibido, SPEI Devuelto, Traspaso y Transferencia cuentas del mismo banco.
+SPEI Recibido, SPEI Devuelto, Traspaso, Transferencia cuentas del mismo banco y
+Pago Tarjeta de Tercero.
 Los tipos de movimientos ajenos a estas reglas se conservan. Cuando hay
 indicios SPEI pero el importe/sentido es ambiguo, la clasificación queda como
 SPEI por revisar.
 
-El programa incluye las 57 filas del vocabulario de clasificación, con ambas
+El programa incluye las 58 filas del vocabulario de clasificación, con ambas
 columnas de palabras clave y sus variantes OCR. El clasificador funciona dentro
 de la aplicación; no se exportan sus reglas en una hoja ni se incorpora
 ningún movimiento utilizado para analizar formatos. El reconocimiento tolera mayúsculas, acentos y saltos

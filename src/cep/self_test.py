@@ -41,7 +41,7 @@ def run_excel_cep_self_test():
         prepared = rows_from_sheet(normalized["Movimientos"])[0]
         if (get(prepared, "Tipo de Operación") != "SPEI Enviado"
                 or get(prepared, "Clave de Rastreo") != "SYNTHETIC001"
-                or len(CLASSIFIER_RULES) != 57 or "Clasificador SPEI" in normalized):
+                or len(CLASSIFIER_RULES) != 58 or "Clasificador SPEI" in normalized):
             raise RuntimeError("El EXE no clasificó/recuperó el SPEI con el catálogo incluido")
     finally:
         normalized.close()

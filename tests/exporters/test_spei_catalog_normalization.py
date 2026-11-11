@@ -70,6 +70,7 @@ def test_every_catalogue_keyword_and_ocr_variant_is_searchable(canonical, varian
     ("PAGO RECIBIDO DE SU REF.0000007 PERSONA SINTETICA", True, INTERNAL),
     ("PAGO RECIBIDO DE PERSONA SINTETICA", True, INTERNAL),
     ("PAGO CUENTA DE TERCERO CONCEPTO: SPEI ENVIADO", False, INTERNAL),
+    (f"PAGO TARJETA DE TERCEROS\n0000000044 CUENTA: {CARD} MBAN TEXTO SPEI", False, "Pago Tarjeta de Tercero"),
     ("TRASPASO CUENTAS PROPIAS", True, TRANSFER),
     ("PAGO INTERBANCARIO A BBVA MEXICO", False, SENT),
     ("TRANSFERENCIA SPEI", True, RECEIVED),
@@ -85,6 +86,7 @@ def test_classification_distinguishes_credits_returns_and_internal_movements(con
     assert get(row, "Tipo de Operación") == (label or ("ABONO" if received else "CARGO"))
     assert "Clasificación SPEI" not in row
     query = queries_from_workbook(bundle.improved)[0]
+    assert query.classification == label
     assert query.candidate == label.startswith("SPEI")
     assert bundle.original == original
 
@@ -309,7 +311,7 @@ def test_classifier_is_only_in_the_application_and_layout_colors_remain_separate
     wb = load_workbook(BytesIO(bundle.improved))
     try:
         assert "Clasificador SPEI" not in wb
-        assert len(CLASSIFIER_RULES) == 57
+        assert len(CLASSIFIER_RULES) == 58
         assert wb["Catálogo Bancos"].max_row == 98
         ws = wb["Movimientos"]
         headers = {cell.value: cell for cell in ws[1]}

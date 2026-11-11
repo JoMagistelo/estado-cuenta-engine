@@ -53,12 +53,21 @@ def append_cep(source: bytes, matches: dict[int, dict], queries: list[CepQuery],
     workbook = load_workbook(BytesIO(source))
     ws = _compact_existing_movements(workbook)
     install_txt_inputs(ws, queries)
+    original_concept_column = next(
+        (cell.column for cell in ws[1] if header_key(cell.value) == "CONCEPTOORIGINAL"), None
+    )
     # Old review sheets are intentionally discarded in the new CEP output.
     for name in ("Control CEP", "Datos CEP", "Revisión CEP", "Revisión Excel"):
         if name in workbook:
             del workbook[name]
     for row_number, values in matches.items():
         put_columns(ws, row_number, {key: values[key] for key in MOVEMENT_CEP_COLUMNS})
+        if (
+            original_concept_column is not None
+            and values["CEP Estado"] in ("EXITO", "EXITO_FECHA_ALTERNATIVA")
+            and values["CEP Concepto"]
+        ):
+            set_literal(ws.cell(row_number, original_concept_column), values["CEP Concepto"])
     columns = {cell.value: cell.column for cell in ws[1]}
     for row_number, values in matches.items():
         for field in ("CEP Archivo PDF", "CEP Archivo XML"):

@@ -1255,106 +1255,42 @@ def is_pago_cuenta_tercero_movement(concepto: str) -> bool:
     )
 
 
-def extract_cuenta_beneficiario_from_pago_cuenta_tercero(
-    concepto: str
-) -> str | None:
-    """
-    Extrae la cuenta del beneficiario de un movimiento
-    PAGO CUENTA DE TERCERO.
-
-    Estructura esperada:
-
-        línea 1 -> PAGO CUENTA DE TERCERO
-        línea 2 -> BNET 0459455663 Transf a Ma. Guada
-
-    Resultado:
-
-        0459455663
-    """
-    lines = get_concepto_lines(concepto)
-
-    if len(lines) < 2:
-        return None
-
+def _extract_pago_cuenta_tercero(
+    concepto: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Devuelve cuenta, beneficiario y concepto de un pago a terceros BNET."""
     if not is_pago_cuenta_tercero_movement(concepto):
-        return None
+        return None, None, None
 
-    segunda_linea = lines[1]
-
-    match = re.match(
-        r"^BNET\s+(\d+)(?:\s|$)",
-        segunda_linea,
-        re.IGNORECASE,
-    )
-
-    if not match:
-        return None
-
-    return match.group(1)
-
-
-def extract_beneficiario_from_pago_cuenta_tercero(
-    concepto: str
-) -> str | None:
-    """
-    Para PAGO CUENTA DE TERCERO, el beneficiario se representa
-    mediante la propia cuenta beneficiaria.
-
-    Ejemplo:
-
-        BNET 0459455663 Transf a Ma. Guada
-
-    Resultado:
-
-        0459455663
-    """
-    return extract_cuenta_beneficiario_from_pago_cuenta_tercero(
-        concepto
-    )
+    # El detalle puede llevar un número antes de BNET y aparecer después de
+    # renglones de encabezado intercalados. La cuenta siempre va después de BNET.
+    for line in get_concepto_lines(concepto)[1:]:
+        match = re.fullmatch(r"(?:\d+\s+)?BNET\s+(\d+)(?:\s+(.+))?", line, re.IGNORECASE)
+        if not match:
+            continue
+        cuenta, detalle = match.groups()
+        transferencia = re.fullmatch(
+            r"Transf\.?(?:\s+a)?(?:\s+(.+))?", detalle or "", re.IGNORECASE,
+        )
+        if transferencia:
+            return cuenta, transferencia.group(1) or cuenta, None
+        return cuenta, cuenta, detalle
+    return None, None, None
 
 
-def extract_concepto_original_from_pago_cuenta_tercero(
-    concepto: str
-) -> str | None:
-    """
-    Extrae el concepto original de un movimiento
-    PAGO CUENTA DE TERCERO.
+def extract_cuenta_beneficiario_from_pago_cuenta_tercero(concepto: str) -> str | None:
+    cuenta, _, _ = _extract_pago_cuenta_tercero(concepto)
+    return cuenta
 
-    Estructura:
 
-        BNET 0459455663 Transf a Ma. Guada
+def extract_beneficiario_from_pago_cuenta_tercero(concepto: str) -> str | None:
+    _, beneficiario, _ = _extract_pago_cuenta_tercero(concepto)
+    return beneficiario
 
-    Resultado:
 
-        Transf a Ma. Guada
-
-    Es decir:
-        - se elimina BNET
-        - se elimina la cuenta
-        - se conserva exactamente el texto posterior.
-    """
-    lines = get_concepto_lines(concepto)
-
-    if len(lines) < 2:
-        return None
-
-    if not is_pago_cuenta_tercero_movement(concepto):
-        return None
-
-    segunda_linea = lines[1]
-
-    match = re.match(
-        r"^BNET\s+\d+\s*(.*)$",
-        segunda_linea,
-        re.IGNORECASE,
-    )
-
-    if not match:
-        return None
-
-    texto = match.group(1).strip()
-
-    return texto or None
+def extract_concepto_original_from_pago_cuenta_tercero(concepto: str) -> str | None:
+    _, _, detalle = _extract_pago_cuenta_tercero(concepto)
+    return detalle
 
 
 # ============================================================
@@ -1371,7 +1307,7 @@ def extract_beneficiario_from_concepto(
         usa el beneficiario propio del bloque SPEI.
 
     PAGO CUENTA DE TERCERO:
-        el beneficiario se representa mediante la cuenta.
+        usa el nombre de la transferencia o la cuenta como respaldo.
     """
     if is_spei_movement(concepto):
         return extract_beneficiario_from_spei(concepto)
@@ -1404,6 +1340,10 @@ def extract_cuenta_beneficiario_from_concepto(
         return extract_cuenta_beneficiario_from_pago_cuenta_tercero(
             concepto
         )
+
+    if re.match(r"^\s*PAGO\s+TARJETA\s+DE\s+TERCEROS?\b", concepto or "", re.IGNORECASE):
+        match = re.search(r"\bCUENTA\s*:\s*([0-9]{16})\b", concepto, re.IGNORECASE)
+        return match[1] if match else None
 
     return None
 
