@@ -104,8 +104,8 @@ def _resolve_coordinate_normalizer(bank_key: str):
     )
 
 
-def _apply_coordinate_normalizer(document: DocumentData, normalizer_fn) -> DocumentData:
-    normalized_words = normalizer_fn(document.spatial_words)
+def _apply_coordinate_normalizer(document: DocumentData, normalizer_fn, **options) -> DocumentData:
+    normalized_words = normalizer_fn(document.spatial_words, **options)
     if normalized_words is None:
         raise TypeError(
             'El normalizador de coordenadas devolvió None; debe devolver list[dict].'
@@ -157,7 +157,14 @@ def _process_once(document: DocumentData, bank_key: str):
 
         normalizer_fn = _resolve_coordinate_normalizer(bank_key)
         if normalizer_fn is not None:
-            document = _apply_coordinate_normalizer(document, normalizer_fn)
+            tabular_pages = (document.metadata.get('banamex_tabular_pages')
+                             if bank_key == 'banamex' else None)
+            if tabular_pages:
+                document = _apply_coordinate_normalizer(
+                    document, normalizer_fn, preserve_pages=frozenset(map(int, tabular_pages)),
+                )
+            else:
+                document = _apply_coordinate_normalizer(document, normalizer_fn)
 
     estado = parser_fn(document)
     _classify_movements_by_amount_direction(estado)
