@@ -637,6 +637,13 @@ def _build_movement(
     if not concept and deposit == 0.0 and withdrawal == 0.0 and balance == 0.0:
         return None
 
+    return movement_from_fields(date, concept, deposit, withdrawal, balance)
+
+
+def movement_from_fields(
+    date: str, concept: str, deposit: float, withdrawal: float, balance: float,
+) -> Movimiento:
+    search = _semantic_text(concept)
     reference = _extract_reference(search)
     tracking = _extract_tracking(search)
     beneficiary = _extract_beneficiary(search)

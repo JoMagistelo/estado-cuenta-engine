@@ -10,6 +10,7 @@ import pypdfium2 as pdfium
 from PIL import Image, ImageOps
 
 from readers.banamex_tabular_ocr import BanamexTabularOCR
+from readers.banorte_mujer_ocr import MujerOCR
 from readers.models import DocumentData
 
 
@@ -73,6 +74,7 @@ class PaddleOCRPDFReader:
         banamex_cover = False
         rescued_cells = 0
         tabular = BanamexTabularOCR()
+        mujer = MujerOCR()
 
         for physical_index in range(start_page, len(pdf)):
             page = pdf[physical_index]
@@ -99,6 +101,7 @@ class PaddleOCRPDFReader:
 
             words = cls._read_tabular_cells(tabular, engine, image, words, logical_page,
                                             page_width, doctop_offset)
+            cls._read_mujer_page(mujer, engine, image, words, logical_page, page_width, doctop_offset)
 
             from readers.banamex_money_rescue import is_banamex_cover, rescue_money_cells
 
@@ -125,6 +128,7 @@ class PaddleOCRPDFReader:
 
             doctop_offset += page_height
 
+        all_words, mujer_metadata = mujer.finish(all_words)
         return DocumentData(
             raw_text="\n".join(text_pages),
             normalized_text="",
@@ -135,6 +139,7 @@ class PaddleOCRPDFReader:
                 "reader": "paddleocr",
                 "ocr": True,
                 **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
+                **mujer_metadata,
                 **({"financial_crop_rescue": rescued_cells} if rescued_cells else {}),
                 "dpi": dpi,
                 "language": config["language"],
@@ -157,10 +162,25 @@ class PaddleOCRPDFReader:
         if grid is None:
             tabular.observe_cover(words)
             return words
+        recognize = cls._cell_recognizer(engine)
+        if recognize is None:
+            return words
+        return tabular.read_table(image, grid, words, page=page, page_width=width,
+                                  doctop=doctop, recognize=recognize)
+
+    @classmethod
+    def _read_mujer_page(cls, mujer, engine, image, words, page, width, doctop):
+        if page == 1 or mujer.cover_width is not None:
+            mujer.read_page(
+                image, words, page=page, width=width, doctop=doctop,
+                recognize=cls._cell_recognizer(engine),
+            )
+
+    @classmethod
+    def _cell_recognizer(cls, engine):
         recognizer = getattr(getattr(engine, "paddlex_pipeline", None), "text_rec_model", None)
         if not callable(recognizer):
-            return words
-
+            return None
         def recognize(cells, *, alternate=False, local=False):
             import numpy as np
 
@@ -174,8 +194,7 @@ class PaddleOCRPDFReader:
             return [(str(cls._result_field(r, "rec_text", "")),
                      float(cls._result_field(r, "rec_score", 0)) * 100) for r in results]
 
-        return tabular.read_table(image, grid, words, page=page, page_width=width,
-                                  doctop=doctop, recognize=recognize)
+        return recognize
 
     @classmethod
     def _load_config(cls) -> dict[str, Any]:
