@@ -13,6 +13,7 @@ from PIL import Image, ImageOps
 from pytesseract import Output
 
 from readers.banamex_tabular_ocr import BanamexTabularOCR, recognize_tesseract_cells
+from readers.banorte_mujer_ocr import MujerOCR
 from readers.models import DocumentData
 
 
@@ -101,6 +102,7 @@ class TesseractPDFReader:
 
         doctop_offset = 0.0
         tabular = BanamexTabularOCR("tesseract")
+        mujer = MujerOCR(tesseract=True)
 
         # --------------------------------------------------------
         # PROCESAR PÁGINAS
@@ -139,6 +141,7 @@ class TesseractPDFReader:
                 tessdata_dir=tessdata_dir,
                 tabular=tabular,
             )
+            cls._read_mujer_page(mujer, image, words, logical_page, page_width, doctop_offset)
 
             # Todas las palabras.
             all_words.extend(words)
@@ -154,6 +157,7 @@ class TesseractPDFReader:
         # RESULTADO
         # --------------------------------------------------------
 
+        all_words, mujer_metadata = mujer.finish(all_words)
         return DocumentData(
             raw_text="\n".join(text_pages),
             normalized_text="",
@@ -165,6 +169,7 @@ class TesseractPDFReader:
                 "dpi": cls.RENDER_DPI,
                 "language": cls.LANGUAGE,
                 **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
+                **mujer_metadata,
                 "tesseract_cmd": str(
                     tesseract_cmd
                 ),
@@ -570,6 +575,21 @@ class TesseractPDFReader:
     # ============================================================
     # LEER UNA PÁGINA
     # ============================================================
+
+    @classmethod
+    def _read_mujer_page(cls, mujer, image, words, page, width, doctop):
+        try:
+            mujer.read_page(
+                image, words, page=page, width=width, doctop=doctop,
+                recognize=lambda cells, **kwargs: recognize_tesseract_cells(
+                    cells, language=cls.LANGUAGE, timeout=cls.TIMEOUT_SECONDS, **kwargs,
+                ),
+                language=cls.LANGUAGE, timeout=cls.TIMEOUT_SECONDS,
+            )
+        except RuntimeError as exc:
+            if "timeout" not in str(exc).lower():
+                raise
+            mujer.failed = True
 
     @classmethod
     def _read_statement_page(cls, *, image, logical_page, page_width, doctop_offset,

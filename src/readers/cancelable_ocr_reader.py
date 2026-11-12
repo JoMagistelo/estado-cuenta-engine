@@ -7,6 +7,7 @@ from typing import Any
 import pypdfium2 as pdfium
 
 from readers.banamex_tabular_ocr import BanamexTabularOCR
+from readers.banorte_mujer_ocr import MujerOCR
 from readers.models import DocumentData
 from readers.paddleocr_pdf_reader import PaddleOCRPDFReader
 from readers.tesseract_pdf_reader import TesseractPDFReader
@@ -42,6 +43,7 @@ def read_tesseract_cancelable(
     text_pages: list[str] = []
     doctop_offset = 0.0
     tabular = BanamexTabularOCR("tesseract")
+    mujer = MujerOCR(tesseract=True)
 
     for physical_index in range(start_page, len(pdf)):
         _raise_if_cancelled(cancel_event)
@@ -58,12 +60,16 @@ def read_tesseract_cancelable(
             tessdata_dir=tessdata_dir,
             tabular=tabular,
         )
+        TesseractPDFReader._read_mujer_page(
+            mujer, image, words, logical_page, page_width, doctop_offset,
+        )
         _raise_if_cancelled(cancel_event)
         all_words.extend(words)
         if logical_page <= TesseractPDFReader.MAX_TEXT_PAGES:
             text_pages.append(page_text)
         doctop_offset += page_height
 
+    all_words, mujer_metadata = mujer.finish(all_words)
     return DocumentData(
         raw_text="\n".join(text_pages),
         normalized_text="",
@@ -75,6 +81,7 @@ def read_tesseract_cancelable(
             "dpi": TesseractPDFReader.RENDER_DPI,
             "language": TesseractPDFReader.LANGUAGE,
             **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
+            **mujer_metadata,
             "tesseract_cmd": str(tesseract_cmd),
             "tessdata_dir": str(tessdata_dir),
         },
@@ -103,6 +110,7 @@ def read_paddle_cancelable(
     doctop_offset = 0.0
     backend_recovered = False
     tabular = BanamexTabularOCR()
+    mujer = MujerOCR()
 
     for physical_index in range(start_page, len(pdf)):
         _raise_if_cancelled(cancel_event)
@@ -129,12 +137,16 @@ def read_paddle_cancelable(
         words = PaddleOCRPDFReader._read_tabular_cells(
             tabular, engine, image, words, logical_page, page_width, doctop_offset,
         )
+        PaddleOCRPDFReader._read_mujer_page(
+            mujer, engine, image, words, logical_page, page_width, doctop_offset,
+        )
         _raise_if_cancelled(cancel_event)
         all_words.extend(words)
         if logical_page <= PaddleOCRPDFReader.MAX_TEXT_PAGES:
             text_pages.append(page_text)
         doctop_offset += page_height
 
+    all_words, mujer_metadata = mujer.finish(all_words)
     return DocumentData(
         raw_text="\n".join(text_pages),
         normalized_text="",
@@ -145,6 +157,7 @@ def read_paddle_cancelable(
             "reader": "paddleocr",
             "ocr": True,
             **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
+            **mujer_metadata,
             "dpi": dpi,
             "language": config["language"],
             "device": config["device"],
