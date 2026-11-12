@@ -7,8 +7,9 @@ from threading import Lock
 from typing import Any, Sequence
 
 import pypdfium2 as pdfium
-from PIL import Image
+from PIL import Image, ImageOps
 
+from readers.banamex_tabular_ocr import BanamexTabularOCR
 from readers.models import DocumentData
 
 
@@ -71,6 +72,7 @@ class PaddleOCRPDFReader:
         backend_recovered = False
         banamex_cover = False
         rescued_cells = 0
+        tabular = BanamexTabularOCR()
 
         for physical_index in range(start_page, len(pdf)):
             page = pdf[physical_index]
@@ -94,6 +96,9 @@ class PaddleOCRPDFReader:
             if recovered_backend:
                 config = {**config, "enable_mkldnn": False}
                 backend_recovered = True
+
+            words = cls._read_tabular_cells(tabular, engine, image, words, logical_page,
+                                            page_width, doctop_offset)
 
             from readers.banamex_money_rescue import is_banamex_cover, rescue_money_cells
 
@@ -129,6 +134,7 @@ class PaddleOCRPDFReader:
                 "source_path": str(file_path.resolve()),
                 "reader": "paddleocr",
                 "ocr": True,
+                **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
                 **({"financial_crop_rescue": rescued_cells} if rescued_cells else {}),
                 "dpi": dpi,
                 "language": config["language"],
@@ -144,6 +150,32 @@ class PaddleOCRPDFReader:
                 "text_det_limit_type": "max",
             },
         )
+
+    @classmethod
+    def _read_tabular_cells(cls, tabular, engine, image, words, page, width, doctop):
+        grid = tabular.grid(image)
+        if grid is None:
+            tabular.observe_cover(words)
+            return words
+        recognizer = getattr(getattr(engine, "paddlex_pipeline", None), "text_rec_model", None)
+        if not callable(recognizer):
+            return words
+
+        def recognize(cells, *, alternate=False, local=False):
+            import numpy as np
+
+            crops = [np.asarray(ImageOps.expand(cell.alternate if alternate else cell.image,
+                                               border=14 if local else 7, fill=255).convert("RGB"))
+                     for cell in cells]
+            if not crops:
+                return []
+            with cls._predict_lock:
+                results = list(recognizer(crops, batch_size=8))
+            return [(str(cls._result_field(r, "rec_text", "")),
+                     float(cls._result_field(r, "rec_score", 0)) * 100) for r in results]
+
+        return tabular.read_table(image, grid, words, page=page, page_width=width,
+                                  doctop=doctop, recognize=recognize)
 
     @classmethod
     def _load_config(cls) -> dict[str, Any]:

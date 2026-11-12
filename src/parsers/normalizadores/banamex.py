@@ -400,7 +400,9 @@ def _snap_transformed_line_baselines(
             word["height"] = target_bottom - target_top
 
 
-def normalize_banamex_words(words: list[SpatialWord]) -> list[SpatialWord]:
+def normalize_banamex_words(
+    words: list[SpatialWord], *, preserve_pages: frozenset[int] = frozenset(),
+) -> list[SpatialWord]:
     """Alinea MiCuenta OCR con el espacio canónico del parser Banamex.
 
     ``statement_processor`` invoca este módulo únicamente para documentos OCR.
@@ -412,7 +414,8 @@ def normalize_banamex_words(words: list[SpatialWord]) -> list[SpatialWord]:
     if not words or not _is_legacy_micuenta(words):
         return words
 
-    transforms = _page_transforms(words)
+    # El perfil tabular mide las reglas directamente en puntos PDF.
+    transforms = {p: t for p, t in _page_transforms(words).items() if p not in preserve_pages}
     if not transforms:
         return words
 
@@ -426,7 +429,9 @@ def normalize_banamex_words(words: list[SpatialWord]) -> list[SpatialWord]:
     return normalized
 
 
-def normalize_words(words: list[SpatialWord]) -> list[SpatialWord]:
+def normalize_words(
+    words: list[SpatialWord], *, preserve_pages: frozenset[int] = frozenset(),
+) -> list[SpatialWord]:
     """Alias compatible con el contrato genérico de normalizadores."""
 
-    return normalize_banamex_words(words)
+    return normalize_banamex_words(words, preserve_pages=preserve_pages)

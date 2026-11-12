@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
+from cep.catalog import valid_clabe
 from models.movimiento import Movimiento
 
 
@@ -74,7 +75,9 @@ def _preferred_numeric(text: str, pattern: re.Pattern[str]) -> str | None:
     return next((value for value in reversed(values) if int(value) != 0), None)
 
 
-def enrich_banamex_beneficiaries(movements: Iterable[Movimiento]) -> None:
+def enrich_banamex_beneficiaries(
+    movements: Iterable[Movimiento], *, require_valid_clabe: bool = False,
+) -> None:
     """Completa los metadatos de pagos recibidos sin alterar el movimiento.
 
     En el modelo actual «beneficiario» representa la contraparte y «sucursal»
@@ -98,7 +101,7 @@ def enrich_banamex_beneficiaries(movements: Iterable[Movimiento]) -> None:
             if account_match:
                 account = account_match.group(1)
                 movement.cuenta_beneficiario = movement.cuenta_beneficiario or account
-                if len(account) == 18:
+                if len(account) == 18 and (not require_valid_clabe or valid_clabe(account)):
                     movement.clabe_beneficiario = movement.clabe_beneficiario or account
 
             if not movement.referencia:

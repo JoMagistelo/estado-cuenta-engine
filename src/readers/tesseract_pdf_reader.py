@@ -12,6 +12,7 @@ import pytesseract
 from PIL import Image, ImageOps
 from pytesseract import Output
 
+from readers.banamex_tabular_ocr import BanamexTabularOCR, recognize_tesseract_cells
 from readers.models import DocumentData
 
 
@@ -99,6 +100,7 @@ class TesseractPDFReader:
         text_pages: list[str] = []
 
         doctop_offset = 0.0
+        tabular = BanamexTabularOCR("tesseract")
 
         # --------------------------------------------------------
         # PROCESAR PÁGINAS
@@ -129,12 +131,13 @@ class TesseractPDFReader:
                 + 1
             )
 
-            words, page_text = cls._read_page(
+            words, page_text = cls._read_statement_page(
                 image=image,
                 logical_page=logical_page,
                 page_width=page_width,
                 doctop_offset=doctop_offset,
                 tessdata_dir=tessdata_dir,
+                tabular=tabular,
             )
 
             # Todas las palabras.
@@ -161,6 +164,7 @@ class TesseractPDFReader:
                 "ocr": True,
                 "dpi": cls.RENDER_DPI,
                 "language": cls.LANGUAGE,
+                **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
                 "tesseract_cmd": str(
                     tesseract_cmd
                 ),
@@ -566,6 +570,27 @@ class TesseractPDFReader:
     # ============================================================
     # LEER UNA PÁGINA
     # ============================================================
+
+    @classmethod
+    def _read_statement_page(cls, *, image, logical_page, page_width, doctop_offset,
+                             tessdata_dir, tabular: BanamexTabularOCR):
+        grid = tabular.grid(image)
+        words, text = cls._read_page(image=image, logical_page=logical_page, page_width=page_width,
+                                     doctop_offset=doctop_offset, tessdata_dir=tessdata_dir)
+        if grid is None:
+            tabular.observe_cover(words)
+            return words, text
+        try:
+            words = tabular.read_table(
+                image, grid, words, page=logical_page, page_width=page_width, doctop=doctop_offset,
+                recognize=lambda cells, **kwargs: recognize_tesseract_cells(
+                    cells, language=cls.LANGUAGE, timeout=cls.TIMEOUT_SECONDS, **kwargs,
+                ),
+            )
+        except RuntimeError as exc:
+            if "timeout" not in str(exc).lower():
+                raise
+        return words, text
 
     @classmethod
     def _read_page(

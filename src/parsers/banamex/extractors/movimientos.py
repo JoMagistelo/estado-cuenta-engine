@@ -1581,11 +1581,12 @@ def build_movimiento(
     abono = extract_abono(block, configs)
     saldo = extract_saldo(block, configs)
 
+    return movement_from_fields(extract_fecha_operacion(first_line, config), concepto, cargo, abono, saldo)
+
+
+def movement_from_fields(fecha: str, concepto: str, cargo: float, abono: float, saldo: float) -> Movimiento:
     return Movimiento(
-        fecha_operacion=extract_fecha_operacion(
-            first_line,
-            config,
-        ),
+        fecha_operacion=fecha,
         fecha_liquidacion=None,
         concepto=concepto,
         tipo_operacion=extract_tipo_operacion(

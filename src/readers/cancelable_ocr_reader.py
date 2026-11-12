@@ -6,6 +6,7 @@ from typing import Any
 
 import pypdfium2 as pdfium
 
+from readers.banamex_tabular_ocr import BanamexTabularOCR
 from readers.models import DocumentData
 from readers.paddleocr_pdf_reader import PaddleOCRPDFReader
 from readers.tesseract_pdf_reader import TesseractPDFReader
@@ -40,6 +41,7 @@ def read_tesseract_cancelable(
     all_words: list[dict[str, Any]] = []
     text_pages: list[str] = []
     doctop_offset = 0.0
+    tabular = BanamexTabularOCR("tesseract")
 
     for physical_index in range(start_page, len(pdf)):
         _raise_if_cancelled(cancel_event)
@@ -48,12 +50,13 @@ def read_tesseract_cancelable(
         bitmap = page.render(scale=TesseractPDFReader.RENDER_DPI / 72)
         image = TesseractPDFReader._preprocess(bitmap.to_pil())
         logical_page = physical_index - start_page + 1
-        words, page_text = TesseractPDFReader._read_page(
+        words, page_text = TesseractPDFReader._read_statement_page(
             image=image,
             logical_page=logical_page,
             page_width=page_width,
             doctop_offset=doctop_offset,
             tessdata_dir=tessdata_dir,
+            tabular=tabular,
         )
         _raise_if_cancelled(cancel_event)
         all_words.extend(words)
@@ -71,6 +74,7 @@ def read_tesseract_cancelable(
             "ocr": True,
             "dpi": TesseractPDFReader.RENDER_DPI,
             "language": TesseractPDFReader.LANGUAGE,
+            **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
             "tesseract_cmd": str(tesseract_cmd),
             "tessdata_dir": str(tessdata_dir),
         },
@@ -98,6 +102,7 @@ def read_paddle_cancelable(
     text_pages: list[str] = []
     doctop_offset = 0.0
     backend_recovered = False
+    tabular = BanamexTabularOCR()
 
     for physical_index in range(start_page, len(pdf)):
         _raise_if_cancelled(cancel_event)
@@ -121,6 +126,10 @@ def read_paddle_cancelable(
             config = {**config, "enable_mkldnn": False}
             backend_recovered = True
         _raise_if_cancelled(cancel_event)
+        words = PaddleOCRPDFReader._read_tabular_cells(
+            tabular, engine, image, words, logical_page, page_width, doctop_offset,
+        )
+        _raise_if_cancelled(cancel_event)
         all_words.extend(words)
         if logical_page <= PaddleOCRPDFReader.MAX_TEXT_PAGES:
             text_pages.append(page_text)
@@ -135,6 +144,7 @@ def read_paddle_cancelable(
             "source_path": str(file_path.resolve()),
             "reader": "paddleocr",
             "ocr": True,
+            **({"banamex_tabular_pages": tabular.pages} if tabular.pages else {}),
             "dpi": dpi,
             "language": config["language"],
             "device": config["device"],
